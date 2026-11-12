@@ -44,6 +44,7 @@ const CATEGORY_CATALOG = computed(() => [
   { id: 'overlay_assets', label: 'Unused overlay badge assets' },
   { id: 'poster_history', label: 'Old History entries' },
   { id: 'poster_api_renders', label: `Poster API renders not served in ${settingsStore.posterApi.value.retentionDays} days` },
+  { id: 'clean_base', label: 'Clean base posters' },
 ])
 
 const props = defineProps<{

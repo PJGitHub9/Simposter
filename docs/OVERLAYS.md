@@ -16,6 +16,7 @@ This guide covers building overlays, the rules that decide which posters get whi
 - [Lists from WeTrakr, SIMKL and Floppy](#lists-from-wetrakr-simkl-and-floppy)
 - [Scheduler](#scheduler)
 - [Overlay Refresh](#overlay-refresh)
+- [Posters from another app](#posters-from-another-app)
 - [Live Kometa files](#live-kometa-files)
 - [Sharing overlays](#sharing-overlays)
 - [Reading the overlay log](#reading-the-overlay-log)
@@ -322,6 +323,28 @@ How it works and its limits:
 - A poster keeps the overlays it was sent with. Turning an overlay on or off in a preset reaches already-sent posters the next time they're sent (use Re-send in Tracked posters).
 - New data (resolution, file name, date added, media server ratings) arrives with library scans; MDBList ratings and lists arrive from MDBList.
 - Runs are logged and send a summary notification (toggle "Overlay Refresh" in Settings → Notifications). A poster sent to several servers is listed once, with the servers.
+
+---
+
+## Posters from another app
+
+Some people let another app (Aura, or any tool that uploads posters) choose the poster for some titles, but still want Simposter's overlays on them. Each title can have a **poster mode**, set per library group (the same title in two groups can have two modes; every server in a group shares it):
+
+| Mode | What Simposter does |
+|---|---|
+| **Full** | The default. Simposter renders the whole poster (art, logo, text, effects, overlays) and sends it. |
+| **Overlay only** | Simposter never replaces the poster. It draws only the preset's overlays on the poster the other app chose and sends that. No logo, text, matte, fade, vignette, grain or border. |
+| **Leave alone** | Simposter doesn't touch the poster at all: webhooks, auto-generate, retries, Overlay Refresh, Batch Edit (unless you tick "Include Leave alone titles") and Media Mirror (posters) all skip it. |
+
+Set a mode in **Batch Edit** (select titles, then **Set mode**) or per title in the editor (the mode line near Send). Movies and TV Shows show an icon on titles that aren't Full, and have a **Poster mode** filter. A title with no TMDb or TVDB id can't have a mode (it is always Full). Series and season posters follow the show's mode.
+
+**Rules**: under each library group in **Settings → Libraries**, add rules that set the mode from a Plex label (e.g. label `Aura` means Overlay only, label `Custom` means Leave alone). If several rules match, Leave alone wins. A mode set by hand always beats a rule; "Follow rules" removes it. Only Plex labels work in this version; Radarr/Sonarr tags and Jellyfin/Emby tags are planned. The old per-library "webhook ignore labels" became Leave alone rules on upgrade.
+
+**The clean copy**: to draw overlays without stacking them, Simposter keeps the other app's poster, without overlays, in `config/cache/clean_base/` (one per server and title, at full size). Every overlay-only render starts from that copy, so a refresh never draws overlays on a poster that already has them. The clean copy is taken from the server's poster when Simposter sees it is not one Simposter itself sent (a poster Simposter sent is never used as the clean copy). If the title's current poster is Simposter's own and no clean copy exists, Simposter uses the art that poster was originally rendered from; with neither, the title waits for the other app's poster. Each server in a group gets its own clean copy, since the other app may only have changed one of them. Cleanup has a "Clean base posters" category for copies of titles that left the library.
+
+**When the other app changes a poster**: a library scan notices the change (the poster no longer matches what Simposter sent), stores it as the new clean copy and sends the overlays again. For a title Simposter never sent, a later change by the other app is only noticed after Simposter has applied overlays to it once. The change is not listed under Changed Outside Simposter for an Overlay only title.
+
+Overlay Refresh keeps overlay-only posters up to date from the clean copy. If a preset has no overlays, an Overlay only title is left as it is.
 
 ---
 

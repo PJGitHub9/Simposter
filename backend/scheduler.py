@@ -63,7 +63,7 @@ def init_scheduler(restore_from_settings: bool = True):
                 cleanup_cron = scheduler_settings.get("cleanupCronExpression", "0 3 * * 0")
                 cleanup_categories = scheduler_settings.get("cleanupCategories") or [
                     "poster_cache", "logo_cache", "backdrop_cache", "square_art_cache",
-                    "overlay_effect_cache", "uploaded_files", "overlay_assets", "poster_history", "poster_api_renders",
+                    "overlay_effect_cache", "uploaded_files", "overlay_assets", "poster_history", "poster_api_renders", "clean_base",
                 ]
                 cleanup_history_days = int(scheduler_settings.get("cleanupHistoryDays", 180))
                 if schedule_cleanup(cleanup_cron, cleanup_categories, cleanup_history_days):
@@ -802,6 +802,15 @@ def _run_poster_retry():
             if max_attempts > 0 and retry_count >= max_attempts:
                 db.remove_from_retry_queue(rating_key)
                 logger.info("[RETRY] Abandoned %s after %d attempts — removed from retry queue", title, retry_count)
+                continue
+
+            # Leave-alone and overlay-only titles never get a full render: drop them.
+            from . import poster_mode
+            _mode = poster_mode.gate(db.get_server_id_for_rating_key(rating_key) or "plex-1", rating_key,
+                                     library_id or None, media_type == "tv")
+            if _mode != "full":
+                db.remove_from_retry_queue(rating_key)
+                logger.info("[RETRY] Removed %s from the retry queue (poster mode: %s)", title, _mode)
                 continue
 
             logger.info("[RETRY] Retrying %s (%s) attempt #%d", title, media_type, retry_count + 1)

@@ -20,6 +20,7 @@ interface GroupMember {
 }
 
 interface GroupInfo {
+  id?: string
   members: GroupMember[]
   preferredServerId: string | null
   mergeItems?: boolean

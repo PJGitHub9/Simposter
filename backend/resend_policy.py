@@ -23,7 +23,7 @@ from typing import Optional, Tuple
 from . import database as db
 from .config import logger
 
-_SEND_ACTIONS = ("sent_to_plex", "resent_to_plex", "overlay_refresh")
+_SEND_ACTIONS = ("sent_to_plex", "resent_to_plex", "overlay_refresh", "overlay_only_sent")
 
 
 def _preset_row(template_id: str, preset_id: str) -> Optional[dict]:
@@ -58,7 +58,7 @@ def _last_real_send(rating_key: str) -> Optional[dict]:
             "SELECT action, template_id, preset_id, created_at, "
             "COALESCE(poster_fallback_used, 0) AS pfb, COALESCE(logo_fallback_used, 0) AS lfb "
             "FROM poster_history WHERE rating_key = ? AND COALESCE(server_id, 'plex-1') = 'plex-1' "
-            "AND COALESCE(status, 'success') = 'success' AND action IN (?, ?, ?) "
+            "AND COALESCE(status, 'success') = 'success' AND action IN (?, ?, ?, ?) "
             "ORDER BY created_at DESC LIMIT 50",
             (str(rating_key), *_SEND_ACTIONS),
         ).fetchall()
@@ -81,6 +81,8 @@ def resend_check(rating_key: str, template_id: Optional[str], preset_id: Optiona
         last = _last_real_send(rating_key)
         if not last:
             return False, "no record of what the saved poster was rendered with"
+        if last.get("action") == "overlay_only_sent":
+            return False, "the saved poster is an overlay-only copy of another app's poster"
         if (last.get("template_id"), last.get("preset_id")) != (template_id, preset_id):
             return False, f"saved poster was made with preset '{last.get('preset_id')}'"
         if last.get("pfb") or last.get("lfb"):

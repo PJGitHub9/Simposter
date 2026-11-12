@@ -6,6 +6,7 @@ import re
 import sqlite3
 import os
 import shutil
+import threading
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
@@ -221,6 +222,93 @@ def check_and_update_version() -> None:
         set_db_version(current_app_version)
     else:
         logger.debug(f"[DB] Database version {db_version} matches app version")
+
+
+def _migrate_ignore_labels_to_modes(cursor) -> List[str]:
+    """Move webhookIgnoreLabels from each Plex library mapping into Leave alone
+    rules on its LibraryGroup. Returns the ids of the groups that changed."""
+    def _load(key, default):
+        row = cursor.execute("SELECT value FROM settings WHERE key = ? LIMIT 1", (key,)).fetchone()
+        if not row or not row[0]:
+            return default
+        try:
+            val = json.loads(row[0])
+        except (json.JSONDecodeError, TypeError):
+            return default
+        return val if isinstance(val, type(default)) else default
+
+    groups = _load("libraryGroups", [])
+    touched: List[str] = []
+    changed_keys: Dict[str, list] = {}
+    groups_changed = False
+
+    for setting_key, media_type in (("plex.libraryMappings", "movie"), ("plex.tvShowLibraryMappings", "tv")):
+        mappings = _load(setting_key, [])
+        mappings_changed = False
+        for m in mappings:
+            if not isinstance(m, dict) or not m.get("id"):
+                continue
+            labels = [str(l).strip() for l in (m.get("webhookIgnoreLabels") or []) if str(l).strip()]
+            if not labels:
+                continue
+            lib_id = str(m["id"])
+            group = next((g for g in groups if isinstance(g, dict) and g.get("mediaType") == media_type and any(
+                isinstance(mem, dict) and mem.get("serverId") == "plex-1" and str(mem.get("libraryId")) == lib_id
+                for mem in (g.get("members") or []))), None)
+            if group is None:
+                name = m.get("displayName") or m.get("title") or lib_id
+                group = {
+                    "id": f"group-{media_type}-{lib_id}",
+                    "name": name,
+                    "mediaType": media_type,
+                    "members": [{"serverId": "plex-1", "libraryId": lib_id, "libraryName": name}],
+                    "autoGenerateEnabled": bool(m.get("autoGenerateEnabled", False)),
+                    "autoGeneratePresetId": m.get("autoGeneratePresetId"),
+                    "autoGenerateTemplateId": m.get("autoGenerateTemplateId"),
+                    "labelsToRemove": [],
+                }
+                groups.append(group)
+            rules = group.get("posterModeRules")
+            if not isinstance(rules, list):
+                rules = []
+            for label in labels:
+                if not any(isinstance(r, dict) and r.get("source") == "plex_label"
+                           and str(r.get("value", "")).lower() == label.lower() for r in rules):
+                    rules.append({"source": "plex_label", "value": label, "mode": "leave_alone"})
+            group["posterModeRules"] = rules
+            groups_changed = True
+            if group["id"] not in touched:
+                touched.append(group["id"])
+            m["webhookIgnoreLabels"] = []
+            mappings_changed = True
+        if mappings_changed:
+            changed_keys[setting_key] = mappings
+
+    if groups_changed:
+        cursor.execute("""
+            INSERT INTO settings (key, value, category) VALUES ('libraryGroups', ?, NULL)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """, (json.dumps(groups),))
+    for key, mappings in changed_keys.items():
+        cursor.execute("UPDATE settings SET value = ? WHERE key = ?", (json.dumps(mappings), key))
+    if touched:
+        logger.info("[DB] Moved Plex ignore labels into poster-mode rules for %d group(s)", len(touched))
+    return touched
+
+
+def _evaluate_groups_async(group_ids: List[str]) -> None:
+    """Evaluate poster-mode rules for these groups in a background thread."""
+    def _run():
+        try:
+            from . import poster_mode  # lazy: poster_mode imports this module
+            for gid in group_ids:
+                try:
+                    poster_mode.evaluate_group(gid)
+                except Exception as e:
+                    logger.warning("[DB] Poster-mode evaluation failed for %s: %s", gid, e)
+        except Exception as e:
+            logger.warning("[DB] Poster-mode evaluation could not start: %s", e)
+    threading.Thread(target=_run, daemon=True, name="poster-mode-migration").start()
 
 
 def init_database():
@@ -1223,6 +1311,23 @@ def init_database():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Poster modes (backend/poster_mode.py): per library group + title, whether
+        # Simposter makes the poster (full), only adds overlays to a clean copy
+        # (overlay_only) or leaves it alone (leave_alone). manual_mode is set by
+        # the user, rule_mode/rule_reason by rules; manual wins.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS poster_modes (
+                group_id TEXT NOT NULL,
+                media_type TEXT NOT NULL,
+                id_type TEXT NOT NULL,
+                item_id TEXT NOT NULL,
+                manual_mode TEXT,
+                rule_mode TEXT,
+                rule_reason TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (group_id, media_type, id_type, item_id)
+            )
+        """)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS media_server_item_etags (
                 server_id TEXT NOT NULL,
@@ -1372,7 +1477,7 @@ def init_database():
                         ("scheduler.cleanupCronExpression", "0 3 * * 0"),
                         ("scheduler.cleanupCategories", json.dumps([
                             "poster_cache", "logo_cache", "backdrop_cache", "square_art_cache",
-                            "overlay_effect_cache", "uploaded_files", "overlay_assets", "poster_history", "poster_api_renders",
+                            "overlay_effect_cache", "uploaded_files", "overlay_assets", "poster_history", "poster_api_renders", "clean_base",
                         ])),
                         ("scheduler.cleanupHistoryDays", "180"),
                     ):
@@ -1551,6 +1656,18 @@ def init_database():
                 logger.info(f"[DB] Seeded libraryGroups with {len(all_groups)} auto-migrated single-member group(s) from existing Plex library mappings")
         except Exception as library_groups_err:
             logger.warning(f"[DB] Could not seed libraryGroups: {library_groups_err}")
+
+        # Plex "webhook ignore labels" become Leave alone poster-mode rules on
+        # the library's group (created here for an ungrouped Plex library).
+        try:
+            if not cursor.execute("SELECT 1 FROM applied_migrations WHERE name = 'ignore_labels_to_modes'").fetchone():
+                touched = _migrate_ignore_labels_to_modes(cursor)
+                cursor.execute("INSERT INTO applied_migrations (name) VALUES ('ignore_labels_to_modes')")
+                conn.commit()
+                if touched:
+                    _evaluate_groups_async(touched)
+        except Exception as ignore_mig_err:
+            logger.warning(f"[DB] ignore_labels_to_modes migration failed: {ignore_mig_err}")
     except Exception as e:
         logger.error(f"[DB] Initialization/migration failed: {e}")
         conn.rollback()
@@ -2630,6 +2747,16 @@ def set_overlay_state_overlay_lists(server_id: str, rating_key: str, season_inde
             "UPDATE overlay_state SET options_json = ? WHERE server_id = ? AND rating_key = ? AND season_index = ?",
             (json.dumps(options), server_id, str(rating_key), _season_db(season_index)),
         )
+
+
+def get_overlay_state(server_id: str, rating_key: str, season_index: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    """One tracked poster's overlay record, or None."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM overlay_state WHERE server_id = ? AND rating_key = ? AND season_index = ?",
+            (server_id, str(rating_key), _season_db(season_index)),
+        ).fetchone()
+    return _overlay_state_row(row) if row else None
 
 
 def delete_overlay_state(server_id: str, rating_key: str, season_index: Optional[int] = None) -> None:
@@ -4487,7 +4614,8 @@ def get_last_poster_send(server_id: str, rating_key: str) -> Optional[Dict[str, 
         row = conn.execute(
             "SELECT source, template_id, preset_id, created_at FROM poster_history "
             "WHERE server_id = ? AND rating_key = ? AND COALESCE(status, 'success') = 'success' "
-            "AND action IN ('sent_to_plex', 'resent_to_plex', 'sent_to_media_server', 'resent_to_media_server', 'overlay_refresh') "
+            "AND action IN ('sent_to_plex', 'resent_to_plex', 'sent_to_media_server', 'resent_to_media_server', 'overlay_refresh', "
+            "'overlay_only_sent') "
             "ORDER BY created_at DESC LIMIT 1",
             (server_id, str(rating_key)),
         ).fetchone()
@@ -4697,6 +4825,12 @@ def rekey_media_server_item(server_id: str, old_key: str, new_key: str) -> bool:
                 cursor.execute(f"DELETE FROM {table} WHERE server_id = ? AND rating_key = ?", (server_id, old_key))
             except sqlite3.Error as e:
                 logger.debug("[DB] rekey %s %s -> %s failed: %s", table, old_key, new_key, e)
+    try:
+        # Overlay-only clean copies (backend/overlay_only.py) are files keyed by the item id.
+        from . import overlay_only
+        overlay_only.rekey_clean_base(server_id, old_key, new_key)
+    except Exception as e:
+        logger.debug("[DB] rekey clean copy %s -> %s failed: %s", old_key, new_key, e)
     if changed:
         logger.info("[DB] '%s': item id %s is now %s (re-imported on the server)", server_id, old_key, new_key)
     return changed
@@ -4777,7 +4911,8 @@ def record_poster_history(
 
     # Remember what was sent, for poster drift detection (backend/poster_drift.py).
     if poster_data and status == 'success' and action in (
-        "sent_to_plex", "resent_to_plex", "sent_to_media_server", "resent_to_media_server", "overlay_refresh", "overlay_removed"
+        "sent_to_plex", "resent_to_plex", "sent_to_media_server", "resent_to_media_server", "overlay_refresh", "overlay_removed",
+        "overlay_only_sent",
     ):
         from . import poster_drift
         poster_drift.record_sent(server_id, rating_key, poster_data)
@@ -4945,7 +5080,8 @@ def poster_already_sent(server_id: str, rating_key: str) -> bool:
             cursor.execute(
                 """SELECT 1 FROM poster_history
                    WHERE server_id = ? AND rating_key = ?
-                     AND action IN ('sent_to_plex', 'resent_to_plex', 'sent_to_media_server', 'resent_to_media_server', 'overlay_refresh')
+                     AND action IN ('sent_to_plex', 'resent_to_plex', 'sent_to_media_server', 'resent_to_media_server', 'overlay_refresh',
+                                    'overlay_only_sent')
                      AND COALESCE(status, 'success') = 'success'
                    LIMIT 1""",
                 (server_id, str(rating_key)),
@@ -5046,7 +5182,8 @@ def get_poster_status(
         # direct upload, Quirk #110 -- exactly the case that made "Fallout"/
         # "The Grand Tour" show "Not sent" despite a real, successful,
         # verified send moments earlier).
-        if action in ("sent_to_plex", "resent_to_plex", "sent_to_media_server", "resent_to_media_server") and result[rating_key]["sent"] is None:
+        if action in ("sent_to_plex", "resent_to_plex", "sent_to_media_server", "resent_to_media_server",
+                      "overlay_only_sent") and result[rating_key]["sent"] is None:
             result[rating_key]["sent"] = {
                 "template_id": template_id,
                 "preset_id": preset_id,
@@ -5208,6 +5345,11 @@ def purge_server_cache(server_id: str) -> Dict[str, Any]:
     try:
         from . import poster_drift
         poster_drift.remove_sent_copies(server_id)
+    except Exception:
+        pass
+    try:
+        from . import overlay_only
+        counts["clean_base"] = overlay_only.remove_server_clean_bases(server_id)
     except Exception:
         pass
     return {"rating_keys": own_keys, "counts": counts}

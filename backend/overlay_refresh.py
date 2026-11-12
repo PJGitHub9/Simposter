@@ -24,6 +24,9 @@ from .config import logger
 from . import database as db
 
 DEFAULT_LABEL = "Simposter-Overlay"
+# overlay_state options["_source_kind"] for an overlay-only send (poster modes):
+# re-rendered from the clean copy, not from background_url.
+CLEAN_BASE = "clean_base"
 
 # Metadata keys inject_plex_media_metadata() (re)computes -- a stored send's
 # metadata keeps everything else (season text etc.) and refreshes these.
@@ -120,8 +123,13 @@ def record_send(
     year: Optional[Any] = None,
     is_collection: bool = False,
     add_label: bool = True,
+    source_kind: Optional[str] = None,
 ) -> None:
-    """Remember the inputs of a poster just sent to `server_id`. Never raises."""
+    """Remember the inputs of a poster just sent to `server_id`. Never raises.
+
+    source_kind="clean_base": an overlay-only send (backend/overlay_only.py),
+    drawn on the other app's poster kept in config/cache/clean_base/ rather
+    than on `background_url`; refresh_state()/remove_state() use that copy."""
     try:
         if not rating_key or not template_id:
             return
@@ -129,7 +137,8 @@ def record_send(
         if not _has_overlays(opts, template_id):
             db.delete_overlay_state(server_id, rating_key, season_index)
             return
-        if _self_referencing_background(background_url):
+        clean_base = source_kind == CLEAN_BASE
+        if not clean_base and _self_referencing_background(background_url):
             logger.debug("[OVERLAY_REFRESH] Not tracking %s: background is the server's own poster", rating_key)
             return
         facts: Dict[str, Any] = {}
@@ -145,6 +154,8 @@ def record_send(
         stored_opts["_base_metadata"] = {k: v for k, v in meta.items() if k not in _INJECTED_KEYS}
         stored_opts["_facts"] = facts
         stored_opts["_designs"] = _drawn_designs(summary, designs)
+        if clean_base:
+            stored_opts["_source_kind"] = CLEAN_BASE
         try:
             tmdb_val = int(tmdb_id) if tmdb_id not in (None, "") else (int(meta["tmdb_id"]) if meta.get("tmdb_id") else None)
         except (TypeError, ValueError):
@@ -178,6 +189,11 @@ def record_send(
                 _apply_plex_label(str(rating_key), label, True)
     except Exception as e:
         logger.debug("[OVERLAY_REFRESH] record_send failed for %s/%s: %s", server_id, rating_key, e)
+
+
+def is_clean_base(state: Dict[str, Any]) -> bool:
+    """An overlay-only tracked poster (poster modes): its base is the clean copy."""
+    return (state.get("options") or {}).get("_source_kind") == CLEAN_BASE
 
 
 def _apply_plex_label(rating_key: str, label: str, present: bool) -> None:
@@ -458,13 +474,28 @@ def refresh_state(state: Dict[str, Any], checked: Optional[Dict[str, Any]] = Non
     client = get_client(server_id)
     if client is None:
         return {"status": "failed", "detail": f"server {server_id} is not configured"}
-    if not state.get("background_url"):
+    clean_base = is_clean_base(state)
+    if clean_base:
+        # Clean copy, else the server's poster if it isn't ours, else the art
+        # Simposter last used (overlay_only.resolve_base()).
+        from . import overlay_only
+        base, base_from = overlay_only.resolve_base(server_id, rating_key, state.get("season_index"),
+                                                    state.get("media_type") == "tv")
+        if base is None:
+            return {"status": "skipped", "detail": base_from}
+    elif not state.get("background_url"):
         return {"status": "failed", "detail": "no source image recorded"}
 
     opts = checked["options"]
-    img = render_poster_image(state["template_id"], state["background_url"], state.get("logo_url"), opts)
+    if clean_base:
+        img = overlay_only.render_overlay_only(base, opts, template_id=state["template_id"])
+    else:
+        img = render_poster_image(state["template_id"], state["background_url"], state.get("logo_url"), opts)
     payload, content_type = encode_poster_for_plex(img, for_plex=is_plex)
+    original_key = rating_key
     rating_key = _upload_tracked(client, server_id, state, payload, content_type)
+    if clean_base and str(rating_key) != str(original_key):
+        overlay_only.rekey_clean_base(server_id, original_key, rating_key, state.get("season_index"))
 
     try:
         save_or_cache_render(rating_key, payload, None)
@@ -504,6 +535,26 @@ def refresh_state(state: Dict[str, Any], checked: Optional[Dict[str, Any]] = Non
     return {"status": "updated", "detail": checked["reason"] or "re-rendered"}
 
 
+def _refresh_overlay_only(state: Dict[str, Any], source: str) -> Dict[str, Any]:
+    """refresh_state() for an Overlay only title whose tracked row isn't a
+    clean-base one yet: overlay_only.apply_for_item() with the row's own
+    server/key/template/preset/season. Same result shape as refresh_state()."""
+    from . import overlay_only
+    opts = state.get("options") or {}
+    lists = {"ids": [str(c) for c in (opts.get("overlay_config_ids") or []) if c],
+             "below": [str(c) for c in (opts.get("overlay_config_ids_below") or []) if c]}
+    res = overlay_only.apply_for_item(
+        state["server_id"], str(state["rating_key"]), state.get("library_id"), state.get("media_type") == "tv",
+        state.get("template_id") or "uniformlogo", state.get("preset_id"), source,
+        season_index=state.get("season_index"), overlay_lists=lists if lists["ids"] else None,
+    )
+    if res.get("status") == "ok":
+        return {"status": "updated", "detail": "overlays drawn on the clean copy"}
+    if res.get("status") == "skipped":
+        return {"status": "skipped", "detail": res.get("reason") or "skipped"}
+    return {"status": "failed", "detail": res.get("reason") or "failed"}
+
+
 def remove_state(state: Dict[str, Any], source: str = "overlay_refresh") -> Dict[str, Any]:
     """Re-render one tracked poster from its stored source art with no
     overlays at all, upload it, drop the Plex label and stop tracking it (so a
@@ -520,16 +571,30 @@ def remove_state(state: Dict[str, Any], source: str = "overlay_refresh") -> Dict
     client = get_client(server_id)
     if client is None:
         return {"status": "failed", "detail": f"server {server_id} is not configured"}
-    if not state.get("background_url"):
+    clean_base = is_clean_base(state)
+    if clean_base:
+        # Overlay-only poster: "without overlays" is the other app's poster itself.
+        from io import BytesIO
+        from PIL import Image
+        from . import overlay_only
+        base, base_from = overlay_only.resolve_base(server_id, rating_key, state.get("season_index"),
+                                                    state.get("media_type") == "tv")
+        if base is None:
+            return {"status": "skipped", "detail": base_from}
+        img = overlay_only.render_overlay_only(base, {"overlay_config_ids": [], "overlay_config_ids_below": []},
+                                               template_id=state["template_id"])
+        payload, content_type = encode_poster_for_plex(img, for_plex=is_plex)
+    elif not state.get("background_url"):
         return {"status": "failed", "detail": "no source image recorded"}
-
-    opts = _fresh_options(state)
-    opts["overlay_config_ids"] = []
-    opts["overlay_config_ids_below"] = []
-    # The preset's legacy single overlay link is read through preset_id.
-    opts.pop("preset_id", None)
-    img = render_poster_image(state["template_id"], state["background_url"], state.get("logo_url"), opts)
-    payload, content_type = encode_poster_for_plex(img, for_plex=is_plex)
+    else:
+        opts = _fresh_options(state)
+        opts["overlay_config_ids"] = []
+        opts["overlay_config_ids_below"] = []
+        # The preset's legacy single overlay link is read through preset_id.
+        opts.pop("preset_id", None)
+        img = render_poster_image(state["template_id"], state["background_url"], state.get("logo_url"), opts)
+        payload, content_type = encode_poster_for_plex(img, for_plex=is_plex)
+    original_key = rating_key
     try:
         rating_key = _upload_tracked(client, server_id, state, payload, content_type)
     except ItemGone:
@@ -562,6 +627,8 @@ def remove_state(state: Dict[str, Any], source: str = "overlay_refresh") -> Dict
         if label:
             _apply_plex_label(rating_key, label, False)
 
+    if clean_base and str(rating_key) != str(original_key):
+        overlay_only.rekey_clean_base(server_id, original_key, rating_key, state.get("season_index"))
     db.delete_overlay_state(server_id, rating_key, state.get("season_index"))
     return {"status": "removed", "detail": "overlays removed"}
 
@@ -834,6 +901,20 @@ def run_group(group_id: str, apply: bool, only_keys: Optional[List[str]] = None,
         if only_keys is not None:
             wanted = set(only_keys)
             states = [s for s in states if state_key(s) in wanted]
+        # Poster modes: a Leave alone title is never touched (and stops being tracked).
+        from . import poster_mode
+        kept_states = []
+        overlay_only_keys = set()
+        for st in states:
+            pmode = poster_mode.gate(st["server_id"], str(st["rating_key"]), st.get("library_id"),
+                                     st.get("media_type") == "tv")
+            if pmode == "leave_alone":
+                db.delete_overlay_state(st["server_id"], st["rating_key"], st.get("season_index"))
+            else:
+                kept_states.append(st)
+                if pmode == "overlay_only":
+                    overlay_only_keys.add(state_key(st))
+        states = kept_states
         if not remove:
             _update_status(group_id, {"current": "Updating lists and ratings"})
             prepare_data(states)
@@ -856,6 +937,8 @@ def run_group(group_id: str, apply: bool, only_keys: Optional[List[str]] = None,
                         counts["removed"] += 1
                     elif result["status"] == "gone":
                         counts["gone"] += 1
+                    elif result["status"] == "skipped":
+                        counts["unchanged"] += 1  # overlay-only title waiting for its base poster
                     else:
                         counts["failed"] += 1
                     items.append(entry)
@@ -886,10 +969,21 @@ def run_group(group_id: str, apply: bool, only_keys: Optional[List[str]] = None,
                 entry["reason"] = checked["reason"] or "forced"
                 entry["overlay"] = [e.get("label") + (f" = {e['value']}" if e.get("value") else "") for e in checked["summary"]]
                 if apply:
-                    result = refresh_state(state, checked, source="scheduled" if scheduled else "overlay_refresh")
+                    if state_key(state) in overlay_only_keys and not is_clean_base(state):
+                        # An Overlay only title tracked from an earlier full
+                        # send: never re-render a full poster over the other
+                        # app's; draw the overlays on its clean copy instead.
+                        result = _refresh_overlay_only(state, "scheduled" if scheduled else "overlay_refresh")
+                    else:
+                        result = refresh_state(state, checked, source="scheduled" if scheduled else "overlay_refresh")
                     entry["status"] = result["status"]
                     if result["status"] == "updated":
                         counts["updated"] += 1
+                    elif result["status"] == "skipped":
+                        # Overlay-only title waiting for the other app's poster: not a failure.
+                        counts["changed"] -= 1
+                        counts["unchanged"] += 1
+                        entry["reason"] = result["detail"]
                     else:
                         counts["failed"] += 1
                         entry["reason"] = result["detail"]

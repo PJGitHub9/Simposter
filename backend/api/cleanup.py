@@ -162,6 +162,19 @@ def api_cleanup_scan(history_days: int = 180):
         Path(SQUARE_ART_CACHE_DIR), include_thumbs=True,
     )
 
+    # --- Overlay-only clean copies (backend/overlay_only.py, poster modes) ----
+    from ..overlay_only import clean_base_orphans
+    clean_orphans = clean_base_orphans()
+    scan["clean_base"] = [str(p) for p in clean_orphans]
+    categories.append({
+        "id": "clean_base",
+        "label": "Clean base posters",
+        "description": "Other apps' posters kept for Overlay only titles that are no longer in your library.",
+        "kind": "files",
+        "count": len(clean_orphans),
+        "bytes": _dir_size(clean_orphans),
+    })
+
     # --- Overlay effect cache (config/overlays/{template_id}/{preset_id}--{sig}.png)
     from ..overlay_cache import is_orphan as is_overlay_cache_orphan
     overlay_cache_orphans: List[Path] = []

@@ -7,6 +7,8 @@ import { useNotification } from '@/composables/useNotification'
 import { useTvShows } from '../composables/useTvShows'
 import { useSettingsStore } from '@/stores/settings'
 import { useLibraryGroupPreference } from '@/composables/useLibraryGroupPreference'
+import PosterModeMenu from '@/components/PosterModeMenu.vue'
+import { MODE_FILTER_OPTIONS, groupIdFor, type PosterMode } from '@/services/posterModes'
 import { posterThumbUrl } from '@/services/posterThumb'
 
 
@@ -16,6 +18,10 @@ type TvShow = {
   year?: number | string
   addedAt?: number
   poster?: string | null
+  tmdb_id?: number | string | null
+  tvdb_id?: number | string | null
+  poster_mode?: string | null
+  poster_mode_reason?: string | null
   seasons?: Season[]
 }
 
@@ -51,7 +57,8 @@ type PosterStatus = {
 type BatchResult = {
   rating_key: string
   title: string
-  status: 'ok' | 'error' | 'cancelled'
+  status: 'ok' | 'error' | 'cancelled' | 'skipped_leave_alone' | 'skipped_overlay_only'
+  reason?: string
   error?: string
   poster_fallback?: boolean
   logo_fallback?: boolean
@@ -75,6 +82,9 @@ const batchSucceeded = computed(() => batchResults.value.filter(r => r.status ==
 // distinct from a real failure, so it gets its own bucket rather than
 // silently disappearing from every count.
 const batchCancelled = computed(() => batchResults.value.filter(r => r.status === 'cancelled'))
+// Poster modes: skipped on purpose (Leave alone / Overlay only with nothing to send to) -- not failures.
+const batchSkipped = computed(() => batchResults.value.filter(r => r.status === 'skipped_leave_alone' || r.status === 'skipped_overlay_only'))
+const batchResultsShowSkipped = ref(false)
 const batchPosterFallback = computed(() => batchResults.value.filter(r => r.status === 'ok' && r.poster_fallback))
 const batchLogoFallback = computed(() => batchResults.value.filter(r => r.status === 'ok' && r.logo_fallback))
 
@@ -120,6 +130,7 @@ const error = ref<string | null>(null)
 const selectedShows = ref<Set<string>>(new Set())
 const searchQuery = ref('')
 const filterLabel = ref<string>('')
+const filterMode = ref<string>('')
 const sortBy = ref<'title' | 'year' | 'addedAt'>('title')
 const sortOrder = ref<'asc' | 'desc'>('asc')
 const sortKey = computed({
@@ -133,7 +144,7 @@ const sortKey = computed({
 // Phones: the sort/filter dropdowns collapse behind one button.
 const mobileFiltersOpen = ref(false)
 const activeBatchFilterCount = computed(() =>
-  [filterLabel.value !== '', sentFilter.value !== 'all', savedFilter.value !== 'all'].filter(Boolean).length
+  [filterLabel.value !== '', filterMode.value !== '', sentFilter.value !== 'all', savedFilter.value !== 'all'].filter(Boolean).length
 )
 const posterLimit = ref<number>(50)
 const currentPage = ref<number>(1)
@@ -240,6 +251,19 @@ const sendLogos = ref(false)
 // BatchEditView.vue's identical block for the full design note.
 const libraryGroupPref = useLibraryGroupPreference('tv')
 const selectedTargets = ref<Set<string>>(new Set())
+// Poster modes: the group the browsed library belongs to, the selected titles'
+// ids for the "Set mode" menu, and how many selected titles aren't Full.
+const modeGroupId = computed(() => groupIdFor(libraryGroupPref.group.value, currentServer.value || 'plex-1', currentLibrary.value, 'tv'))
+const includeLeaveAlone = ref(false)
+const selectedModeItems = computed(() => {
+  const keys = selectedShows.value
+  return tvShows.value.filter(m => keys.has(m.key))
+})
+const selectedOverlayOnlyCount = computed(() => selectedModeItems.value.filter(m => m.poster_mode === 'overlay_only').length)
+const selectedLeaveAloneCount = computed(() => selectedModeItems.value.filter(m => m.poster_mode === 'leave_alone').length)
+async function onModeChanged(_mode: PosterMode | null, updated: number) {
+  if (updated > 0) await fetchMovies(true)
+}
 // Excludes both 'plex-1' and '' -- the latter is the "All" filter pseudo-option
 // useLibraryGroupPreference adds to `options` when a group has merging turned
 // off (Quirk #121); it's a display-filter choice, never a real, sendable
@@ -367,6 +391,11 @@ const filteredMovies = computed(() => {
     result = result.filter(
       m => m.title.toLowerCase().includes(query) || (m.year && m.year.toString().includes(query))
     )
+  }
+
+  // Filter by poster mode
+  if (filterMode.value) {
+    result = result.filter(m => (m.poster_mode || 'full') === filterMode.value)
   }
 
   // Filter by label
@@ -824,6 +853,7 @@ const processBatch = async () => {
       library_id: currentLibrary.value || undefined,
       targets: Array.from(selectedTargets.value),
       source_server_id: currentServer.value || undefined,
+      include_leave_alone: includeLeaveAlone.value,
       include_series: includeSeries.value,
       include_seasons: includeSeasons.value,
       // Include fallback settings so batch endpoint can handle template fallbacks
@@ -1640,6 +1670,17 @@ onMounted(async () => {
           </div>
         </div>
 
+        <div v-if="selectedLeaveAloneCount > 0" class="checkboxes">
+          <label class="checkbox-label">
+            <input type="checkbox" v-model="includeLeaveAlone" />
+            Include Leave alone titles
+          </label>
+        </div>
+        <p v-if="selectedOverlayOnlyCount > 0 || selectedLeaveAloneCount > 0" class="mode-note">
+          <template v-if="selectedOverlayOnlyCount > 0">{{ selectedOverlayOnlyCount }} selected title{{ selectedOverlayOnlyCount === 1 ? ' is' : 's are' }} Overlay only (overlays are added to the clean copy, no new poster is made). </template>
+          <template v-if="selectedLeaveAloneCount > 0">{{ selectedLeaveAloneCount }} selected title{{ selectedLeaveAloneCount === 1 ? ' is' : 's are' }} Leave alone ({{ includeLeaveAlone ? 'processed because the box above is ticked' : 'skipped unless you tick the box above' }}).</template>
+        </p>
+
         <button
           class="btn-process"
           @click="processBatch"
@@ -1680,6 +1721,10 @@ onMounted(async () => {
           <span class="stat-num">{{ batchCancelled.length }}</span>
           <span class="stat-label">Stopped</span>
         </div>
+        <div class="summary-stat cancelled" v-if="batchSkipped.length">
+          <span class="stat-num">{{ batchSkipped.length }}</span>
+          <span class="stat-label">Skipped</span>
+        </div>
         <div class="summary-stat fallback" v-if="batchPosterFallback.length">
           <span class="stat-num">{{ batchPosterFallback.length }}</span>
           <span class="stat-label">Poster Fallback</span>
@@ -1700,6 +1745,20 @@ onMounted(async () => {
           <div v-for="item in batchFailed" :key="item.rating_key" class="result-item result-error">
             <span class="result-title">{{ item.title || 'Unknown' }}</span>
             <span class="result-reason">{{ shortError(item.error || '', item.rating_key) }}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Poster modes: skipped on purpose -->
+      <div v-if="batchSkipped.length" class="results-section">
+        <button class="section-toggle" @click="batchResultsShowSkipped = !batchResultsShowSkipped">
+          <span class="toggle-icon">{{ batchResultsShowSkipped ? '▾' : '▸' }}</span>
+          Skipped ({{ batchSkipped.length }})
+        </button>
+        <div v-if="batchResultsShowSkipped" class="results-list">
+          <div v-for="item in batchSkipped" :key="item.rating_key" class="result-item result-cancelled">
+            <span class="result-title">{{ item.title || 'Unknown' }}</span>
+            <span class="result-reason">{{ item.status === 'skipped_leave_alone' ? 'Leave alone: Simposter does not touch this poster' : ('Overlay only: ' + (item.reason || 'nothing to send')) }}</span>
           </div>
         </div>
       </div>
@@ -1773,6 +1832,9 @@ onMounted(async () => {
               {{ label }}
             </option>
           </select>
+          <select v-model="filterMode" class="filter-select" title="Poster mode">
+            <option v-for="opt in MODE_FILTER_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+          </select>
           <select v-model="sentFilter" class="filter-select">
             <option value="all">All Sent States</option>
             <option value="sent">Sent</option>
@@ -1817,6 +1879,12 @@ onMounted(async () => {
         <div class="selection-actions">
           <button class="btn-small" @click="selectAll">Select All</button>
           <button class="btn-small" @click="deselectAll">Deselect All</button>
+          <PosterModeMenu
+            :group-id="modeGroupId"
+            media-type="tv"
+            :items="selectedModeItems"
+            @changed="onModeChanged"
+          />
         </div>
       </div>
     </div>
@@ -2181,6 +2249,12 @@ onMounted(async () => {
 
 .actions-row > :last-child {
   align-self: flex-end;
+}
+
+.mode-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
 }
 
 .checkboxes {

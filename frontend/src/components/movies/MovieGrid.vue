@@ -14,6 +14,8 @@ type Entry = {
   server_id?: string | null
   also_on?: string[] | null
   other_servers?: { server_id: string; rating_key: string }[] | null
+  poster_mode?: string | null
+  poster_mode_reason?: string | null
 }
 
 const props = defineProps<{
@@ -86,6 +88,8 @@ const emit = defineEmits<{
         :serverId="item.server_id"
         :alsoOn="item.also_on"
         :otherServers="item.other_servers"
+        :posterMode="item.poster_mode"
+        :posterModeReason="item.poster_mode_reason"
         @select="emit('select', item)"
         @refresh="emit('refresh', item.key)"
         @resend-done="emit('resend-done', item.key)"

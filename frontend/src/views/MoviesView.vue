@@ -7,6 +7,7 @@ import { useMovies } from '../composables/useMovies'
 import { useLibraryGroupPreference } from '../composables/useLibraryGroupPreference'
 import { getApiBase } from '@/services/apiBase'
 import { compareTitles } from '@/services/sortTitle'
+import { MODE_FILTER_OPTIONS } from '@/services/posterModes'
 
 type Movie = {
   key: string
@@ -20,6 +21,8 @@ type Movie = {
   server_id?: string | null
   also_on?: string[] | null
   other_servers?: { server_id: string; rating_key: string }[] | null
+  poster_mode?: string | null
+  poster_mode_reason?: string | null
 }
 
 // Simple module-level caches so navigating away/back does not refetch everything
@@ -298,6 +301,7 @@ const allLabels = computed(() => {
 })
 
 const filterCached = ref(false)
+const filterMode = ref<string>('')
 
 const filtered = computed(() => {
   const term = (props.search || '').trim().toLowerCase()
@@ -319,6 +323,11 @@ const filtered = computed(() => {
   // Filter by cached poster
   if (filterCached.value) {
     result = result.filter(m => cachedKeys.value.has(m.key))
+  }
+
+  // Filter by poster mode
+  if (filterMode.value) {
+    result = result.filter(m => ((m.poster_mode) || 'full') === filterMode.value)
   }
 
   return result
@@ -351,6 +360,10 @@ watch(pageSize, () => {
 })
 
 watch(() => props.search, () => {
+  page.value = 1
+})
+
+watch(filterMode, () => {
   page.value = 1
 })
 
@@ -591,6 +604,12 @@ onMounted(async () => {
           <select id="label-select" v-model="filterLabel" class="control-select">
             <option value="">All Labels</option>
             <option v-for="label in allLabels" :key="label" :value="label">{{ label }}</option>
+          </select>
+        </div>
+        <div class="control-group">
+          <label for="mode-select">Poster mode:</label>
+          <select id="mode-select" v-model="filterMode" class="control-select">
+            <option v-for="opt in MODE_FILTER_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
           </select>
         </div>
         <label class="filter-check" :class="{ active: filterCached }" title="Show only items Simposter has previously generated a poster for (saved renders)">

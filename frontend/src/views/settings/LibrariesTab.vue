@@ -30,7 +30,6 @@ interface LibraryMapping {
   autoGenerateEnabled?: boolean
   autoGeneratePresetId?: string | null
   autoGenerateTemplateId?: string | null
-  webhookIgnoreLabels?: string[]
 }
 
 interface PlexLibrary {
@@ -315,35 +314,6 @@ const toggleLabel = (libraryId: string, label: string, isTv: boolean) => {
 const isLabelChecked = (libraryId: string, label: string, isTv: boolean) => {
   const targetObj = isTv ? localTvLabelsToRemove.value : localLabelsToRemove.value
   return targetObj[libraryId]?.includes(label) || false
-}
-
-// Toggle ignore label for webhook processing
-const toggleIgnoreLabel = (libraryIdx: number, label: string, isTv: boolean) => {
-  if (isTv) {
-    const libs = [...localTvShowLibraries.value]
-    const lib = libs[libraryIdx]
-    if (!lib) return
-    const current = lib.webhookIgnoreLabels || []
-    const index = current.indexOf(label)
-    if (index > -1) {
-      lib.webhookIgnoreLabels = current.filter(l => l !== label)
-    } else {
-      lib.webhookIgnoreLabels = [...current, label]
-    }
-    localTvShowLibraries.value = libs
-  } else {
-    const libs = [...localLibraries.value]
-    const lib = libs[libraryIdx]
-    if (!lib) return
-    const current = lib.webhookIgnoreLabels || []
-    const index = current.indexOf(label)
-    if (index > -1) {
-      lib.webhookIgnoreLabels = current.filter(l => l !== label)
-    } else {
-      lib.webhookIgnoreLabels = [...current, label]
-    }
-    localLibraries.value = libs
-  }
 }
 
 // The scan schedule picks library GROUPS ("group:<id>"), covering every server
@@ -741,7 +711,6 @@ watch(
           @link-plex="(key, title) => onLinkPlex('movie', card.group, key, title)"
           @unlink-plex="onUnlinkPlex('movie', card.group)"
           @update:mapping="patch => card.mappingIdx !== null && onUpdateMapping('movie', card.mappingIdx, patch)"
-          @toggle-ignore-label="label => card.mappingIdx !== null && toggleIgnoreLabel(card.mappingIdx, label, false)"
           @scan-plex="card.mappingIdx !== null && onScanPlex('movie', card.mappingIdx)"
           @remove-group="onRemoveGroup('movie', card.group)"
         />
@@ -778,7 +747,6 @@ watch(
           @link-plex="(key, title) => onLinkPlex('tv', card.group, key, title)"
           @unlink-plex="onUnlinkPlex('tv', card.group)"
           @update:mapping="patch => card.mappingIdx !== null && onUpdateMapping('tv', card.mappingIdx, patch)"
-          @toggle-ignore-label="label => card.mappingIdx !== null && toggleIgnoreLabel(card.mappingIdx, label, true)"
           @scan-plex="card.mappingIdx !== null && onScanPlex('tv', card.mappingIdx)"
           @remove-group="onRemoveGroup('tv', card.group)"
         />

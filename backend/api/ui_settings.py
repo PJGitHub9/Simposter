@@ -529,6 +529,19 @@ def save_ui_settings_endpoint(payload: UISettings, allow_empty_media_servers: bo
                     mirror["enabled"] = False
             g["mirror"] = mirror
 
+        # Poster mode rules: a group whose payload doesn't carry posterModeRules
+        # (an older client, or a store loaded before the field existed) keeps
+        # the stored list; an explicit list, including [], replaces it.
+        sent_rules = set()
+        if "libraryGroups" in payload.model_fields_set:
+            for pg in payload.libraryGroups or []:
+                if "posterModeRules" in pg.model_fields_set:
+                    sent_rules.add(pg.id)
+        stored_rules = {g.get("id"): g.get("posterModeRules") for g in (current.get("libraryGroups") or []) if isinstance(g, dict)}
+        for g in merged.get("libraryGroups") or []:
+            if isinstance(g, dict) and g.get("id") not in sent_rules and g.get("id") in stored_rules:
+                g["posterModeRules"] = stored_rules[g.get("id")] or []
+
         # Track an explicit Plex removal (see PlexSettings.ignoreEnvCredentials).
         # Computed here rather than trusted from the payload: the frontend
         # rebuilds the plex object from scratch on every save and never sends it.

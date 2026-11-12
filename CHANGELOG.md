@@ -1,5 +1,21 @@
 # Changelog
 
+## v1.8.71 (2026-11-12) — `dev-overlayonly` branch
+
+### New Features
+- **Poster modes (Full / Overlay only / Leave alone)** — new table `poster_modes` (group id, media type, id type `tmdb`|`tvdb`, item id, `manual_mode`, `rule_mode`, `rule_reason`); effective mode is manual, else rule, else full. `backend/poster_mode.py` holds the lookup (`effective_for_item()`, `gate()`), Plex label rule evaluation (`LibraryGroup.posterModeRules`; Leave alone beats Overlay only, case-insensitive) and the cleanup done when a mode changes (retry-queue rows removed for both non-full modes; `overlay_state` rows removed for Leave alone; drift marks cleared for both). A title in a library with no group uses `group-{type}-{library}` (Plex) or `lib:{server}:{library}`. API: `GET /api/poster-modes`, `POST /api/poster-modes/set`, `POST /api/poster-modes/reevaluate`; `/api/movies` and `/api/tv-shows` return `poster_mode` and `poster_mode_reason`.
+- **Overlay-only pipeline** (`backend/overlay_only.py`) — `render_overlay_only()` resizes the clean copy to 2000x3000 and draws only the preset's overlays (below then above). Clean copies live in `config/cache/clean_base/{server}__{key}[__s{season}]`, are never Simposter's own output, and are refreshed from the server's poster whenever it isn't one Simposter sent (also for seasons, and a show poster served for a season counts as ours). After upload the drift fingerprint is recorded, History gets `overlay_only_sent` ("Overlays applied"), and the `overlay_state` row is marked `clean_base` so Overlay Refresh re-renders from the clean copy.
+- **UI** — mode icon on grid cards, a Poster mode filter on Movies/TV Shows and both Batch Edit views, Set mode and "Include Leave alone titles" in Batch Edit, a mode line in both editors, a rules editor under each library group.
+
+### Improvements
+- **Webhook ignore labels became Leave alone rules** — migration `ignore_labels_to_modes` turns each Plex library's `webhookIgnoreLabels` into Plex label → Leave alone rules on its library group (an ungrouped Plex library gets a one-member group), then empties the field. Titles with those labels are now also skipped by Overlay Refresh, the retry queue, Batch Edit (unless `include_leave_alone`) and Media Mirror (posters), not just webhooks and auto-generate.
+- **Gates** — every automatic poster path calls `poster_mode.gate()` first: the Radarr/Sonarr/Tautulli handlers and `process_webhook_poster_generation()`, Jellyfin/Emby webhook resolution, both Plex auto-generate loops, Jellyfin/Emby scan auto-generate, the cached-poster delivery and pending-sync queue, `_run_poster_retry()` and Retry Now, `overlay_refresh.run_group()`, drift detection (`check_after_download()` and put-back/resend), `_execute_batch()` per item, and Media Mirror's poster pass.
+- **Cleanup** — new `clean_base` category (also in the scheduled-cleanup lists); `purge_server_cache()` and the Jellyfin/Emby item re-key handle `clean_base/`.
+
+### Bug Fixes
+- **A failed Plex label fetch no longer wipes a rule mode** — a webhook whose label request failed used to read "no labels" and clear the mode; it now keeps the stored one.
+- **Resend** — a title whose last real send was an overlay-only one is no longer resent from the cache as if it were a full poster.
+
 ## v1.8.61 (2026-11-10) — `webui-overhaul-dev` branch
 
 ### New Features

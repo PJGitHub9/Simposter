@@ -14,6 +14,7 @@ import TextOverlayPanel from './TextOverlayPanel.vue'
 import EditorCard from './EditorCard.vue'
 import PreviewOverlay from './PreviewOverlay.vue'
 import ExternalLinksRow from './ExternalLinksRow.vue'
+import PosterModeLine from './PosterModeLine.vue'
 import AddToRetryQueueModal from '../AddToRetryQueueModal.vue'
 import SendToServerModal from './SendToServerModal.vue'
 import ImagePickerModal from './ImagePickerModal.vue'
@@ -4346,6 +4347,7 @@ watch(tmdbId, () => {
               </div>
             </div>
           </div>
+          <PosterModeLine :movie="props.movie" />
           <SendToServerModal
             v-if="showSendModal"
             :options="sendModalOptions"

@@ -23,6 +23,10 @@ export type MovieInput = {
   // string that must never be sent to the backend as a rating key.
   apiMode?: boolean
   tmdb_id?: number | string | null
+  tvdb_id?: number | string | null
+  // Poster mode (backend/poster_mode.py), from the library list.
+  poster_mode?: string | null
+  poster_mode_reason?: string | null
 }
 
 export type Movie = {

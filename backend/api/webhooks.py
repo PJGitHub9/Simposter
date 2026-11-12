@@ -226,12 +226,13 @@ def _update_tv_cache(rating_key: str, library_id: Optional[str] = None):
 # HELPER FUNCTIONS - Label checking for webhook ignore
 # ============================================================================
 
-def _get_item_labels(rating_key: str) -> List[str]:
+def _fetch_item_labels(rating_key: str) -> Optional[List[str]]:
     """
     Get labels for a Plex item by rating_key.
 
     Returns:
-        List of label names (strings), empty list if no labels or error
+        List of label names (strings); an empty list when the item has none;
+        None when the request failed (so a caller can tell the two apart).
     """
     try:
         url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
@@ -251,7 +252,73 @@ def _get_item_labels(rating_key: str) -> List[str]:
         return labels
     except Exception as e:
         logger.warning(f"[WEBHOOK] Failed to get labels for {rating_key}: {e}")
-        return []
+        return None
+
+
+def _get_item_labels(rating_key: str) -> List[str]:
+    """Labels for a Plex item; an empty list if it has none or the request failed."""
+    return _fetch_item_labels(rating_key) or []
+
+
+def _webhook_poster_mode(server_id: Optional[str], rating_key: str, library_id: Optional[str], is_tv: bool,
+                         tmdb_id=None, tvdb_id=None) -> str:
+    """The title's poster mode for a webhook. A Plex item's label rules are
+    applied to its fresh labels first, so a label added a moment ago counts."""
+    from .. import poster_mode
+    server_id = server_id or "plex-1"
+    labels = None
+    if server_id == "plex-1":
+        # Only ask Plex for labels when the group has label rules, and keep the
+        # stored mode when the request fails (None): an empty list would clear it.
+        try:
+            lib = library_id or db.get_library_id_for_rating_key(rating_key)
+            has_rules = True
+            if lib:
+                has_rules = bool(poster_mode.rules_for(
+                    poster_mode.group_id_for(server_id, str(lib), "tv" if is_tv else "movie")))
+        except Exception:
+            has_rules = True
+        if has_rules:
+            labels = _fetch_item_labels(rating_key)
+    return poster_mode.gate(server_id, rating_key, library_id, is_tv, labels=labels,
+                            tmdb_id=tmdb_id, tvdb_id=tvdb_id)
+
+
+def _handle_poster_mode(mode: str, server_id: Optional[str], rating_key: str, library_id: Optional[str],
+                        is_tv: bool, template_id: str, preset_id: Optional[str], auto_send: bool,
+                        source: str = "webhook", include_seasons: bool = False,
+                        affected_seasons: Optional[List[int]] = None, other_copies: bool = True,
+                        tmdb_id=None, tvdb_id=None, title: Optional[str] = None,
+                        year: Optional[int] = None) -> bool:
+    """Act on a non-full poster mode. Returns True when the caller must stop
+    (leave_alone: nothing happens; overlay_only: overlays applied to the clean
+    copy of this title -- and, with other_copies, every copy in its library
+    group -- instead of a full render). False for a full title."""
+    if mode == "full":
+        return False
+    log_title = title or rating_key
+    if not title:
+        try:
+            log_title = db.get_title_for_rating_key(rating_key)[0] or rating_key
+        except Exception:
+            pass
+    if mode == "leave_alone":
+        logger.info("[WEBHOOK] %s is left alone (poster mode); nothing sent", log_title)
+        return True
+    if not auto_send:
+        logger.info("[WEBHOOK] %s is overlay-only and sending is off for this webhook; nothing sent", log_title)
+        return True
+    if not preset_id:
+        logger.info("[WEBHOOK] %s is overlay-only but no preset is known; nothing sent", log_title)
+        return True
+    from .. import overlay_only
+    res = overlay_only.apply_for_title(server_id or "plex-1", rating_key, library_id, is_tv, template_id or "uniformlogo",
+                                       preset_id, source, include_series=True, include_seasons=bool(is_tv and include_seasons),
+                                       affected_seasons=affected_seasons, other_copies=other_copies,
+                                       tmdb_id=tmdb_id, tvdb_id=tvdb_id, title_hint=title, year_hint=year)
+    logger.info("[WEBHOOK] %s is overlay-only: %s (%d poster%s)", log_title, res["status"], len(res["results"]),
+                "" if len(res["results"]) == 1 else "s")
+    return True
 
 
 def _get_default_remove_labels(library_id: str) -> List[str]:
@@ -273,70 +340,6 @@ def _get_default_remove_labels(library_id: str) -> List[str]:
     except Exception as e:
         logger.warning(f"[WEBHOOK] Failed to get default remove labels for library {library_id}: {e}")
         return []
-
-
-def _get_webhook_ignore_labels(library_id: str, is_tv: bool = False) -> List[str]:
-    """
-    Get the list of labels to ignore for webhook processing for a library.
-
-    Args:
-        library_id: The library ID
-        is_tv: True for TV libraries, False for movie libraries
-
-    Returns:
-        List of label names to ignore
-    """
-    try:
-        ui_settings = db.get_ui_settings()
-        if not ui_settings:
-            return []
-
-        plex_settings = ui_settings.get("plex", {})
-
-        if is_tv:
-            mappings = plex_settings.get("tvShowLibraryMappings", []) or []
-        else:
-            mappings = plex_settings.get("libraryMappings", []) or []
-
-        for mapping in mappings:
-            if mapping.get("id") == library_id:
-                ignore_labels = mapping.get("webhookIgnoreLabels", []) or []
-                logger.debug(f"[WEBHOOK] Ignore labels for library {library_id}: {ignore_labels}")
-                return ignore_labels
-
-        return []
-    except Exception as e:
-        logger.warning(f"[WEBHOOK] Failed to get ignore labels for library {library_id}: {e}")
-        return []
-
-
-def _should_skip_webhook(rating_key: str, library_id: str, is_tv: bool = False) -> bool:
-    """
-    Check if a webhook should be skipped based on item labels.
-
-    Returns:
-        True if the item should be skipped (has an ignore label), False otherwise
-    """
-    ignore_labels = _get_webhook_ignore_labels(library_id, is_tv)
-    if not ignore_labels:
-        return False
-
-    item_labels = _get_item_labels(rating_key)
-    if not item_labels:
-        return False
-
-    # Check if any item label matches an ignore label (case-insensitive)
-    ignore_labels_lower = [l.lower() for l in ignore_labels]
-    for label in item_labels:
-        if label.lower() in ignore_labels_lower:
-            try:
-                _t, _ = db.get_title_for_rating_key(rating_key)
-            except Exception:
-                _t = None
-            logger.info("[WEBHOOK] Skipping %s [%s] - has ignore label '%s'", rating_key, _t or "?", label)
-            return True
-
-    return False
 
 
 # ============================================================================
@@ -727,9 +730,9 @@ def process_radarr_webhook_with_retry(
 
     rating_key, library_id = result
 
-    # Check if item has ignore labels
-    if library_id and _should_skip_webhook(rating_key, library_id, is_tv=False):
-        logger.info(f"[RADARR_WEBHOOK] Skipping poster generation for {title} - has webhook ignore label")
+    _mode = _webhook_poster_mode("plex-1", rating_key, library_id, False, tmdb_id=tmdb_id)
+    if _handle_poster_mode(_mode, "plex-1", rating_key, library_id, False, template_id, preset_id, auto_send,
+                           tmdb_id=tmdb_id, title=title, year=year):
         return
 
     # Now process the poster generation
@@ -740,7 +743,8 @@ def process_radarr_webhook_with_retry(
         auto_send=auto_send,
         auto_labels=auto_labels,
         library_id=library_id,
-        is_tv=False
+        is_tv=False,
+        mode_checked=True,
     )
 
 
@@ -793,9 +797,10 @@ def process_sonarr_webhook_with_retry(
 
     rating_key, library_id = result
 
-    # Check if item has ignore labels
-    if library_id and _should_skip_webhook(rating_key, library_id, is_tv=True):
-        logger.info(f"[SONARR_WEBHOOK] Skipping poster generation for {title} - has webhook ignore label")
+    _mode = _webhook_poster_mode("plex-1", rating_key, library_id, True, tvdb_id=tvdb_id)
+    if _handle_poster_mode(_mode, "plex-1", rating_key, library_id, True, template_id, preset_id, auto_send,
+                           include_seasons=include_seasons, affected_seasons=affected_seasons, tvdb_id=tvdb_id,
+                           title=title, year=year):
         return
 
     # Check if this is a NEW show (not in cache) - if so, generate series poster too
@@ -823,7 +828,8 @@ def process_sonarr_webhook_with_retry(
             library_id=library_id,
             is_tv=True,
             include_seasons=False,  # Series poster only
-            affected_seasons=None
+            affected_seasons=None,
+            mode_checked=True,
         )
 
     # Now process the poster generation (season posters if include_seasons=True)
@@ -836,7 +842,8 @@ def process_sonarr_webhook_with_retry(
         library_id=library_id,
         is_tv=True,
         include_seasons=include_seasons,
-        affected_seasons=affected_seasons
+        affected_seasons=affected_seasons,
+        mode_checked=True,
     )
 
 
@@ -877,10 +884,8 @@ def process_media_server_webhook_with_retry(
     process_sonarr_webhook_with_retry()'s own logic exactly) is the only
     real branch below; everything else is identical for movie/TV.
 
-    No label-based ignore-library check (_should_skip_webhook(), Plex-only --
-    JellyfinClient.remove_label()/add_label() are deliberate no-ops per
-    Quirk #59, so there's no label mechanism to key a skip off of for a
-    non-Plex item yet)."""
+    No label-based ignore check here: poster modes (leave alone / overlay only,
+    from Plex label rules) replace the old ignore labels."""
     logger.info("[MEDIA_SERVER_WEBHOOK:%s] Starting delayed processing for: %s (%s) -- tmdb=%s tvdb=%s library=%s",
                 server_id, title, year, tmdb_id, tvdb_id, library_id)
 
@@ -951,6 +956,12 @@ def process_media_server_webhook_with_retry(
     except Exception as e:
         logger.warning("[MEDIA_SERVER_WEBHOOK:%s] Failed to pre-seed cache for %s [%s]: %s -- continuing anyway", server_id, item_id, title, e)
 
+    _mode = _webhook_poster_mode(server_id, item_id, library_id, media_type == "tv", tmdb_id=tmdb_id, tvdb_id=tvdb_id)
+    if _handle_poster_mode(_mode, server_id, item_id, library_id, media_type == "tv", template_id, preset_id, auto_send,
+                           include_seasons=include_seasons, affected_seasons=affected_seasons,
+                           tmdb_id=tmdb_id, tvdb_id=tvdb_id, title=title, year=year):
+        return
+
     if media_type == "tv":
         if is_new_show and include_seasons:
             logger.info("[MEDIA_SERVER_WEBHOOK:%s] Generating series poster for NEW show: %s", server_id, title)
@@ -965,6 +976,7 @@ def process_media_server_webhook_with_retry(
                 include_seasons=False,  # Series poster only
                 affected_seasons=None,
                 server_id=server_id,
+                mode_checked=True,
             )
         process_webhook_poster_generation(
             rating_key=item_id,
@@ -977,6 +989,7 @@ def process_media_server_webhook_with_retry(
             include_seasons=include_seasons,
             affected_seasons=affected_seasons,
             server_id=server_id,
+            mode_checked=True,
         )
     else:
         process_webhook_poster_generation(
@@ -988,6 +1001,7 @@ def process_media_server_webhook_with_retry(
             library_id=library_id,
             is_tv=False,
             server_id=server_id,
+            mode_checked=True,
         )
 
 
@@ -1324,6 +1338,7 @@ def process_webhook_poster_generation(
     affected_seasons: Optional[List[int]] = None,
     server_id: str = "plex-1",
     source: str = "webhook",
+    mode_checked: bool = False,
 ):
     """
     Background task to generate and send poster to Plex (or, since Phase 8b,
@@ -1364,6 +1379,19 @@ def process_webhook_poster_generation(
             title_hint = _cached_title
     except Exception:
         pass
+    # Poster mode (leave alone / overlay only) before anything else, the resend
+    # fast path included. Callers that already checked pass mode_checked=True.
+    if not mode_checked:
+        try:
+            _mode = _webhook_poster_mode(server_id, rating_key, library_id, is_tv)
+            if _handle_poster_mode(_mode, server_id, rating_key, library_id, is_tv, template_id, preset_id,
+                                   auto_send, source=source, include_seasons=include_seasons,
+                                   affected_seasons=affected_seasons,
+                                   other_copies=source != "auto_generate",
+                                   title=title_hint if title_hint != rating_key else None):
+                return
+        except Exception as mode_err:
+            logger.warning("[WEBHOOK] Poster mode check failed for %s [%s]: %s", rating_key, title_hint, mode_err)
     try:
         # ------------------------------------------------------------------
         # Resend cached poster if the setting is "resend" and a cached
@@ -2458,15 +2486,17 @@ def tautulli_webhook(
                     "rating_key": rating_key,
                 }
 
-            # Check if item has ignore labels
-            if library_id and _should_skip_webhook(rating_key, library_id, is_tv=False):
-                logger.info(f"[TAUTULLI_WEBHOOK] Skipping poster generation for {title} - has webhook ignore label")
-                return {
-                    "status": "skipped",
-                    "reason": "Item has webhook ignore label",
-                    "title": title,
-                    "rating_key": rating_key,
-                }
+            _mode = _webhook_poster_mode("plex-1", rating_key, library_id, False, tmdb_id=tmdb_id)
+            if _mode == "leave_alone":
+                return {"status": "skipped", "reason": "Poster mode: leave alone", "title": title,
+                        "rating_key": rating_key}
+            if _mode == "overlay_only":
+                background_tasks.add_task(
+                    _handle_poster_mode, _mode, "plex-1", rating_key, library_id, False, template_id, preset_id,
+                    auto_send, tmdb_id=tmdb_id, title=title, year=year,
+                )
+                return {"status": "queued", "poster_mode": "overlay_only", "title": title, "rating_key": rating_key,
+                        "library_id": library_id, "template_id": template_id, "preset_id": preset_id}
 
             # Queue background task to generate and send poster
             background_tasks.add_task(
@@ -2477,7 +2507,8 @@ def tautulli_webhook(
                 auto_send=auto_send,
                 auto_labels=auto_labels,
                 library_id=library_id,
-                is_tv=False
+                is_tv=False,
+                mode_checked=True,
             )
 
             return {
@@ -2556,15 +2587,17 @@ def tautulli_webhook(
                     "rating_key": rating_key,
                 }
 
-            # Check if item has ignore labels
-            if library_id and _should_skip_webhook(rating_key, library_id, is_tv=True):
-                logger.info(f"[TAUTULLI_WEBHOOK] Skipping poster generation for {title} - has webhook ignore label")
-                return {
-                    "status": "skipped",
-                    "reason": "Item has webhook ignore label",
-                    "title": title,
-                    "rating_key": rating_key,
-                }
+            _mode = _webhook_poster_mode("plex-1", rating_key, library_id, True, tvdb_id=tvdb_id)
+            if _mode == "leave_alone":
+                return {"status": "skipped", "reason": "Poster mode: leave alone", "title": title,
+                        "rating_key": rating_key}
+            if _mode == "overlay_only":
+                background_tasks.add_task(
+                    _handle_poster_mode, _mode, "plex-1", rating_key, library_id, True, template_id, preset_id,
+                    auto_send, include_seasons=include_seasons, tvdb_id=tvdb_id, title=title, year=year,
+                )
+                return {"status": "queued", "poster_mode": "overlay_only", "title": title, "rating_key": rating_key,
+                        "library_id": library_id, "template_id": template_id, "preset_id": preset_id}
 
             # Queue background task to generate and send poster
             background_tasks.add_task(
@@ -2576,7 +2609,8 @@ def tautulli_webhook(
                 auto_labels=auto_labels,
                 library_id=library_id,
                 is_tv=True,
-                include_seasons=include_seasons
+                include_seasons=include_seasons,
+                mode_checked=True,
             )
 
             return {

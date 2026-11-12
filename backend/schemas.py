@@ -31,6 +31,8 @@ class Movie(BaseModel):
                                           # fetch/send against a linked title's OTHER servers
                                           # directly, without a second API round-trip to
                                           # resolve which rating_key belongs to which server.
+    poster_mode: Optional[str] = "full"  # full | overlay_only | leave_alone for this library group
+    poster_mode_reason: Optional[str] = None  # "manual", 'plex label "X"', or "" for the default
 
 
 class MovieTMDbResponse(BaseModel):
@@ -192,7 +194,7 @@ class PerformanceSettings(BaseModel):
 
 _DEFAULT_CLEANUP_CATEGORIES = [
     "poster_cache", "logo_cache", "backdrop_cache", "square_art_cache",
-    "overlay_effect_cache", "uploaded_files", "overlay_assets", "poster_history", "poster_api_renders",
+    "overlay_effect_cache", "uploaded_files", "overlay_assets", "poster_history", "poster_api_renders", "clean_base",
 ]
 
 
@@ -333,6 +335,14 @@ class OverlayRefreshConfig(BaseModel):
     lastRunStats: Optional[dict] = None
 
 
+class PosterModeRule(BaseModel):
+    """A per-group rule giving matching titles a poster mode (see poster_mode.py).
+    source "plex_label": a title whose Plex copy has this label (case-insensitive)."""
+    source: str = "plex_label"
+    value: str
+    mode: str  # overlay_only | leave_alone
+
+
 class LibraryGroup(BaseModel):
     """A user-defined set of libraries across different media servers that
     represent 'the same logical library' -- e.g. Plex 'Movies' + Jellyfin
@@ -378,6 +388,9 @@ class LibraryGroup(BaseModel):
     # and a collection with its own unique key is split from its title match.
     # Edited from the Collections page's "Collection matching" window.
     collectionMatchOverrides: Dict[str, str] = Field(default_factory=dict)
+    # Poster mode rules (plex_label -> overlay_only/leave_alone). Applied after
+    # every scan by poster_mode.evaluate_group(); manual modes win over them.
+    posterModeRules: List[PosterModeRule] = Field(default_factory=list)
 
 
 class PosterApiSettings(BaseModel):
@@ -536,6 +549,7 @@ class MovieBatchRequest(BaseModel):
     # textless, regardless of fallbackPosterAction -- set only when resolving a manually-queued
     # RETRY_REASON_MANUAL_TEXTLESS retry item (database.py), since the ordinary needs_retry check
     # doesn't catch a missing textless poster when fallbackPosterAction is "continue" (the default).
+    include_leave_alone: bool = False  # Poster modes: also process titles set to Leave alone (an explicit override)
     batch_subfolder: Optional[str] = None  # Server-computed once per batch run; any client value is overwritten
     targets: List[str] = []  # Non-Plex server_ids to ALSO sync the rendered poster/logo to, in
     # addition to whatever send_to_plex already does (or doesn't) -- purely additive, does not
@@ -575,6 +589,7 @@ class TVShowBatchRequest(BaseModel):
     send_logos_to_plex: bool = False
     send_only_if_ideal: bool = False  # Skip Plex upload if the render still needs_retry (used by the retry queue)
     require_textless_poster: bool = False  # See MovieBatchRequest's field of the same name.
+    include_leave_alone: bool = False  # Poster modes: also process titles set to Leave alone (an explicit override)
     batch_subfolder: Optional[str] = None  # Server-computed once per batch run; any client value is overwritten
     targets: List[str] = []  # See MovieBatchRequest.targets -- covers both series- and season-level
     # posters/logos (JellyfinClient gained real season-level item resolution in Quirk #100; the

@@ -236,6 +236,9 @@ def _get_action_text(action: str, server_id: Optional[str] = None) -> str:
             from ..media_server import get_server_label
             return f"Sent to {get_server_label(server_id)}"
         return "Sent to media server"
+    if action == "overlay_only_sent":
+        # Poster modes: overlays drawn on another app's poster (backend/overlay_only.py).
+        return "Overlays applied"
     return "Saved locally"
 
 
@@ -308,7 +311,7 @@ def _get_servers_label(action: str, server_id: Optional[str], synced_server_ids:
     ids: List[str] = []
     if action in ("sent_to_plex", "resent_to_plex"):
         ids.append("plex-1")
-    elif action == "sent_to_media_server" and server_id:
+    elif action in ("sent_to_media_server", "overlay_only_sent") and server_id:
         ids.append(server_id)
     for sid in synced_server_ids or []:
         if sid and sid not in ids:
@@ -324,6 +327,8 @@ def _get_short_action(action: str) -> str:
         return "Resent"
     if action in ("sent_to_plex", "sent_to_media_server"):
         return "Sent"
+    if action == "overlay_only_sent":
+        return "Overlays applied"
     return "Saved locally"
 
 

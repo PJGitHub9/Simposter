@@ -10,6 +10,28 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.71',
+    date: '2026-11-12',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Poster modes: each title can now be Full (Simposter renders the whole poster, as before), Overlay only (Simposter keeps the poster another app such as Aura chose and only draws your overlays on it) or Leave alone (Simposter never touches the poster). Modes are set per library group, so every server in a group shares them.',
+          'Set a mode in Batch Edit (select titles, then Set mode) or per title in the editor. Movies and TV Shows show an icon on titles that are not Full and have a new Poster mode filter.',
+          'Rules set modes automatically: under each library group in Settings → Libraries, add a rule such as "Plex label Aura means Overlay only". Plex labels only in this version; Radarr/Sonarr tags and Jellyfin tags are planned.',
+          'When the other app changes an Overlay only poster, the next scan notices, keeps the new poster as a clean copy and draws your overlays on it again. A poster Simposter sent itself is never used as the clean copy. See the new "Posters from another app" section in the overlay docs.',
+        ],
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'The old per-library "webhook ignore labels" became Leave alone rules on the library group, once, on upgrade. Titles with those labels are now also skipped by Overlay Refresh, the retry queue, Batch Edit (unless you tick "Include Leave alone titles") and Media Mirror (posters), not just webhooks and auto-generate.',
+          'Cleanup has a new "Clean base posters" category for clean copies of titles that left your library.',
+        ],
+      },
+    ],
+  },
+  {
     version: 'v1.8.61',
     date: '2026-11-10',
     sections: [

@@ -356,7 +356,7 @@ const MERGE_WINDOW_MS = 5 * 60 * 1000
 const actionKind = (action: string): string | null => {
   if (action === 'sent_to_plex' || action === 'sent_to_media_server') return 'sent'
   if (action === 'resent_to_plex' || action === 'resent_to_media_server') return 'resent'
-  if (action === 'overlay_refresh' || action === 'overlay_removed') return action
+  if (action === 'overlay_refresh' || action === 'overlay_removed' || action === 'overlay_only_sent') return action
   return null
 }
 const recordTime = (r: HistoryRecord) => {
@@ -402,6 +402,7 @@ const rowActionLabel = (row: HistoryRow) => {
     case 'resent': return `Resent to ${names}`
     case 'overlay_refresh': return `Overlay refreshed on ${names}`
     case 'overlay_removed': return `Overlays removed on ${names}`
+    case 'overlay_only_sent': return `Overlays applied on ${names}`
     default: return getActionLabel(row)
   }
 }
@@ -556,6 +557,8 @@ const getActionLabel = (record: HistoryRecord) => {
       return `Overlay refreshed on ${mediaServerLabel(record.server_id || 'plex-1', settings.mediaServers.value)}`
     case 'overlay_removed':
       return `Overlays removed on ${mediaServerLabel(record.server_id || 'plex-1', settings.mediaServers.value)}`
+    case 'overlay_only_sent':
+      return `Overlays applied on ${mediaServerLabel(record.server_id || 'plex-1', settings.mediaServers.value)}`
     case 'saved_local':
       return 'Saved Locally'
     case 'failed':
@@ -574,6 +577,7 @@ const getActionClass = (action: string) => {
     case 'resent_to_media_server':
     case 'overlay_refresh':
     case 'overlay_removed':
+    case 'overlay_only_sent':
       return 'action-resent'
     case 'saved_local':
       return 'action-local'
@@ -648,7 +652,7 @@ const clearFilters = () => {
 // Check if a record can be previewed
 const canPreview = (record: HistoryRecord): boolean => {
   // Can preview if we have a save_path (local file) or if it was sent to Plex (rating_key)
-  return !!(record.save_path || ((record.action === 'sent_to_plex' || record.action === 'resent_to_plex' || record.action === 'sent_to_media_server' || record.action === 'resent_to_media_server' || record.action === 'overlay_refresh' || record.action === 'overlay_removed') && record.rating_key))
+  return !!(record.save_path || ((record.action === 'sent_to_plex' || record.action === 'resent_to_plex' || record.action === 'sent_to_media_server' || record.action === 'resent_to_media_server' || record.action === 'overlay_refresh' || record.action === 'overlay_removed' || record.action === 'overlay_only_sent') && record.rating_key))
 }
 
 // Get the preview image URL for a record
@@ -873,6 +877,7 @@ onMounted(async () => {
             <option value="resent_to_media_server">Resent to Linked Server</option>
             <option value="overlay_refresh">Overlay Refreshed</option>
             <option value="overlay_removed">Overlays Removed</option>
+            <option value="overlay_only_sent">Overlays Applied</option>
             <option value="saved_local">Saved Locally</option>
             <option value="failed">Failed</option>
           </select>

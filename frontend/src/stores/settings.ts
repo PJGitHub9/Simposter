@@ -57,6 +57,12 @@ export type OverlayRefreshConfig = {
   lastRunStats?: Record<string, number> | null
 }
 
+export type PosterModeRule = {
+  source: 'plex_label'
+  value: string
+  mode: 'overlay_only' | 'leave_alone'
+}
+
 export type LibraryGroup = {
   id: string
   name: string
@@ -66,6 +72,7 @@ export type LibraryGroup = {
   autoGeneratePresetId?: string | null
   autoGenerateTemplateId?: string | null
   labelsToRemove?: string[]
+  posterModeRules?: PosterModeRule[]  // Poster modes: Plex-label rules giving matching titles Overlay only / Leave alone
   preferredServerId?: string | null  // Which member's row wins when this group's merged
                                       // grid finds the same title on more than one server
                                       // (backend's _dedupe_by_tmdb_id()) -- replaces the

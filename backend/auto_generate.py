@@ -5,7 +5,7 @@ import logging
 from typing import List, Dict, Any, Optional
 from . import database as db
 from .api.batch import process_single_movie_poster, process_single_tv_show_poster
-from .api.webhooks import _get_item_labels, _get_webhook_ignore_labels, _get_default_remove_labels, _webhook_cooldowns, _webhook_cooldown_lock, WEBHOOK_COOLDOWN_SECONDS
+from .api.webhooks import _get_item_labels, _get_default_remove_labels, _webhook_cooldowns, _webhook_cooldown_lock, WEBHOOK_COOLDOWN_SECONDS
 from .api.notifications import send_apprise_notification, send_discord_notification
 from .config import settings, plex_session, plex_headers, load_render_cache, plex_remove_label, plex_add_label, get_label_to_add
 
@@ -46,29 +46,25 @@ def _recently_handled_by_webhook(rating_key: str, tmdb_id: Optional[Any] = None,
     return False
 
 
-def _should_skip_auto_generate(rating_key: str, library_id: str, is_tv: bool = False) -> bool:
-    """
-    Check if auto-generation should be skipped based on item labels.
-
-    Returns:
-        True if the item should be skipped (has an ignore label), False otherwise
-    """
-    ignore_labels = _get_webhook_ignore_labels(library_id, is_tv)
-    if not ignore_labels:
-        return False
-
-    item_labels = _get_item_labels(rating_key)
-    if not item_labels:
-        return False
-
-    # Check if any item label matches an ignore label (case-insensitive)
-    ignore_labels_lower = [label.lower() for label in ignore_labels]
-    for label in item_labels:
-        if label.lower() in ignore_labels_lower:
-            logger.info(f"[AUTO_GEN] Skipping {rating_key} - has ignore label '{label}'")
-            return True
-
-    return False
+def _poster_mode_gate(rating_key: str, library_id: str, is_tv: bool, template_id: str,
+                      preset_id: Optional[str], auto_send: bool) -> Optional[str]:
+    """Poster mode for a new Plex item. None: full, render as usual.
+    "leave_alone": skip it. Overlay-only: overlays applied to this title's
+    copies in its library group (a show: its show and season posters), and
+    the outcome "ok"/"skipped"/"error" is returned."""
+    from . import poster_mode
+    mode = poster_mode.gate("plex-1", rating_key, library_id, is_tv)
+    if mode == "full":
+        return None
+    if mode == "leave_alone":
+        return "leave_alone"
+    if not auto_send:
+        logger.info("[AUTO_GEN] %s is overlay-only and sending is off; nothing sent", rating_key)
+        return "skipped"
+    from . import overlay_only
+    res = overlay_only.apply_for_title("plex-1", rating_key, library_id, is_tv, template_id, preset_id,
+                                       "auto_generate", include_series=True, include_seasons=is_tv)
+    return res["status"]
 
 
 def process_new_content_for_library(
@@ -141,10 +137,12 @@ def process_new_content_for_library(
                             title = movie.get("title")
                             year = movie.get("year")
 
-                            # Check if item has ignore labels - skip generation but item is still scanned/added
-                            if _should_skip_auto_generate(rating_key, library_id, is_tv=False):
+                            _mode = _poster_mode_gate(rating_key, library_id, False, template_id, preset_id, auto_send)
+                            if _mode == "leave_alone":
                                 results["movies_skipped"] += 1
-                                logger.info(f"[AUTO_GEN] Skipping poster generation for {title} ({year}) - has ignore label")
+                                continue
+                            if _mode is not None:  # overlay_only, handled
+                                results[{"ok": "movies_succeeded", "error": "movies_failed"}.get(_mode, "movies_skipped")] += 1
                                 continue
 
                             logger.info(f"[AUTO_GEN] Generating poster for movie: {title} ({year}) [key={rating_key}]")
@@ -310,10 +308,12 @@ def process_new_content_for_library(
                             title = show.get("title")
                             year = show.get("year")
 
-                            # Check if item has ignore labels - skip generation but item is still scanned/added
-                            if _should_skip_auto_generate(rating_key, library_id, is_tv=True):
+                            _mode = _poster_mode_gate(rating_key, library_id, True, template_id, preset_id, auto_send)
+                            if _mode == "leave_alone":
                                 results["tv_shows_skipped"] += 1
-                                logger.info(f"[AUTO_GEN] Skipping poster generation for {title} ({year}) - has ignore label")
+                                continue
+                            if _mode is not None:  # overlay_only, handled
+                                results[{"ok": "tv_shows_succeeded", "error": "tv_shows_failed"}.get(_mode, "tv_shows_skipped")] += 1
                                 continue
 
                             logger.info(f"[AUTO_GEN] Generating posters for TV show: {title} ({year}) [key={rating_key}]")
@@ -505,6 +505,11 @@ def _deliver_cached_plex_render(server_id: str, library_id: str, media_type: str
     rating_key = item.get("rating_key")
     if not tmdb_id or not rating_key:
         return False
+    # Never copy Plex's full poster onto a leave-alone or overlay-only title.
+    from . import poster_mode
+    if poster_mode.gate(server_id, rating_key, library_id, media_type == "tv",
+                        tmdb_id=tmdb_id, tvdb_id=item.get("tvdb_id")) != "full":
+        return False
     cache_type = "tv-show" if media_type == "tv" else "movie"
     client = get_client(server_id)
     if client is None:
@@ -633,6 +638,48 @@ def _deliver_cached_plex_render(server_id: str, library_id: str, media_type: str
     return sent
 
 
+def _overlay_only_new_item(server_id: str, library_id: str, media_type: str, item: Dict[str, Any],
+                           cfg: Optional[Dict[str, Any]], results: Dict[str, Any]) -> None:
+    """A new Jellyfin/Emby item whose title is overlay-only: overlays on this
+    copy only (each server's own scan handles its own copy). The preset is the
+    waiting webhook's, else the group's auto-generate preset, else the one
+    Plex's copy was last sent with."""
+    from . import overlay_only
+    rating_key = item["rating_key"]
+    title = item.get("title") or rating_key
+    if db.poster_already_sent(server_id, rating_key):
+        results["skipped"] += 1
+        logger.info("[AUTO_GEN] Skipping %s on %s -- Simposter already sent it a poster", title, server_id)
+        return
+    source = "auto_generate"
+    preset_info = None
+    try:
+        from .api.webhooks import claim_pending_sync
+        pending = claim_pending_sync(server_id, "tv" if media_type == "tv" else "movie", item.get("tmdb_id"))
+    except Exception:
+        pending = None
+    if pending and pending.get("preset_id"):
+        preset_info, source = {"template_id": pending.get("template_id"), "preset_id": pending.get("preset_id")}, "webhook"
+    elif cfg:
+        preset_info = cfg
+    elif item.get("tmdb_id"):
+        preset_info = db.get_last_plex_send_preset(media_type, item.get("tmdb_id"))
+    if not preset_info or not preset_info.get("preset_id"):
+        results["skipped"] += 1
+        logger.info("[AUTO_GEN] %s on %s is overlay-only but no preset is known for it; nothing sent", title, server_id)
+        return
+    res = overlay_only.apply_for_title(server_id, rating_key, library_id, media_type == "tv",
+                                       preset_info.get("template_id") or "uniformlogo", preset_info["preset_id"],
+                                       source, include_series=True, include_seasons=media_type == "tv",
+                                       other_copies=False)
+    if res["status"] == "ok":
+        results["processed"] += 1
+    elif res["status"] == "error":
+        results["failed"] += 1
+    else:
+        results["skipped"] += 1
+
+
 def process_new_media_server_content(
     server_id: str,
     library_id: str,
@@ -698,8 +745,17 @@ def process_new_media_server_content(
         # since the poster already exists (e.g. a webhook rendered it before
         # this server had imported the file).
         remaining = []
+        from . import poster_mode
         for item in new_items:
             if not item.get("rating_key"):
+                continue
+            _mode = poster_mode.gate(server_id, item["rating_key"], library_id, media_type == "tv",
+                                     tmdb_id=item.get("tmdb_id"), tvdb_id=item.get("tvdb_id"))
+            if _mode == "leave_alone":
+                results["skipped"] += 1
+                continue
+            if _mode == "overlay_only":
+                _overlay_only_new_item(server_id, library_id, media_type, item, cfg, results)
                 continue
             # A webhook (or a sync from another server) already sent this item a
             # poster before this scan first saw it: nothing to do.
@@ -749,6 +805,7 @@ def process_new_media_server_content(
                     include_seasons=(media_type == "tv"),
                     server_id=server_id,
                     source="auto_generate",
+                    mode_checked=True,
                 )
             except Exception as e:
                 results["failed"] += 1

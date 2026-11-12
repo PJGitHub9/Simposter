@@ -176,6 +176,14 @@ def api_retry_now(rating_key: str):
     media_type = item.get("media_type", "movie")
     title = item.get("title", rating_key)
 
+    from .. import poster_mode
+    mode = poster_mode.gate(db.get_server_id_for_rating_key(rating_key) or "plex-1", rating_key,
+                            item.get("library_id") or None, media_type == "tv")
+    if mode != "full":
+        db.remove_from_retry_queue(rating_key)
+        logger.info("[RETRY] Removed %s from the retry queue (poster mode: %s)", title, mode)
+        return {"status": "skipped", "reason": f"poster mode: {mode}", "resolved": True}
+
     db.update_retry_attempt(rating_key)
     _retry_start = time.time()
     require_textless_poster = item.get("reason") == db.RETRY_REASON_MANUAL_TEXTLESS
@@ -323,6 +331,18 @@ def api_poster_drift_resend(server_id: str, rating_key: str, asset: str = "poste
     """Put Simposter's last poster/logo/backdrop back on the server."""
     from .. import poster_drift
     asset = _drift_asset(asset)
+    if asset == "poster":
+        mode, season_index = poster_drift.poster_mode_for(server_id, rating_key)
+        if mode == "leave_alone":
+            raise HTTPException(409, "This title is set to Leave alone, so Simposter doesn't put its poster back.")
+        if mode == "overlay_only":
+            # Overlay-only: the server's poster is the other app's; keep it as
+            # the clean copy and draw the overlays on it again.
+            from .. import overlay_only
+            res = overlay_only.on_external_poster(server_id, rating_key, season_index)
+            if res.get("status") != "ok":
+                raise HTTPException(502, f"Couldn't put the overlays back: {res.get('reason') or 'see the log'}")
+            return {"status": "ok"}
     if not poster_drift.resend(server_id, rating_key, asset):
         raise HTTPException(502, f"Couldn't re-send: no saved {asset} for this item, or the upload failed (see the log).")
     return {"status": "ok"}

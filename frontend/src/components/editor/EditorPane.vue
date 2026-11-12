@@ -17,6 +17,7 @@ import SendToServerModal from './SendToServerModal.vue'
 import ImagePickerModal from './ImagePickerModal.vue'
 import UploadPosterModal from './UploadPosterModal.vue'
 import ExternalLinksRow from './ExternalLinksRow.vue'
+import PosterModeLine from './PosterModeLine.vue'
 import { notifySendSummary } from '../../services/sendNotify'
 import { getApiBase } from '../../services/apiBase'
 import { mediaServerLabel } from '../../services/mediaServerLabel'
@@ -2507,6 +2508,7 @@ watch(
               </div>
             </div>
           </div>
+          <PosterModeLine :movie="props.movie" />
           <SendToServerModal
             v-if="showSendModal"
             :options="sendModalOptions"

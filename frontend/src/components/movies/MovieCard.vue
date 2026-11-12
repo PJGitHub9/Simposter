@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { getApiBase } from '@/services/apiBase'
 import ResendPreviewModal from './ResendPreviewModal.vue'
 import { posterThumbUrl } from '@/services/posterThumb'
+import { modeIcon, modeTooltip } from '@/services/posterModes'
 
 const props = defineProps<{
   title: string
@@ -27,7 +28,13 @@ const props = defineProps<{
   serverId?: string | null
   alsoOn?: string[] | null
   otherServers?: { server_id: string; rating_key: string }[] | null
+  // Poster mode (backend/poster_mode.py); no icon for Full.
+  posterMode?: string | null
+  posterModeReason?: string | null
 }>()
+
+const modeBadge = computed(() => modeIcon(props.posterMode))
+const modeBadgeTitle = computed(() => modeTooltip(props.posterMode, props.posterModeReason))
 
 // This card's own server plus every other linked server (Quirk #75's
 // {server_id, rating_key} pairs) -- what the resend picker offers, and what
@@ -137,6 +144,16 @@ async function doResend(includeSeasons: boolean, targetServerIds: string[]) {
         title="This poster was changed on the server after Simposter sent it. Click to see it in History."
         @click.stop="router.push({ name: 'history', query: { tab: 'drift' } })"
       >Changed</button>
+      <span v-if="modeBadge" class="mode-badge" :class="'mode-' + modeBadge" :title="modeBadgeTitle">
+        <svg v-if="modeBadge === 'lock'" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
+          <rect x="5" y="11" width="14" height="10" rx="2" />
+          <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+        </svg>
+        <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
+          <polygon points="12 2 2 7 12 12 22 7 12 2" />
+          <polyline points="2 12 12 17 22 12" />
+        </svg>
+      </span>
       <button class="refresh-btn" title="Refresh poster" @click.stop="emit('refresh')">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <polyline points="23 4 23 10 17 10" />
@@ -299,6 +316,33 @@ async function doResend(includeSeasons: boolean, targetServerIds: string[]) {
 .card:hover .refresh-btn {
   opacity: 1;
   transform: translateY(0);
+}
+
+/* --- poster mode badge (bottom-right; none for Full) --- */
+.mode-badge {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #d7e6ff;
+}
+
+.mode-badge.mode-overlay {
+  color: #3dd6b7;
+  border-color: rgba(61, 214, 183, 0.55);
+}
+
+.mode-badge.mode-lock {
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.55);
 }
 
 /* --- resend button (bottom-left) --- */

@@ -278,6 +278,15 @@ def _scan_one_library(client, server_id: str, library_id: str, media_type: str, 
     if items:
         _fetch_art_and_media_info_for_scan(items, media_type, client)
 
+    # Poster mode rules apply to the whole library group; re-apply them now
+    # that this member's rows are current. Never fails the scan.
+    try:
+        from .. import poster_mode
+        poster_mode.evaluate_group(poster_mode.group_id_for(server_id, str(library_id), media_type))
+    except Exception as e:
+        from ..config import logger as _log
+        _log.warning("[MEDIA_SERVER_SCAN] Poster mode rules failed for %s library %s: %s", server_id, library_id, e)
+
     # Auto-generate posters for newly discovered items (background thread --
     # see process_new_media_server_content()). Skipped on a library's very
     # first scan (nothing cached beforehand): that's an initial import of

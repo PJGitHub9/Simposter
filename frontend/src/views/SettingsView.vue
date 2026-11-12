@@ -3,6 +3,7 @@ import { useSettingsStore, type Theme } from '../stores/settings'
 import { APP_VERSION } from '@/version'
 import { useMovies } from '../composables/useMovies'
 import { ref, onMounted, watch, computed, onBeforeUnmount, nextTick } from 'vue'
+import { reevaluatePosterModes, ruleMatchCounts } from '@/services/posterModes'
 import { getApiBase } from '@/services/apiBase'
 import { useScanStore } from '@/stores/scan'
 import { useServerless } from '@/composables/useServerless'
@@ -29,7 +30,6 @@ interface LibraryMapping {
   autoGenerateEnabled?: boolean
   autoGeneratePresetId?: string | null
   autoGenerateTemplateId?: string | null
-  webhookIgnoreLabels?: string[]
 }
 
 interface PlexLibrary {
@@ -711,7 +711,6 @@ const saveSettings = async () => {
       autoGenerateEnabled: l.autoGenerateEnabled || false,
       autoGeneratePresetId: l.autoGeneratePresetId || null,
       autoGenerateTemplateId: l.autoGenerateTemplateId || null,
-      webhookIgnoreLabels: l.webhookIgnoreLabels || [],
     })),
     tvShowLibraryName: tvShowLibs[0]?.id || '',
     tvShowLibraryNames: tvShowLibs.length > 0 ? tvShowLibs.map(l => l.id) : undefined,
@@ -722,7 +721,6 @@ const saveSettings = async () => {
       autoGenerateEnabled: l.autoGenerateEnabled || false,
       autoGeneratePresetId: l.autoGeneratePresetId || null,
       autoGenerateTemplateId: l.autoGenerateTemplateId || null,
-      webhookIgnoreLabels: l.webhookIgnoreLabels || [],
     })),
     sendLogosToPlex: localSendLogosToPlex.value,
   }
@@ -814,10 +812,25 @@ const saveSettings = async () => {
     }
   }
 
+  // Poster mode rules that changed since the last save (compared with the last-saved
+  // groups); re-applied to the library cache right after the save succeeds.
+  const rulesOf = (g: any) => JSON.stringify(g?.posterModeRules || [])
+  const savedGroupById = new Map<string, any>((initialLibraryGroups.value || []).map((g: any) => [String(g.id), g]))
+  const groupsWithChangedRules = settings.libraryGroups.value
+    .filter(g => rulesOf(g) !== rulesOf(savedGroupById.get(String(g.id))))
+    .map(g => String(g.id))
+
   await settings.save({ allowEmptyMediaServers: pendingServerCachePurge.value.size > 0 })
 
   if (!settings.error.value) {
     await updateScheduler()
+  }
+
+  if (!settings.error.value && groupsWithChangedRules.length > 0) {
+    for (const groupId of groupsWithChangedRules) {
+      const res = await reevaluatePosterModes(groupId)
+      if (res) ruleMatchCounts.value = { ...ruleMatchCounts.value, [groupId]: res.per_rule }
+    }
   }
 
   // Now that the settings save itself succeeded, purge cache/DB references for any

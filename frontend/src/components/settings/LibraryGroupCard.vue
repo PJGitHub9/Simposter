@@ -110,31 +110,15 @@
       </div>
     </div>
 
-    <!-- Webhook ignore labels -- Plex-only (no Jellyfin/Emby label mechanism
-         exists, Quirk #59/#93), only shown once this group has a Plex member. -->
-    <div v-if="plexMember" class="webhook-ignore-section">
-      <label>
-        <span class="label-text">Webhook Ignore Labels <span class="plex-only-tag">Plex only</span></span>
-        <span class="help-text">Items with these labels will be skipped when webhooks trigger poster generation</span>
-      </label>
-      <div v-if="availableLabels.length > 0" class="ignore-labels-grid">
-        <label
-          v-for="label in availableLabels"
-          :key="`ignore-${mapping?.id}-${label}`"
-          class="label-checkbox ignore-label-checkbox"
-        >
-          <input
-            type="checkbox"
-            :checked="(mapping?.webhookIgnoreLabels || []).includes(label)"
-            @change="emit('toggle-ignore-label', label)"
-          />
-          <span>{{ label }}</span>
-        </label>
-      </div>
-      <p v-else class="no-labels-hint">
-        No labels available. Scan the library and click "Refresh Labels" in the Labels section below.
-      </p>
-    </div>
+    <!-- Poster mode rules (Plex labels): titles whose Plex copy has a label get
+         Overlay only / Leave alone. Plex-only, so only shown with a Plex member. -->
+    <PosterModeRules
+      v-if="plexMember"
+      :group-id="group.id"
+      :rules="group.posterModeRules || []"
+      :available-labels="availableLabels"
+      @update:rules="onRulesChange"
+    />
 
     <!-- Settings for this group that live on its own pages (Media Mirror,
          Overlay Refresh), shown here so they aren't missed. Read-only. -->
@@ -186,8 +170,9 @@
 // (CLAUDE.md's own documented, deliberate scope limit -- rewiring those
 // consumers to LibraryGroup directly is real, separate, larger work).
 import { computed, nextTick, ref, watch } from 'vue'
-import { useSettingsStore, type LibraryGroup, type LibraryGroupMember } from '@/stores/settings'
+import { useSettingsStore, type LibraryGroup, type LibraryGroupMember, type PosterModeRule } from '@/stores/settings'
 import { mediaServerLabel } from '@/services/mediaServerLabel'
+import PosterModeRules from './PosterModeRules.vue'
 
 interface GroupStatus {
   mirror: {
@@ -227,7 +212,6 @@ interface LibraryMapping {
   autoGenerateEnabled?: boolean
   autoGeneratePresetId?: string | null
   autoGenerateTemplateId?: string | null
-  webhookIgnoreLabels?: string[]
 }
 interface Preset {
   id: string
@@ -308,7 +292,6 @@ const emit = defineEmits<{
   // plex-1 member, and deletes the group entirely if it's now empty.
   'unlink-plex': []
   'update:mapping': [patch: Partial<LibraryMapping>]
-  'toggle-ignore-label': [label: string]
   'scan-plex': []
   // Only emitted when a Plex member exists -- parent confirms (if saved),
   // splices the mapping entry, then deletes the whole group. A Plex-less
@@ -481,6 +464,10 @@ const mergeEnabled = computed(() => props.group.mergeItems !== false)
 function onMergeToggle(e: Event) {
   const checked = (e.target as HTMLInputElement).checked
   groups.value = groups.value.map(g => g.id === props.group.id ? { ...g, mergeItems: checked } : g)
+}
+// Poster mode rules are staged like the other group fields; the page-wide Save sends them.
+function onRulesChange(rules: PosterModeRule[]) {
+  groups.value = groups.value.map(g => g.id === props.group.id ? { ...g, posterModeRules: rules } : g)
 }
 const mergeUnsaved = computed(() => {
   if (!props.initialGroup) return false
@@ -779,31 +766,6 @@ function removeGroup() {
   vertical-align: middle;
   margin-left: 4px;
 }
-
-.webhook-ignore-section {
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
-}
-.webhook-ignore-section > label { margin-bottom: 10px; }
-.ignore-labels-grid { display: flex; flex-wrap: wrap; gap: 8px; }
-.ignore-label-checkbox {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  background: rgba(255, 107, 107, 0.08);
-  border: 1px solid rgba(255, 107, 107, 0.2);
-  padding: 4px 10px;
-  border-radius: 6px;
-  font-size: 12px;
-  transition: all 0.2s;
-  cursor: pointer;
-}
-.ignore-label-checkbox:has(input:checked) {
-  background: rgba(255, 107, 107, 0.2);
-  border-color: rgba(255, 107, 107, 0.5);
-}
-.ignore-label-checkbox:hover { border-color: rgba(255, 107, 107, 0.4); }
 
 .no-labels-hint {
   font-size: 12px;

@@ -239,7 +239,7 @@ def api_tv_shows(force_refresh: bool = False, max_age: int = 900, library_id: st
         else:
             # Always return from cache (which includes labels populated by scans)
             cached = cache.get_cached_tv_shows(library_id=library_id)
-        return [
+        shows = [
             {
                 "key": s["rating_key"],
                 "title": s["title"],
@@ -262,6 +262,8 @@ def api_tv_shows(force_refresh: bool = False, max_age: int = 900, library_id: st
             }
             for s in cached
         ]
+        from .. import poster_mode
+        return poster_mode.annotate(shows, server_id, library_id, "tv")
     except Exception as e:
         logger.error(f"Failed to fetch TV shows: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch TV shows: {e}")

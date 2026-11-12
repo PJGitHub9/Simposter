@@ -105,5 +105,5 @@ History and your saved poster files are kept. If you remove Plex, Simposter stop
 Jellyfin and Emby have no equivalent for these:
 
 - **Square art**: it's a Plex artwork type.
-- **Labels**: "Default Labels to Remove", "Label to Add After Sending", Kometa compatibility, webhook ignore labels, the Overlay Refresh label and the **Label** overlay rule only apply to Plex items.
+- **Labels**: "Default Labels to Remove", "Label to Add After Sending", Kometa compatibility, poster-mode label rules, the Overlay Refresh label and the **Label** overlay rule only apply to Plex items.
 - **Edition**: the edition overlay badge and rule read Plex's edition field. On Jellyfin/Emby, match the edition tag in the file name instead (see [OVERLAYS.md](OVERLAYS.md#show-when-rules)).

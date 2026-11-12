@@ -2,7 +2,7 @@
 
 Simposter can generate and send a poster automatically the moment new media is imported, without you ever opening the app. Three sources are supported: **Radarr** (movies), **Sonarr** (TV), and **Tautulli** (either, event-driven off Plex activity instead of the *arr apps).
 
-All three URLs are also generated for you in **Settings → Automation** — you don't have to hand-build them, but this page explains what each part means and covers a couple of things the generator doesn't show (dry-run testing, ignore labels).
+All three URLs are also generated for you in **Settings → Automation** — you don't have to hand-build them, but this page explains what each part means and covers a couple of things the generator doesn't show (dry-run testing, poster modes).
 
 ---
 
@@ -10,7 +10,7 @@ All three URLs are also generated for you in **Settings → Automation** — you
 
 **Webhook secret** (optional, recommended if Simposter is reachable from outside your LAN): set one in **Settings → Automation → Webhook Secret**. Once set, every webhook call must include it, either as a query param (`?secret=yoursecret`, works with all three below) or an `X-Webhook-Secret` header (if the sending app supports custom headers). Leaving it unset preserves the old trusted-network behavior — no secret required.
 
-**Ignore labels** *(Plex only)*: in **Settings → Libraries → Webhook Ignore Labels**, list Plex labels that should skip automatic poster generation entirely (e.g. `Custom`, `NoOverlay`) — useful for titles you've hand-tuned and don't want a webhook silently overwriting. Case-insensitive, applies to all three webhook sources.
+**Leave alone and Overlay only** *(poster modes)*: a title set to **Leave alone** is skipped by all three webhooks; a title set to **Overlay only** gets only the preset's overlays drawn on its current poster instead of a full render. Set the mode per title (Batch Edit or the editor) or with rules under each library group in **Settings → Libraries** (a Plex label such as `Custom` can mean Leave alone). The old "Webhook Ignore Labels" setting became Leave alone rules on upgrade, and those titles are now also skipped by Overlay Refresh, retries, Batch Edit and Media Mirror. See [OVERLAYS.md](OVERLAYS.md#posters-from-another-app).
 
 **Existing content mode** (**Settings → Automation**): controls what happens when a webhook fires for something that already has a poster.
 - `Regenerate` *(default)* — always creates a fresh poster
@@ -139,6 +139,6 @@ This is a general troubleshooting checklist — two of the steps below use test 
    ```
    Use `?test=true` if it's the first query param on the URL, or `&test=true` if you're already passing `secret`/`include_seasons`/`template_id` — see each section above for the exact join character for that source.
 3. Check **Settings → Logs** — every real (non-test) webhook call is also logged with the media title and how long it took (`[RADARR_WEBHOOK]`/`[SONARR_WEBHOOK]`/`[TAUTULLI_WEBHOOK]` prefixes), so you can confirm it arrived even without appending `test=true`.
-4. Confirm the item isn't hitting a Webhook Ignore Label (Plex only).
+4. Confirm the item isn't set to Leave alone (a Leave alone rule on its library group, or set by hand).
 5. Check the log line about where Simposter searched — if it says there was nowhere to look, check that your library group is saved in Settings → Libraries and the server is enabled in Settings → Media Servers.
 6. If you've set a webhook secret, double check it's actually being sent — a mismatched or missing secret is a silent rejection (403), not an error dialog.

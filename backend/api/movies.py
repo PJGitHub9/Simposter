@@ -689,6 +689,8 @@ def api_movies(force_refresh: bool = False, max_age: int = 900, library_id: str 
         }
         for m in cached
     ]
+    from .. import poster_mode
+    poster_mode.annotate(movies, server_id, library_id, "movie")
 
     # Deduplicate by TMDb ID if requested (keep most recently added)
     if deduplicate:
@@ -1568,6 +1570,16 @@ def _log_changed_in_plex(changed: Dict[str, List[str]]) -> None:
         logger.info("[SCAN] Re-downloaded art changed in Plex: %s", "; ".join(parts))
 
 
+def _evaluate_poster_modes(server_id: str, library_id, media_type: str) -> None:
+    """Re-apply the library group's poster mode rules after its cache refresh.
+    A rule failure must never fail a scan."""
+    try:
+        from .. import poster_mode
+        poster_mode.evaluate_group(poster_mode.group_id_for(server_id, str(library_id), media_type))
+    except Exception as e:
+        logger.warning(f"[SCAN] Poster mode rules failed for library {library_id}: {e}")
+
+
 @router.post("/scan-library")
 def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refresh: bool = Query(False)):
     """Comprehensive full-library sync: fetch movies, TV shows, and collections.
@@ -1889,6 +1901,7 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                 for m in cached_movies if m["rating_key"] in bulk_ratings
             ])
             logger.info(f"[SCAN] Cached {len(cached_movies)} movies for library {lib_id} ({len(new_movies)} new)")
+            _evaluate_poster_modes("plex-1", lib_id, "movie")
 
             # Mark every currently-present movie with a known tmdb_id as "still here" --
             # this is what reuseCachedPosterDays' grace period actually measures (see
@@ -2083,6 +2096,7 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
 
             # Refresh cache
             cache.refresh_tv_from_list(cached_shows)
+            _evaluate_poster_modes("plex-1", lib_id, "tv")
             try:
                 db.set_file_paths({s["rating_key"]: s.get("file_paths") for s in cached_shows}, is_tv=True)
             except Exception as e:

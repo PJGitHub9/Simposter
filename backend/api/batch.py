@@ -1206,44 +1206,10 @@ def _render_tv_series_poster(
     )
 
 
-def _render_all_tv_seasons(
-    rating_key: str,
-    tmdb_id: int,
-    tvdb_id: Optional[int],
-    show_details: dict,
-    template_id: str,
-    preset_id: Optional[str],
-    render_options: dict,
-    poster_filter: str,
-    logo_preference: str,
-    logo_mode: str,
-    white_logo_fallback: str,
-    language_pref: str,
-    req: Union[BatchRequest, TVShowBatchRequest],
-    season_poster_filter: str = "all",
-    season_options: Optional[dict] = None,
-    source: str = "batch",
-    affected_seasons: Optional[List[int]] = None,
-    include_series: bool = True,
-):
-    """Render all seasons for a TV show.
-
-    Args:
-        affected_seasons: If provided, only process these specific season numbers.
-                         Used by webhooks to only generate posters for newly added seasons.
-                         If None or empty, process all seasons (batch mode).
-    """
-    _seasons_start = time.time()
-    show_title = show_details.get("name", "Unknown")
-
-    # Season enumeration used to be a hard Plex-only guard here (raising rather than
-    # ever reaching Plex's own /children endpoint with a Jellyfin id). That guard
-    # predated Quirk #100's real season-level Jellyfin/Emby resolution
-    # (MediaServerClient.list_seasons()/find_season_by_index(), confirmed live
-    # against a real Jellyfin server) -- season enumeration for a non-Plex show is
-    # genuinely supported now, via the exact same client method
-    # api_tv_show_seasons() (tv_shows.py) already uses for the season-list endpoint.
-    server_id = db.get_server_id_for_rating_key(rating_key)
+def _list_show_seasons(rating_key: str, server_id: str) -> List[Dict[str, Any]]:
+    """A show's seasons as [{"index", "key", "title"}], sorted by index: Plex
+    via /children, Jellyfin/Emby via list_seasons(). Raises on failure. Shared
+    by the full render (_render_all_tv_seasons()) and overlay-only titles."""
     seasons = []
     if server_id != "plex-1":
         from ..media_server import get_client
@@ -1284,6 +1250,48 @@ def _render_all_tv_seasons(
                 })
 
         seasons.sort(key=lambda s: s["index"])
+    return seasons
+
+
+def _render_all_tv_seasons(
+    rating_key: str,
+    tmdb_id: int,
+    tvdb_id: Optional[int],
+    show_details: dict,
+    template_id: str,
+    preset_id: Optional[str],
+    render_options: dict,
+    poster_filter: str,
+    logo_preference: str,
+    logo_mode: str,
+    white_logo_fallback: str,
+    language_pref: str,
+    req: Union[BatchRequest, TVShowBatchRequest],
+    season_poster_filter: str = "all",
+    season_options: Optional[dict] = None,
+    source: str = "batch",
+    affected_seasons: Optional[List[int]] = None,
+    include_series: bool = True,
+):
+    """Render all seasons for a TV show.
+
+    Args:
+        affected_seasons: If provided, only process these specific season numbers.
+                         Used by webhooks to only generate posters for newly added seasons.
+                         If None or empty, process all seasons (batch mode).
+    """
+    _seasons_start = time.time()
+    show_title = show_details.get("name", "Unknown")
+
+    # Season enumeration used to be a hard Plex-only guard here (raising rather than
+    # ever reaching Plex's own /children endpoint with a Jellyfin id). That guard
+    # predated Quirk #100's real season-level Jellyfin/Emby resolution
+    # (MediaServerClient.list_seasons()/find_season_by_index(), confirmed live
+    # against a real Jellyfin server) -- season enumeration for a non-Plex show is
+    # genuinely supported now, via the exact same client method
+    # api_tv_show_seasons() (tv_shows.py) already uses for the season-list endpoint.
+    server_id = db.get_server_id_for_rating_key(rating_key)
+    seasons = _list_show_seasons(rating_key, server_id)
     logger.info("[BATCH TV] Found %d seasons for %s", len(seasons), show_title)
 
     # Filter seasons if affected_seasons is provided (webhook mode)
@@ -2133,6 +2141,110 @@ def _render_and_save_poster(
     return result
 
 
+def _save_overlay_only_local(req, image_bytes: bytes, rating_key: str, library_id, title: str, year,
+                             is_tv: bool, season_index) -> Optional[str]:
+    """Save an overlay-only poster to disk through the same SaveContext/format
+    settings a full render uses. Returns the path, or None on failure."""
+    try:
+        import io, json as _json
+        from PIL import Image
+        from .save import get_output_format_settings
+        fmt = get_output_format_settings()
+        library_label = resolve_library_label(library_id) if library_id else ""
+        ctx = SaveContext(media_type="tv-show" if is_tv else "movie", title=title or rating_key,
+                          year=int(year) if year else None, rating_key=rating_key, library_label=library_label,
+                          season=season_index if is_tv else None, folder_name=None)
+        path = resolve_save_path(ctx, fmt["ext"], batch_subfolder=getattr(req, "batch_subfolder", None))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        img = embed_library_metadata(Image.open(io.BytesIO(image_bytes)), library_id, library_label, title or "",
+                                     str(year) if year else None)
+        meta = {"simposter_library_id": str(library_id or ""), "simposter_library_name": str(library_label or ""),
+                "simposter_movie_title": str(title or ""), "simposter_movie_year": str(year or ""),
+                "simposter_rating_key": str(rating_key or ""), "simposter_is_tv": "1" if is_tv else "0"}
+        if fmt["pil_format"] == "PNG":
+            info = PngImagePlugin.PngInfo()
+            for k, v in meta.items():
+                info.add_text(k, v)
+            img.save(str(path), "PNG", pnginfo=info, compress_level=fmt["quality"])
+        elif fmt["pil_format"] == "WEBP":
+            img.convert("RGB").save(str(path), "WEBP", quality=fmt["quality"])
+        else:
+            rgb = img.convert("RGB")
+            exif = rgb.getexif()
+            exif[0x9286] = _json.dumps(meta).encode("utf-8")
+            rgb.save(str(path), "JPEG", quality=fmt["quality"], exif=exif.tobytes(), subsampling=0)
+        logger.info("[BATCH] Saved locally (overlay-only): %s", path)
+        return str(path)
+    except Exception as e:
+        logger.warning("[BATCH] Saving overlay-only poster for %s failed: %s", rating_key, e)
+        return None
+
+
+def _batch_poster_mode_item(idx, rating_key, req, is_tv_batch, fn, *args):
+    """Run one Batch Edit item through the poster mode gate: Leave alone titles
+    are skipped (unless req.include_leave_alone), Overlay only titles get the
+    preset's overlays on their clean copy (to the servers the batch sends to),
+    everything else takes the normal full render `fn(*args)`."""
+    try:
+        from .. import poster_mode, overlay_only
+        server_id = db.get_server_id_for_rating_key(rating_key) or "plex-1"
+        # The item's own library (a merged title can be shown under another
+        # server's copy than the batch's library belongs to).
+        own_lib = db.get_library_id_for_rating_key(rating_key) or req.library_id
+        mode = poster_mode.gate(server_id, rating_key, None, is_tv_batch)
+    except Exception as e:
+        logger.warning("[BATCH] Poster mode lookup failed for %s, treating it as Full: %s", rating_key, e)
+        mode = "full"
+    if mode == "full":
+        return fn(*args)
+    title = ""
+    try:
+        title = db.get_title_for_rating_key(rating_key)[0] or ""
+    except Exception:
+        pass
+    if mode == "leave_alone":
+        if getattr(req, "include_leave_alone", False):
+            return fn(*args)
+        return {"status": "skipped_leave_alone", "rating_key": rating_key, "title": title, "show_title": title}
+    # overlay_only
+    servers = (["plex-1"] if req.send_to_plex else []) + [t for t in (getattr(req, "targets", None) or []) if t != "plex-1"]
+    save_local = bool(getattr(req, "save_locally", False))
+    if not servers and not save_local:
+        return {"status": "skipped_overlay_only", "rating_key": rating_key, "title": title, "show_title": title,
+                "reason": "no server selected to send to"}
+    res = overlay_only.apply_for_title(
+        server_id, rating_key, own_lib, is_tv_batch, req.template_id, req.preset_id, "batch",
+        include_series=getattr(req, "include_series", True),
+        include_seasons=bool(is_tv_batch and getattr(req, "include_seasons", False)),
+        servers=servers, render_unsent_own=save_local)
+    if save_local:
+        year = None
+        try:
+            year = db.get_title_for_rating_key(rating_key)[1]
+        except Exception:
+            pass
+        for r in res["results"]:
+            if r.get("status") == "ok" and r.get("image_bytes") and r.get("server_id") == server_id:
+                _save_overlay_only_local(req, r["image_bytes"], str(r.get("rating_key") or rating_key), own_lib,
+                                         title, year, is_tv_batch, r.get("season_index"))
+    status = {"ok": "ok", "skipped": "skipped_overlay_only"}.get(res["status"], "error")
+    out = {"status": status, "rating_key": rating_key, "title": title, "show_title": title, "poster_mode": "overlay_only"}
+    if status != "ok":
+        reasons = [r.get("reason") for r in res["results"] if r.get("reason")]
+        out["error" if status == "error" else "reason"] = "; ".join(dict.fromkeys(reasons)) or res["status"]
+    return out
+
+
+def _retry_allowed(rating_key, is_tv_batch, library_id) -> bool:
+    """False for a title whose poster mode isn't Full: it never joins the retry queue."""
+    try:
+        from .. import poster_mode
+        sid = db.get_server_id_for_rating_key(rating_key) or "plex-1"
+        return poster_mode.effective_for_item(sid, rating_key, None, is_tv_batch)[0] == "full"
+    except Exception:
+        return True
+
+
 def _execute_batch(req: Union[BatchRequest, MovieBatchRequest, TVShowBatchRequest], is_tv_batch: bool):
     """
     Shared batch processing logic for both movies and TV shows.
@@ -2231,6 +2343,7 @@ def _execute_batch(req: Union[BatchRequest, MovieBatchRequest, TVShowBatchReques
         for idx, rating_key in enumerate(req.rating_keys, start=1):
             if is_tv_batch:
                 future = executor.submit(
+                    _batch_poster_mode_item, idx, rating_key, req, is_tv_batch,
                     _process_single_tv_show,
                     idx,
                     rating_key,
@@ -2247,6 +2360,7 @@ def _execute_batch(req: Union[BatchRequest, MovieBatchRequest, TVShowBatchReques
                 )
             else:
                 future = executor.submit(
+                    _batch_poster_mode_item, idx, rating_key, req, is_tv_batch,
                     _process_single_movie,
                     idx,
                     rating_key,
@@ -2276,6 +2390,8 @@ def _execute_batch(req: Union[BatchRequest, MovieBatchRequest, TVShowBatchReques
                     success_count += 1
                 elif result.get("status") == "cancelled":
                     cancelled_count += 1
+                elif result.get("status") in ("skipped_leave_alone", "skipped_overlay_only"):
+                    pass  # poster modes: skipped on purpose, not a failure
                 else:
                     failed_count += 1
                 # Movie items carry synced_server_ids at the top level; TV items
@@ -2291,7 +2407,7 @@ def _execute_batch(req: Union[BatchRequest, MovieBatchRequest, TVShowBatchReques
                         if _sid not in batch_synced_server_ids:
                             batch_synced_server_ids.append(_sid)
                 # Enqueue for retry if ideal template conditions weren't met
-                if retry_enabled:
+                if retry_enabled and _retry_allowed(result.get("rating_key", ""), is_tv_batch, req.library_id):
                     if result.get("needs_retry"):
                         # Movie path: needs_retry is at the top level
                         try:

@@ -29,7 +29,7 @@ import io
 import re
 import threading
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from PIL import Image
 
@@ -243,19 +243,82 @@ def record_sent(server_id: Optional[str], rating_key: Optional[str], image: Any,
         logger.debug("[DRIFT] Couldn't store %s fingerprint for %s: %s", asset_type, rating_key, e)
 
 
+def matches_sent(server_id: Optional[str], rating_key: Optional[str], image: Any,
+                 asset_type: str = "poster") -> Optional[bool]:
+    """Is this image what Simposter last sent to the item? True if it matches
+    the stored fingerprint (within re-encoding noise), False if it differs,
+    None when nothing was ever sent (no fingerprint) or the image can't be read.
+    Used by the overlay-only path (backend/overlay_only.py) so a poster
+    Simposter sent itself is never kept as the other app's clean copy."""
+    if not rating_key:
+        return None
+    try:
+        with db.get_db() as conn:
+            row = conn.execute(
+                "SELECT fingerprint FROM poster_fingerprints WHERE server_id = ? AND rating_key = ? AND asset_type = ?",
+                (server_id or "plex-1", str(rating_key), asset_type),
+            ).fetchone()
+        if not row or not row[0]:
+            return None
+        current = fingerprint(image)
+        if not current:
+            return None
+        return not compare(row[0], current)["drift"]
+    except Exception as e:
+        logger.debug("[DRIFT] matches_sent failed for %s: %s", rating_key, e)
+        return None
+
+
 # --------------------------------------------------------------------------
 # Checking after a scan
 # --------------------------------------------------------------------------
+
+def _clear_mark(server_id: str, rating_key: str, asset_type: str = "poster") -> None:
+    with db.get_db() as conn:
+        conn.execute("UPDATE poster_fingerprints SET drift_detected_at = NULL, drift_score = NULL, drift_action = NULL "
+                     "WHERE server_id = ? AND rating_key = ? AND asset_type = ?",
+                     (server_id, str(rating_key), asset_type))
+
+
+def poster_mode_for(server_id: str, rating_key: str) -> Tuple[str, Optional[int]]:
+    """(poster mode, season index) for a drift-tracked item. The season index
+    comes from Overlay Refresh tracking (None for a movie or show poster)."""
+    from . import poster_mode
+    season_index = None
+    try:
+        with db.get_db() as conn:
+            row = conn.execute("SELECT season_index FROM overlay_state WHERE server_id = ? AND rating_key = ? LIMIT 1",
+                               (server_id, str(rating_key))).fetchone()
+        if row and row[0] is not None and int(row[0]) >= 0:
+            season_index = int(row[0])
+    except Exception:
+        pass
+    mode = poster_mode.gate(server_id, str(rating_key), None, poster_mode.infer_is_tv(rating_key))
+    return mode, season_index
+
 
 def check_after_download(server_id: Optional[str], rating_key: str, poster_path: Any,
                          asset_type: str = "poster") -> Optional[Dict[str, Any]]:
     """Called by a scan right after it re-downloaded a poster/logo/backdrop
     whose version changed. Compares it with what Simposter last sent; marks
-    and handles a drift. Returns the drift info, or None."""
+    and handles a drift. Returns the drift info, or None.
+
+    Poster modes (posters only): leave_alone is never compared (and an old
+    mark is cleared); for overlay_only a difference is the other app's new
+    poster, so the overlays go back on it (overlay_only.on_external_poster)
+    instead of the configured action -- no mark, list entry or notification."""
     server_id = server_id or "plex-1"
     try:
+        poster_mode, season_index = ("full", None)
+        if asset_type == "poster":
+            poster_mode, season_index = poster_mode_for(server_id, rating_key)
+            if poster_mode == "leave_alone":
+                _clear_mark(server_id, rating_key)
+                return None
         action = get_action()
-        if action == "off":
+        # Overlay-only titles are checked even with the drift action off: it's
+        # how the other app's new poster gets its overlays back.
+        if action == "off" and poster_mode != "overlay_only":
             return None
         with db.get_db() as conn:
             cur = conn.cursor()
@@ -272,6 +335,11 @@ def check_after_download(server_id: Optional[str], rating_key: str, poster_path:
             return None
         result = compare(row[0], current)
         if not result["drift"]:
+            return None
+        if poster_mode == "overlay_only":
+            from . import overlay_only
+            _clear_mark(server_id, rating_key)
+            overlay_only.on_external_poster(server_id, str(rating_key), season_index)
             return None
         title = _title(rating_key)
         logger.debug("[DRIFT] %s for %s on %s was changed outside Simposter (difference %.1f, %d areas)",
