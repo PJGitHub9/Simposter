@@ -89,7 +89,7 @@ def api_export_database(
                 if not include_secrets:
                     if key in _SECRET_DB_KEYS:
                         continue
-                    if key == "mediaServers" and value:
+                    if key in ("mediaServers", "arrInstances") and value:
                         value = _strip_media_server_secrets(value)
                 settings_out[key] = {"value": value, "category": row["category"]}
 
@@ -208,6 +208,9 @@ def api_import_database(data: Dict[str, Any]):
             current = {row["key"]: row["value"] for row in cursor.fetchall()}
 
             cursor.execute("DELETE FROM settings WHERE key != 'app.version'")
+            # Stored Radarr/Sonarr tags belong to the connections being replaced.
+            cursor.execute("DELETE FROM arr_tags")
+            cursor.execute("DELETE FROM arr_tag_sync")
             restored_keys = set()
             for key, setting_data in data["settings"].items():
                 if key == "app.version":
@@ -219,8 +222,8 @@ def api_import_database(data: Dict[str, Any]):
                     value, category = setting_data, None
                 if value is not None and not isinstance(value, str):
                     value = json.dumps(value)
-                if key == "mediaServers" and value and current.get("mediaServers"):
-                    value = _fill_media_server_secrets(value, current["mediaServers"])
+                if key in ("mediaServers", "arrInstances") and value and current.get(key):
+                    value = _fill_media_server_secrets(value, current[key])
                 cursor.execute(
                     "INSERT INTO settings (key, value, category, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)",
                     (key, value, category),

@@ -203,6 +203,10 @@
       </div>
     </div>
 
+    <!-- Radarr / Sonarr: read only, their tags feed poster mode rules. -->
+    <ArrInstancesSection type="radarr" :changed="radarrChanged" />
+    <ArrInstancesSection type="sonarr" :changed="sonarrChanged" />
+
     <!-- Placeholder for a planned server type; nothing here is functional. -->
     <div class="section section-coming-soon" aria-disabled="true">
       <h3>Silo <span class="coming-soon-badge">Future update</span></h3>
@@ -247,6 +251,7 @@ import { computed, reactive, ref } from 'vue'
 import { useSettingsStore, type MediaServerEntry } from '@/stores/settings'
 import { getApiBase } from '@/services/apiBase'
 import { mediaServerId } from '@/services/mediaServerId'
+import ArrInstancesSection from '@/components/settings/ArrInstancesSection.vue'
 
 // Plex is deliberately threaded through as props/emits (mirroring exactly how
 // LibrariesTab.vue received them, since the Plex Connection card moved here
@@ -272,6 +277,8 @@ const props = defineProps<{
   plexServersChanged?: boolean
   jellyfinServersChanged?: boolean
   embyServersChanged?: boolean
+  radarrChanged?: boolean
+  sonarrChanged?: boolean
   posterApiChanged?: boolean
 }>()
 

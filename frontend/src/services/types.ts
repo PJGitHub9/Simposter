@@ -27,6 +27,7 @@ export type MovieInput = {
   // Poster mode (backend/poster_mode.py), from the library list.
   poster_mode?: string | null
   poster_mode_reason?: string | null
+  poster_mode_warning?: string | null
 }
 
 export type Movie = {

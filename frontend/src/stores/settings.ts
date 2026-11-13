@@ -57,8 +57,18 @@ export type OverlayRefreshConfig = {
   lastRunStats?: Record<string, number> | null
 }
 
+// A Radarr or Sonarr connection. Simposter only reads its tags, for poster mode rules.
+export type ArrInstance = {
+  id: string
+  type: 'radarr' | 'sonarr'
+  name?: string
+  url: string
+  apiKey?: string
+  enabled?: boolean
+}
+
 export type PosterModeRule = {
-  source: 'plex_label'
+  source: 'plex_label' | 'arr_tag'  // arr_tag: a tag in the group's linked Radarr/Sonarr
   value: string
   mode: 'overlay_only' | 'leave_alone'
 }
@@ -72,7 +82,8 @@ export type LibraryGroup = {
   autoGeneratePresetId?: string | null
   autoGenerateTemplateId?: string | null
   labelsToRemove?: string[]
-  posterModeRules?: PosterModeRule[]  // Poster modes: Plex-label rules giving matching titles Overlay only / Leave alone
+  posterModeRules?: PosterModeRule[]  // Poster modes: label/tag rules giving matching titles Overlay only / Leave alone
+  arrInstanceId?: string | null       // The Radarr (movies) / Sonarr (TV) whose tags "arr_tag" rules read
   preferredServerId?: string | null  // Which member's row wins when this group's merged
                                       // grid finds the same title on more than one server
                                       // (backend's _dedupe_by_tmdb_id()) -- replaces the
@@ -240,6 +251,7 @@ export type UISettings = {
   onboarding_completed?: boolean
   mediaServers?: MediaServerEntry[]
   libraryGroups?: LibraryGroup[]
+  arrInstances?: ArrInstance[]
 }
 
 const onboardingCompleted = ref(false)
@@ -270,6 +282,7 @@ const plexActive = computed(() =>
   mediaServers.value.find(s => s.id === 'plex-1')?.enabled !== false
 )
 const libraryGroups = ref<LibraryGroup[]>([])
+const arrInstances = ref<ArrInstance[]>([])
 const tmdb = ref<TMDBSettings>({ apiKey: '' })
 const tvdb = ref<TVDBSettings>({ apiKey: '', comingSoon: false })
 const fanart = ref<FanartSettings>({ apiKey: '' })
@@ -365,6 +378,7 @@ async function loadSettings() {
     }
     mediaServers.value = data.mediaServers ?? []
     libraryGroups.value = data.libraryGroups ?? []
+    arrInstances.value = data.arrInstances ?? []
     tmdb.value = { apiKey: data.tmdb?.apiKey ?? '' }
     tvdb.value = { apiKey: data.tvdb?.apiKey ?? '', comingSoon: data.tvdb?.comingSoon ?? true }
     fanart.value = { apiKey: data.fanart?.apiKey ?? '' }
@@ -491,6 +505,7 @@ async function saveSettings(opts: { allowEmptyMediaServers?: boolean } = {}) {
       plex: { ...plex.value },
       mediaServers: mediaServers.value.map(s => ({ ...s })),
       libraryGroups: libraryGroups.value.map(g => ({ ...g, members: g.members.map(m => ({ ...m })) })),
+      arrInstances: arrInstances.value.map(i => ({ ...i })),
       tmdb: { ...tmdb.value },
       tvdb: { ...tvdb.value },
       fanart: { ...fanart.value },
@@ -541,6 +556,7 @@ export function useSettingsStore() {
     plexActive,
     mediaServers,
     libraryGroups,
+    arrInstances,
     tmdb,
     tvdb,
     fanart,

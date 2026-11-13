@@ -89,6 +89,8 @@ const sectionsWithChanges = ref({
   mediaServersPlex: false,
   mediaServersJellyfin: false,
   mediaServersEmby: false,
+  arrRadarr: false,
+  arrSonarr: false,
   // One flag per Settings section, all computed in checkForChanges() from the
   // saved snapshot (so a value changed back to what's saved clears it again).
   libraryDisplay: false,
@@ -462,6 +464,7 @@ const captureSettingsSnapshot = () => {
     mediaServers: JSON.parse(JSON.stringify(settings.mediaServers.value)),
     preferredPosterServer: settings.automation.value.preferredPosterServer,
     libraryGroups: JSON.parse(JSON.stringify(settings.libraryGroups.value)),
+    arrInstances: JSON.parse(JSON.stringify(settings.arrInstances.value)),
     // MDBList (GeneralTab) is bound directly to the store too.
     mdblist: JSON.parse(JSON.stringify(settings.mdblist.value)),
     // WeTrakr / SIMKL / Floppy list sources (GeneralTab), also bound to the store.
@@ -488,6 +491,8 @@ const captureSettingsSnapshot = () => {
   sectionsWithChanges.value.mediaServersPlex = false
   sectionsWithChanges.value.mediaServersJellyfin = false
   sectionsWithChanges.value.mediaServersEmby = false
+  sectionsWithChanges.value.arrRadarr = false
+  sectionsWithChanges.value.arrSonarr = false
   for (const key of Object.keys(sectionsWithChanges.value) as Array<keyof typeof sectionsWithChanges.value>) {
     sectionsWithChanges.value[key] = false
   }
@@ -572,6 +577,7 @@ const checkForChanges = () => {
     mediaServers: settings.mediaServers.value,
     preferredPosterServer: settings.automation.value.preferredPosterServer,
     libraryGroups: settings.libraryGroups.value,
+    arrInstances: settings.arrInstances.value,
     mdblist: settings.mdblist.value,
     wetrakr: settings.wetrakr.value,
     simkl: settings.simkl.value,
@@ -629,6 +635,11 @@ const checkForChanges = () => {
     JSON.stringify(byType(settings.mediaServers.value, 'jellyfin')) !== JSON.stringify(byType(initialMediaServers, 'jellyfin'))
   sectionsWithChanges.value.mediaServersEmby =
     JSON.stringify(byType(settings.mediaServers.value, 'emby')) !== JSON.stringify(byType(initialMediaServers, 'emby'))
+  const initialArr: any[] = initial.arrInstances || []
+  sectionsWithChanges.value.arrRadarr =
+    JSON.stringify(byType(settings.arrInstances.value, 'radarr')) !== JSON.stringify(byType(initialArr, 'radarr'))
+  sectionsWithChanges.value.arrSonarr =
+    JSON.stringify(byType(settings.arrInstances.value, 'sonarr')) !== JSON.stringify(byType(initialArr, 'sonarr'))
 
   sectionsWithChanges.value.performance =
     localConcurrentRenders.value !== initial.concurrentRenders ||
@@ -814,7 +825,7 @@ const saveSettings = async () => {
 
   // Poster mode rules that changed since the last save (compared with the last-saved
   // groups); re-applied to the library cache right after the save succeeds.
-  const rulesOf = (g: any) => JSON.stringify(g?.posterModeRules || [])
+  const rulesOf = (g: any) => JSON.stringify([g?.posterModeRules || [], g?.arrInstanceId || null])
   const savedGroupById = new Map<string, any>((initialLibraryGroups.value || []).map((g: any) => [String(g.id), g]))
   const groupsWithChangedRules = settings.libraryGroups.value
     .filter(g => rulesOf(g) !== rulesOf(savedGroupById.get(String(g.id))))
@@ -1500,6 +1511,7 @@ watch([
   // so adding/removing/editing a group there needs to be watched off the
   // store itself too, or it silently never flips the unsaved-changes flag.
   () => settings.libraryGroups.value,
+  () => settings.arrInstances.value,
   () => settings.mdblist.value,
   () => settings.wetrakr.value,
   () => settings.simkl.value,
@@ -1771,6 +1783,8 @@ onMounted(() => {
         :plexServersChanged="sectionsWithChanges.mediaServersPlex"
         :jellyfinServersChanged="sectionsWithChanges.mediaServersJellyfin"
         :embyServersChanged="sectionsWithChanges.mediaServersEmby"
+        :radarrChanged="sectionsWithChanges.arrRadarr"
+        :sonarrChanged="sectionsWithChanges.arrSonarr"
         :posterApiChanged="sectionsWithChanges.posterApi"
         @update:plexUrl="localPlexUrl = $event"
         @update:plexToken="localPlexToken = $event"

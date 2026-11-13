@@ -53,7 +53,7 @@ def _poster_mode_gate(rating_key: str, library_id: str, is_tv: bool, template_id
     copies in its library group (a show: its show and season posters), and
     the outcome "ok"/"skipped"/"error" is returned."""
     from . import poster_mode
-    mode = poster_mode.gate("plex-1", rating_key, library_id, is_tv)
+    mode = poster_mode.gate("plex-1", rating_key, library_id, is_tv, fresh_tags=True)
     if mode == "full":
         return None
     if mode == "leave_alone":
@@ -508,7 +508,7 @@ def _deliver_cached_plex_render(server_id: str, library_id: str, media_type: str
     # Never copy Plex's full poster onto a leave-alone or overlay-only title.
     from . import poster_mode
     if poster_mode.gate(server_id, rating_key, library_id, media_type == "tv",
-                        tmdb_id=tmdb_id, tvdb_id=item.get("tvdb_id")) != "full":
+                        tmdb_id=tmdb_id, tvdb_id=item.get("tvdb_id"), fresh_tags=True) != "full":
         return False
     cache_type = "tv-show" if media_type == "tv" else "movie"
     client = get_client(server_id)
@@ -750,7 +750,7 @@ def process_new_media_server_content(
             if not item.get("rating_key"):
                 continue
             _mode = poster_mode.gate(server_id, item["rating_key"], library_id, media_type == "tv",
-                                     tmdb_id=item.get("tmdb_id"), tvdb_id=item.get("tvdb_id"))
+                                     tmdb_id=item.get("tmdb_id"), tvdb_id=item.get("tvdb_id"), fresh_tags=True)
             if _mode == "leave_alone":
                 results["skipped"] += 1
                 continue

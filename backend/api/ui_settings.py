@@ -70,6 +70,45 @@ def _restore_unchanged_media_server_secrets(incoming: dict, current: dict) -> di
             entry["apiKey"] = existing.get("apiKey", "")
     return incoming
 
+
+# arrInstances (Radarr/Sonarr connections, backend/arr_client.py): same idea
+# as mediaServers above, one apiKey per entry.
+def _origin(url) -> tuple:
+    from urllib.parse import urlparse
+    p = urlparse(str(url or "").strip())
+    return (p.scheme.lower(), p.netloc.lower())
+
+
+def _mask_arr_secrets(data: dict) -> dict:
+    instances = data.get("arrInstances")
+    if not isinstance(instances, list):
+        return data
+    masked = dict(data)
+    masked["arrInstances"] = [
+        {**i, "apiKey": SECRET_MASK} if isinstance(i, dict) and i.get("apiKey") else i
+        for i in instances
+    ]
+    return masked
+
+
+def _restore_unchanged_arr_secrets(incoming: dict, current: dict) -> dict:
+    """A masked apiKey keeps the stored key, but only for the same address: a
+    stored key is never carried over to (and later sent to) another host."""
+    instances = incoming.get("arrInstances")
+    if not isinstance(instances, list):
+        return incoming
+    current_by_id = {i.get("id"): i for i in (current.get("arrInstances") or []) if isinstance(i, dict)}
+    for entry in instances:
+        if not isinstance(entry, dict):
+            continue
+        entry["url"] = str(entry.get("url") or "").strip().rstrip("/")
+        if entry.get("apiKey") == SECRET_MASK:
+            existing = current_by_id.get(entry.get("id")) or {}
+            same = _origin(entry.get("url")) == _origin(existing.get("url"))
+            entry["apiKey"] = existing.get("apiKey", "") if same else ""
+    return incoming
+
+
 # Legacy file paths for migration check
 _settings_file = Path(settings.SETTINGS_DIR) / "ui_settings.json"
 _legacy_settings_file = Path(settings.CONFIG_DIR) / "ui_settings.json"
@@ -404,7 +443,7 @@ def _read_settings(include_env: bool = True) -> UISettings:
 def get_ui_settings():
     settings_obj = _read_settings()
     data = settings_obj.model_dump(exclude_none=False, exclude_defaults=False, exclude_unset=False)
-    return JSONResponse(content=_mask_media_server_secrets(_mask_secrets(data)))
+    return JSONResponse(content=_mask_arr_secrets(_mask_media_server_secrets(_mask_secrets(data))))
 
 @router.get("/ping")
 def api_ping():
@@ -453,7 +492,12 @@ def save_ui_settings_endpoint(payload: UISettings, allow_empty_media_servers: bo
                 incoming["maintainerr"] = {**_new_mtr, "apiKey": ""}
         incoming = _restore_unchanged_secrets(incoming, current)
         incoming = _restore_unchanged_media_server_secrets(incoming, current)
+        incoming = _restore_unchanged_arr_secrets(incoming, current)
         merged = {**defaults, **current, **incoming}
+        # Radarr/Sonarr connections: a payload that doesn't carry the list (an
+        # older client, or a page loaded before one was added) keeps the stored one.
+        if "arrInstances" not in payload.model_fields_set:
+            merged["arrInstances"] = current.get("arrInstances") or []
         for nested_key in ("plex", "tmdb", "tvdb", "fanart", "mdblist", "posterApi", "wetrakr", "simkl", "floppy", "maintainerr", "imageQuality", "performance", "automation", "scheduler", "notifications"):
             merged[nested_key] = {
                 **defaults.get(nested_key, {}),
@@ -542,6 +586,23 @@ def save_ui_settings_endpoint(payload: UISettings, allow_empty_media_servers: bo
             if isinstance(g, dict) and g.get("id") not in sent_rules and g.get("id") in stored_rules:
                 g["posterModeRules"] = stored_rules[g.get("id")] or []
 
+        # A group's Radarr/Sonarr link: kept when the group's payload doesn't
+        # carry the field, and cleared when the instance no longer exists.
+        sent_arr = set()
+        if "libraryGroups" in payload.model_fields_set:
+            for pg in payload.libraryGroups or []:
+                if "arrInstanceId" in pg.model_fields_set:
+                    sent_arr.add(pg.id)
+        stored_arr = {g.get("id"): g.get("arrInstanceId") for g in (current.get("libraryGroups") or []) if isinstance(g, dict)}
+        arr_ids_after = {i.get("id") for i in (merged.get("arrInstances") or []) if isinstance(i, dict)}
+        for g in merged.get("libraryGroups") or []:
+            if not isinstance(g, dict):
+                continue
+            if g.get("id") not in sent_arr and g.get("id") in stored_arr:
+                g["arrInstanceId"] = stored_arr[g.get("id")]
+            if g.get("arrInstanceId") and g.get("arrInstanceId") not in arr_ids_after:
+                g["arrInstanceId"] = None
+
         # Track an explicit Plex removal (see PlexSettings.ignoreEnvCredentials).
         # Computed here rather than trusted from the payload: the frontend
         # rebuilds the plex object from scratch on every save and never sends it.
@@ -570,6 +631,19 @@ def save_ui_settings_endpoint(payload: UISettings, allow_empty_media_servers: bo
             else:
                 raise
         logger.info("[UI_SETTINGS] Saved to database")
+
+        # Radarr/Sonarr: drop the stored tags of removed instances, and of ones
+        # whose address or key changed (they came from another server).
+        try:
+            from .. import arr_client
+            _arr_sig = lambda i: (str(i.get("type") or ""), str(i.get("url") or ""), str(i.get("apiKey") or ""))
+            _arr_before = {i.get("id"): i for i in (current.get("arrInstances") or []) if isinstance(i, dict)}
+            _arr_after = {i.get("id"): i for i in (merged.get("arrInstances") or []) if isinstance(i, dict)}
+            for _iid, _inst in _arr_before.items():
+                if _iid not in _arr_after or _arr_sig(_arr_after[_iid]) != _arr_sig(_inst):
+                    arr_client.delete_instance_data(str(_iid))
+        except Exception as arr_err:
+            logger.debug("[UI_SETTINGS] Radarr/Sonarr tag cleanup failed: %s", arr_err)
 
         # A different Maintainerr server (or key) makes the stored snapshot of
         # removal dates meaningless; drop it so the next render fetches anew.
@@ -628,7 +702,7 @@ def save_ui_settings_endpoint(payload: UISettings, allow_empty_media_servers: bo
         env_overrides = _env_overrides()
         for nested_key, nested_values in env_overrides.items():
             merged_with_env[nested_key] = {**merged_with_env.get(nested_key, {}), **nested_values}
-        return _mask_media_server_secrets(_mask_secrets(merged_with_env))
+        return _mask_arr_secrets(_mask_media_server_secrets(_mask_secrets(merged_with_env)))
     except Exception as e:
         logger.error(f"[UI_SETTINGS] Failed to save settings: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to save settings: {e}")

@@ -72,7 +72,7 @@ export async function setPosterModes(
 
 export async function reevaluatePosterModes(
   groupId: string,
-): Promise<{ matched: number; changed: number; per_rule: number[] } | null> {
+): Promise<{ matched: number; changed: number; per_rule: (number | null)[] } | null> {
   try {
     const res = await fetch(`${getApiBase()}/api/poster-modes/reevaluate`, {
       method: 'POST',
@@ -88,11 +88,43 @@ export async function reevaluatePosterModes(
 
 // Match counts from the last re-evaluation, per group id (shown next to each
 // rule in Settings after Save).
-export const ruleMatchCounts = ref<Record<string, number[]>>({})
+// null = unknown (a tag rule while Radarr/Sonarr couldn't be read).
+export const ruleMatchCounts = ref<Record<string, (number | null)[]>>({})
 
-export const MODE_FILTER_OPTIONS: { value: '' | PosterMode; label: string }[] = [
+// 'lost' = Full titles whose rule stopped matching (poster_mode_warning set).
+export const MODE_FILTER_OPTIONS: { value: '' | PosterMode | 'lost'; label: string }[] = [
   { value: '', label: 'All modes' },
   { value: 'full', label: 'Full' },
   { value: 'overlay_only', label: 'Overlay only' },
   { value: 'leave_alone', label: 'Leave alone' },
+  { value: 'lost', label: 'Lost its rule' },
 ]
+
+/** Poster mode filter used by the Movies / TV Shows grids. */
+export function matchesModeFilter(
+  item: { poster_mode?: string | null; poster_mode_warning?: string | null },
+  filter: string,
+): boolean {
+  if (!filter) return true
+  if (filter === 'lost') return !!item.poster_mode_warning
+  return (item.poster_mode || 'full') === filter
+}
+
+/** Dismiss the "lost its rule" heads-up on these titles. Returns how many were cleared. */
+export async function dismissModeWarning(
+  groupId: string,
+  mediaType: 'movie' | 'tv',
+  items: ModeItem[],
+): Promise<number> {
+  const res = await fetch(`${getApiBase()}/api/poster-modes/dismiss-warning`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      group_id: groupId,
+      media_type: mediaType,
+      items: items.map(i => ({ tmdb_id: i.tmdb_id ?? undefined, tvdb_id: i.tvdb_id ?? undefined })),
+    }),
+  })
+  if (!res.ok) throw new Error(await res.text())
+  return Number((await res.json()).cleared || 0)
+}

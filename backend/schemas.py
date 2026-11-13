@@ -32,7 +32,8 @@ class Movie(BaseModel):
                                           # directly, without a second API round-trip to
                                           # resolve which rating_key belongs to which server.
     poster_mode: Optional[str] = "full"  # full | overlay_only | leave_alone for this library group
-    poster_mode_reason: Optional[str] = None  # "manual", 'plex label "X"', or "" for the default
+    poster_mode_reason: Optional[str] = None  # "manual", 'plex label "X"', 'radarr tag "X"', or "" for the default
+    poster_mode_warning: Optional[str] = None  # set when the title dropped to Full because its rule stopped matching
 
 
 class MovieTMDbResponse(BaseModel):
@@ -337,10 +338,23 @@ class OverlayRefreshConfig(BaseModel):
 
 class PosterModeRule(BaseModel):
     """A per-group rule giving matching titles a poster mode (see poster_mode.py).
-    source "plex_label": a title whose Plex copy has this label (case-insensitive)."""
+    source "plex_label": a title whose Plex copy has this label.
+    source "arr_tag": a title with this tag in the group's linked Radarr/Sonarr
+    (LibraryGroup.arrInstanceId). Both case-insensitive."""
     source: str = "plex_label"
     value: str
     mode: str  # overlay_only | leave_alone
+
+
+class ArrInstance(BaseModel):
+    """A Radarr or Sonarr connection (backend/arr_client.py). Read only: its
+    tags feed poster mode rules. apiKey is masked on read like media server keys."""
+    id: str
+    type: str  # "radarr" | "sonarr"
+    name: str = ""
+    url: str = ""
+    apiKey: str = ""
+    enabled: bool = True
 
 
 class LibraryGroup(BaseModel):
@@ -391,6 +405,9 @@ class LibraryGroup(BaseModel):
     # Poster mode rules (plex_label -> overlay_only/leave_alone). Applied after
     # every scan by poster_mode.evaluate_group(); manual modes win over them.
     posterModeRules: List[PosterModeRule] = Field(default_factory=list)
+    # The Radarr (movie group) or Sonarr (show group) whose tags "arr_tag"
+    # rules read: an ArrInstance id from UISettings.arrInstances, or None.
+    arrInstanceId: Optional[str] = None
 
 
 class PosterApiSettings(BaseModel):
@@ -471,6 +488,7 @@ class UISettings(BaseModel):
     onboarding_completed: bool = False
     mediaServers: List[MediaServerEntry] = Field(default_factory=list)
     libraryGroups: List[LibraryGroup] = Field(default_factory=list)
+    arrInstances: List[ArrInstance] = Field(default_factory=list)
 
 class PlexLogoSendRequest(BaseModel):
     rating_key: str

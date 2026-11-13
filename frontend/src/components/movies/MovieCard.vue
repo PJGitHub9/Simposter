@@ -31,6 +31,8 @@ const props = defineProps<{
   // Poster mode (backend/poster_mode.py); no icon for Full.
   posterMode?: string | null
   posterModeReason?: string | null
+  // Set when the title dropped to Full because its rule stopped matching.
+  posterModeWarning?: string | null
 }>()
 
 const modeBadge = computed(() => modeIcon(props.posterMode))
@@ -144,6 +146,13 @@ async function doResend(includeSeasons: boolean, targetServerIds: string[]) {
         title="This poster was changed on the server after Simposter sent it. Click to see it in History."
         @click.stop="router.push({ name: 'history', query: { tab: 'drift' } })"
       >Changed</button>
+      <span v-if="posterModeWarning && !modeBadge" class="mode-badge mode-warning" :title="posterModeWarning">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
+          <path d="M12 3 2 20h20L12 3z" />
+          <line x1="12" y1="10" x2="12" y2="14" />
+          <line x1="12" y1="17" x2="12" y2="17.5" />
+        </svg>
+      </span>
       <span v-if="modeBadge" class="mode-badge" :class="'mode-' + modeBadge" :title="modeBadgeTitle">
         <svg v-if="modeBadge === 'lock'" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
           <rect x="5" y="11" width="14" height="10" rx="2" />
@@ -338,6 +347,12 @@ async function doResend(includeSeasons: boolean, targetServerIds: string[]) {
 .mode-badge.mode-overlay {
   color: #3dd6b7;
   border-color: rgba(61, 214, 183, 0.55);
+}
+
+.mode-badge.mode-warning {
+  color: #ffb020;
+  border-color: rgba(255, 176, 32, 0.7);
+  background: rgba(60, 36, 0, 0.75);
 }
 
 .mode-badge.mode-lock {

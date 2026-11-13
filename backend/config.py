@@ -366,6 +366,7 @@ def _media_server_secrets() -> list:
         conn = sqlite3.connect(str(db_path), timeout=2)
         try:
             row = conn.execute("SELECT value FROM settings WHERE key = 'mediaServers' LIMIT 1").fetchone()
+            arr_row = conn.execute("SELECT value FROM settings WHERE key = 'arrInstances' LIMIT 1").fetchone()
             # List-source keys and sign-in tokens (backend/list_sources.py).
             extra = [r[0] for r in conn.execute(
                 "SELECT value FROM settings WHERE key IN ('wetrakr.clientId', 'simkl.clientId', 'floppy.token', 'posterApi.key', 'maintainerr.apiKey')"
@@ -379,6 +380,11 @@ def _media_server_secrets() -> list:
         finally:
             conn.close()
         servers = json.loads(row[0]) if row and row[0] else []
+        try:
+            arr = json.loads(arr_row[0]) if arr_row and arr_row[0] else []
+            servers = (servers if isinstance(servers, list) else []) + (arr if isinstance(arr, list) else [])
+        except ValueError:
+            pass
         out = [str(v) for v in extra if v]
         for s in servers if isinstance(servers, list) else []:
             if isinstance(s, dict):

@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.8.72 (2026-11-12) — `dev-overlayonly` branch
+
+### New Features
+- **Radarr/Sonarr tags as poster mode rules** — new `arrInstances` setting (`{id, type, name, url, apiKey, enabled}`, key masked like media server keys, kept only for the saved address) edited in Settings → Media Servers (`ArrInstancesSection.vue`), `POST /api/arr/test`, `GET /api/arr/{id}/tags`. `LibraryGroup.arrInstanceId` links one Radarr (movie group) or Sonarr (TV group). `backend/arr_client.py` reads `/api/v3/tag` plus `/api/v3/movie` or `/api/v3/series` into `arr_tags`; read only. Rule source `arr_tag` in `poster_mode.py` (reason `radarr tag "X"` / `sonarr tag "X"`), matched by TMDb id (movies) or TVDB/TMDb id (shows; a TMDb-only show Sonarr doesn't list by TMDb id is looked up once through TMDb, `arr_id_map`).
+- **"Lost its rule" heads-up** — `poster_modes` gains `lost_mode`, `lost_reason`, `lost_at`. A title whose rule (label or tag) stops matching and has no hand-set mode drops to Full and keeps a warning (`poster_mode_warning` on list items, amber card icon, editor line with Dismiss, "Lost its rule" in the Poster mode filter, `POST /api/poster-modes/dismiss-warning`). Cleared when the rule matches again, a mode is set by hand, it is dismissed, or a full poster is sent.
+
+### Improvements
+- **Outage rule** — when the linked Radarr/Sonarr is missing, disabled, the wrong type or unreachable, tag rules are skipped and each title keeps what its tag rules decided last time (stored apart from the combined mode in `poster_modes.tag_mode`/`tag_reason`, so it also holds for a title a label rule was winning on); label rules still apply.
+- **Fresh tags for new arrivals** — webhooks and auto-generate call `poster_mode.gate(..., fresh_tags=True)`, which re-reads the instance at most once a minute and evaluates labels and tags together (`evaluate_item()`). The Settings re-check always reads fresh.
+- **Rule editor** — source select per rule, tag suggestions, a note on a rule that can't match (no Radarr/Sonarr linked, no Plex library).
+
 ## v1.8.71 (2026-11-12) — `dev-overlayonly` branch
 
 ### New Features

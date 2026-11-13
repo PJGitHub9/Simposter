@@ -110,13 +110,28 @@
       </div>
     </div>
 
-    <!-- Poster mode rules (Plex labels): titles whose Plex copy has a label get
-         Overlay only / Leave alone. Plex-only, so only shown with a Plex member. -->
+    <!-- The Radarr (movies) / Sonarr (TV) whose tags this group's rules can read. -->
+    <div v-if="hasAnyMember && (arrChoices.length || group.arrInstanceId)" class="arr-link">
+      <label>
+        <span class="label-text">{{ arrLabel }} for this group</span>
+        <select :value="group.arrInstanceId || ''" @change="onArrChange(($event.target as HTMLSelectElement).value)">
+          <option value="">None</option>
+          <option v-for="inst in arrChoices" :key="inst.id" :value="inst.id">{{ inst.name || inst.url }}{{ inst.enabled === false ? ' (disabled)' : '' }}</option>
+        </select>
+        <span class="help-text">Lets a poster mode rule use a {{ arrLabel }} tag (for example one Aura adds). Simposter only reads tags.</span>
+      </label>
+    </div>
+
+    <!-- Poster mode rules: a Plex label or a Radarr/Sonarr tag gives a title
+         Overlay only / Leave alone. Shown when the group has a source for one. -->
     <PosterModeRules
-      v-if="plexMember"
+      v-if="plexMember || group.arrInstanceId || (group.posterModeRules || []).length"
       :group-id="group.id"
       :rules="group.posterModeRules || []"
       :available-labels="availableLabels"
+      :has-plex="!!plexMember"
+      :arr-label="arrLabel"
+      :arr-instance-id="arrLinkedId"
       @update:rules="onRulesChange"
     />
 
@@ -465,6 +480,23 @@ function onMergeToggle(e: Event) {
   const checked = (e.target as HTMLInputElement).checked
   groups.value = groups.value.map(g => g.id === props.group.id ? { ...g, mergeItems: checked } : g)
 }
+// Radarr for a movie group, Sonarr for a TV group.
+const arrType = computed(() => (props.group.mediaType === 'tv' ? 'sonarr' : 'radarr'))
+const arrLabel = computed(() => (arrType.value === 'sonarr' ? 'Sonarr' : 'Radarr'))
+const arrChoices = computed(() =>
+  // Enabled ones, plus the linked one even when it is disabled (so the select still shows it).
+  settingsStore.arrInstances.value.filter(
+    i => i.type === arrType.value && (i.enabled !== false || i.id === props.group.arrInstanceId),
+  ),
+)
+// The linked instance, only while it still exists in the list.
+const arrLinkedId = computed(() => {
+  const id = props.group.arrInstanceId
+  return id && settingsStore.arrInstances.value.some(i => i.id === id && i.type === arrType.value) ? id : null
+})
+function onArrChange(value: string) {
+  groups.value = groups.value.map(g => g.id === props.group.id ? { ...g, arrInstanceId: value || null } : g)
+}
 // Poster mode rules are staged like the other group fields; the page-wide Save sends them.
 function onRulesChange(rules: PosterModeRule[]) {
   groups.value = groups.value.map(g => g.id === props.group.id ? { ...g, posterModeRules: rules } : g)
@@ -732,6 +764,28 @@ function removeGroup() {
   border-top: 1px solid rgba(255, 255, 255, 0.05);
 }
 .merge-toggle-section .help-text { margin-left: 24px; margin-top: 4px; }
+
+.arr-link {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.arr-link label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.arr-link select {
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+  font-size: 13px;
+  max-width: 360px;
+}
 
 .auto-gen-section {
   margin-top: 14px;

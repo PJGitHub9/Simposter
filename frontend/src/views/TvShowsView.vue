@@ -7,7 +7,7 @@ import { useTvShows } from '../composables/useTvShows'
 import { useLibraryGroupPreference } from '../composables/useLibraryGroupPreference'
 import { getApiBase } from '@/services/apiBase'
 import { compareTitles } from '@/services/sortTitle'
-import { MODE_FILTER_OPTIONS } from '@/services/posterModes'
+import { MODE_FILTER_OPTIONS, matchesModeFilter } from '@/services/posterModes'
 
 type TvShow = {
   key: string
@@ -24,6 +24,7 @@ type TvShow = {
   other_servers?: { server_id: string; rating_key: string }[] | null
   poster_mode?: string | null
   poster_mode_reason?: string | null
+  poster_mode_warning?: string | null
 }
 
 // Simple module-level caches so navigating away/back does not refetch everything
@@ -320,7 +321,7 @@ const filtered = computed(() => {
 
   // Filter by poster mode
   if (filterMode.value) {
-    result = result.filter(s => ((s.poster_mode) || 'full') === filterMode.value)
+    result = result.filter(s => matchesModeFilter(s, filterMode.value))
   }
 
   return result

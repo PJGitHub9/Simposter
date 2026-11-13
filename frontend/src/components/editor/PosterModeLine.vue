@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import PosterModeMenu from '../PosterModeMenu.vue'
 import { getApiBase } from '@/services/apiBase'
-import { groupIdFor, modeLabel, modeReasonText, type PosterMode } from '@/services/posterModes'
+import { dismissModeWarning, groupIdFor, modeLabel, modeReasonText, type PosterMode } from '@/services/posterModes'
 import type { MovieInput } from '@/services/types'
 
 const props = defineProps<{ movie: MovieInput }>()
@@ -10,6 +10,7 @@ const props = defineProps<{ movie: MovieInput }>()
 const apiBase = getApiBase()
 const mode = ref<string>(props.movie.poster_mode || 'full')
 const reason = ref<string>(props.movie.poster_mode_reason || '')
+const warning = ref<string>(props.movie.poster_mode_warning || '')
 const groupInfo = ref<{ id?: string } | null>(null)
 // The group lookup decides which group the menu writes to; until it finishes
 // the pseudo id (group-{type}-{library}) could be the wrong group.
@@ -56,8 +57,18 @@ async function reloadMode(seq: number = loadSeq) {
     const found = (data.items || []).find((i: { id_type: string; item_id: string }) => i.id_type === idType && String(i.item_id) === id)
     mode.value = found?.mode || 'full'
     reason.value = found?.reason || ''
+    warning.value = found?.warning || ''
   } catch {
     /* keep what the list said */
+  }
+}
+
+async function dismissWarning() {
+  try {
+    await dismissModeWarning(groupId.value, mediaType.value, modeItems.value)
+    warning.value = ''
+  } catch {
+    /* leave it showing */
   }
 }
 
@@ -68,6 +79,7 @@ async function onChanged(_m: PosterMode | null, updated: number) {
 watch(() => props.movie.key, () => {
   mode.value = props.movie.poster_mode || 'full'
   reason.value = props.movie.poster_mode_reason || ''
+  warning.value = props.movie.poster_mode_warning || ''
   loadGroup()
 }, { immediate: true })
 </script>
@@ -78,6 +90,10 @@ watch(() => props.movie.key, () => {
     <PosterModeMenu :group-id="groupId" :media-type="mediaType" :items="modeItems" :disabled="!groupLoaded" @changed="onChanged" />
     <p v-if="mode === 'overlay_only'" class="pm-note">Sending replaces the other app's poster on this server.</p>
     <p v-else-if="mode === 'leave_alone'" class="pm-note pm-warn">Simposter leaves this title alone; sending will still replace its poster.</p>
+    <p v-else-if="warning" class="pm-note pm-warn">
+      {{ warning }}
+      <button type="button" class="pm-dismiss" :disabled="!groupLoaded" @click="dismissWarning">Dismiss</button>
+    </p>
   </div>
 </template>
 
@@ -111,5 +127,16 @@ watch(() => props.movie.key, () => {
 
 .pm-warn {
   color: #fbbf24;
+}
+
+.pm-dismiss {
+  margin-left: 6px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font-size: inherit;
+  text-decoration: underline;
+  cursor: pointer;
 }
 </style>

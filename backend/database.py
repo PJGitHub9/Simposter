@@ -1328,6 +1328,37 @@ def init_database():
                 PRIMARY KEY (group_id, media_type, id_type, item_id)
             )
         """)
+        # "Lost its rule" heads-up (poster_mode.warning_text()).
+        cursor.execute("PRAGMA table_info(poster_modes)")
+        _pm_cols = {r[1] for r in cursor.fetchall()}
+        for _col in ("lost_mode", "lost_reason", "lost_at", "tag_mode", "tag_reason"):
+            if _col not in _pm_cols:
+                cursor.execute(f"ALTER TABLE poster_modes ADD COLUMN {_col} TEXT")
+        # Radarr/Sonarr tags (backend/arr_client.py), read for poster mode rules.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS arr_tags (
+                instance_id TEXT NOT NULL,
+                id_type TEXT NOT NULL,
+                item_id TEXT NOT NULL,
+                tags_json TEXT NOT NULL,
+                PRIMARY KEY (instance_id, id_type, item_id)
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS arr_tag_sync (
+                instance_id TEXT PRIMARY KEY,
+                synced_at REAL,
+                attempted_at REAL,
+                error TEXT
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS arr_id_map (
+                tmdb_id TEXT PRIMARY KEY,
+                tvdb_id TEXT,
+                checked_at REAL
+            )
+        """)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS media_server_item_etags (
                 server_id TEXT NOT NULL,
@@ -4916,6 +4947,11 @@ def record_poster_history(
     ):
         from . import poster_drift
         poster_drift.record_sent(server_id, rating_key, poster_data)
+
+    # A full poster went out: a "lost its rule" heads-up on the title is now moot.
+    if status == 'success' and action in ("sent_to_plex", "resent_to_plex", "sent_to_media_server", "resent_to_media_server"):
+        from . import poster_mode
+        poster_mode.clear_lost_for_item(server_id, rating_key)
 
     with get_db() as conn:
         cursor = conn.cursor()

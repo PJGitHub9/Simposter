@@ -10,6 +10,26 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.72',
+    date: '2026-11-12',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Radarr and Sonarr tags as poster mode rules: connect Radarr/Sonarr in Settings → Media Servers, pick one on a library group in Settings → Libraries, then add a rule such as "Radarr tag Aura means Overlay only". This works for Jellyfin and Emby libraries, which have no labels. Simposter only reads tags and never changes anything in Radarr or Sonarr.',
+          'A title that goes back to Full because its label or tag was removed now shows an amber warning icon on its card, since Simposter may replace its poster. The editor shows why, with a Dismiss link, and the Poster mode filter has "Lost its rule".',
+        ],
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'If Radarr or Sonarr cannot be reached, the poster modes its tags set earlier are kept until it can be read again.',
+          'A poster mode rule row now has a source (Plex label, Radarr tag or Sonarr tag) and suggests the tags that exist.',
+        ],
+      },
+    ],
+  },
+  {
     version: 'v1.8.71',
     date: '2026-11-12',
     sections: [

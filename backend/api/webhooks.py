@@ -281,7 +281,7 @@ def _webhook_poster_mode(server_id: Optional[str], rating_key: str, library_id: 
         if has_rules:
             labels = _fetch_item_labels(rating_key)
     return poster_mode.gate(server_id, rating_key, library_id, is_tv, labels=labels,
-                            tmdb_id=tmdb_id, tvdb_id=tvdb_id)
+                            tmdb_id=tmdb_id, tvdb_id=tvdb_id, fresh_tags=True)
 
 
 def _handle_poster_mode(mode: str, server_id: Optional[str], rating_key: str, library_id: Optional[str],

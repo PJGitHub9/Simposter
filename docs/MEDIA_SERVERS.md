@@ -21,6 +21,12 @@ The setup wizard asks which servers you use up front (any combination) and conne
 
 ---
 
+## Radarr and Sonarr (tags only)
+
+**Settings → Media Servers** also has a Radarr section and a Sonarr section. Add an instance with its address and API key (Radarr/Sonarr: Settings → General → API Key) and press Test Connection. You can add several, for example a separate 4K Radarr.
+
+Simposter only reads tags from them, and only for [poster mode rules](OVERLAYS.md#posters-from-another-app). To use an instance, pick it on a library group in Settings → Libraries: one Radarr per movie group, one Sonarr per TV group. Nothing is ever written to Radarr or Sonarr. Removing an instance unlinks it from its groups.
+
 ## Library groups
 
 A **library group** says "these libraries hold the same content". For example, Plex "Movies" plus Jellyfin "Movies", or Plex "4K Movies" plus Jellyfin "4k-Movies". Manage them in **Settings → Libraries**: each card is one group, with a row for each server type. Pick a library from a row's dropdown to add it, and use ✕ to remove it. Changes are kept when you click **Save Changes**.
