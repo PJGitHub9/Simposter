@@ -10,6 +10,27 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.73',
+    date: '2026-11-13',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          "Security: a saved Plex token or Jellyfin/Emby API key is now only ever sent to the address it was saved with. Before, Test Connection with a different address (including a link opened on another website), changing a server's address in Settings, or restoring a backup with another address could send the saved key to that other address.",
+        ],
+      },
+      {
+        title: 'Improvements',
+        items: [
+          "If you change a server's address in Settings → Media Servers, the page now says to enter its key again. Using Simposter from another computer is not affected; only the server address matters.",
+          "Adding a Radarr, Sonarr, Plex, Jellyfin or Emby server: a Test Connection that succeeds now adds it right away. Before, a server that was tested but not added with the Add button was left out when you clicked Save.",
+          "TMDb audience ratings now follow Overlays → Scheduler's \"Re-check ratings every N days\", like MDBList ratings. Before, the TMDb score was read again on every Overlay Refresh, so new titles whose score moved a little were re-sent (and notified) again and again. Titles with no TMDb votes yet are checked daily.",
+          "Settings → Libraries: a poster mode rule's \"titles matched\" count is up to date when the page opens. Before, it only changed when you saved the rules, so titles a later scan matched (for example after adding the tag in Sonarr) weren't counted.",
+        ],
+      },
+    ],
+  },
+  {
     version: 'v1.8.72',
     date: '2026-11-12',
     sections: [

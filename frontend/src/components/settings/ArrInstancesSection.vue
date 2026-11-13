@@ -7,6 +7,7 @@ import { computed, reactive, ref } from 'vue'
 import { useSettingsStore, type ArrInstance } from '@/stores/settings'
 import { getApiBase } from '@/services/apiBase'
 import { mediaServerId } from '@/services/mediaServerId'
+import { keyNeedsReentry } from '@/services/serverOrigin'
 
 const props = defineProps<{
   type: 'radarr' | 'sonarr'
@@ -55,8 +56,16 @@ async function testInstance(inst: ArrInstance) {
 
 async function testDraft() {
   draftTesting.value = true
-  draftResult.value = await runTest(draft.url, draft.apiKey)
+  const result = await runTest(draft.url, draft.apiKey)
+  draftResult.value = result
   draftTesting.value = false
+  // A connection that tests fine is added straight away: a tested-but-not-added
+  // form was easy to leave open, and the page Save silently left it out.
+  if (result.ok) {
+    const id = mediaServerId(props.type, draft.url.trim())
+    addInstance()
+    testResults[id] = result
+  }
 }
 
 function cancelAdd() {
@@ -131,6 +140,9 @@ function linkedGroups(id: string): string {
             @input="patch(inst.id, { apiKey: ($event.target as HTMLInputElement).value })"
           />
         </div>
+        <p v-if="keyNeedsReentry(inst.url, inst.apiKey, settings.savedServerUrls.value[`arr:${inst.id}`])" class="reentry-hint">
+          The address changed, so enter the API key again. A saved key is only ever sent to the address it was saved with.
+        </p>
         <div class="server-card-row">
           <button class="secondary" :disabled="testing[inst.id] || !inst.url" @click="testInstance(inst)">
             {{ testing[inst.id] ? 'Testing…' : 'Test Connection' }}
@@ -270,6 +282,12 @@ function linkedGroups(id: string): string {
 
 .test-result-inline.ok {
   color: #3dd6b7;
+}
+
+.reentry-hint {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: #f5a524;
 }
 
 .scan-hint {

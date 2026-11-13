@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 
-from ..config import settings, logger, resolve_library_ids, SECRET_MASK, SECRET_FIELD_PATHS
+from ..config import settings, logger, resolve_library_ids, SECRET_MASK, SECRET_FIELD_PATHS, same_origin
 from ..schemas import UISettings
 from ..save_paths import DEFAULT_MOVIE_SAVE_LOCATION, DEFAULT_TV_SAVE_LOCATION
 from .. import database as db
@@ -31,7 +31,14 @@ def _restore_unchanged_secrets(incoming: dict, current: dict) -> dict:
     for section, field in SECRET_FIELD_PATHS:
         incoming_section = incoming.get(section)
         if isinstance(incoming_section, dict) and incoming_section.get(field) == SECRET_MASK:
-            incoming_section[field] = (current.get(section) or {}).get(field, "")
+            stored_section = current.get(section) or {}
+            # The Plex token belongs to the saved Plex address: a changed address
+            # with the token left masked gets no token, never the old one.
+            if (section == "plex" and "url" in incoming_section
+                    and not same_origin(incoming_section.get("url"), stored_section.get("url"))):
+                incoming_section[field] = ""
+                continue
+            incoming_section[field] = stored_section.get(field, "")
     return incoming
 
 
@@ -64,21 +71,17 @@ def _restore_unchanged_media_server_secrets(incoming: dict, current: dict) -> di
         if not isinstance(entry, dict):
             continue
         existing = current_by_id.get(entry.get("id")) or {}
+        # A stored credential stays with the stored address only.
+        same = same_origin(entry.get("url"), existing.get("url"))
         if entry.get("token") == SECRET_MASK:
-            entry["token"] = existing.get("token", "")
+            entry["token"] = existing.get("token", "") if same else ""
         if entry.get("apiKey") == SECRET_MASK:
-            entry["apiKey"] = existing.get("apiKey", "")
+            entry["apiKey"] = existing.get("apiKey", "") if same else ""
     return incoming
 
 
 # arrInstances (Radarr/Sonarr connections, backend/arr_client.py): same idea
 # as mediaServers above, one apiKey per entry.
-def _origin(url) -> tuple:
-    from urllib.parse import urlparse
-    p = urlparse(str(url or "").strip())
-    return (p.scheme.lower(), p.netloc.lower())
-
-
 def _mask_arr_secrets(data: dict) -> dict:
     instances = data.get("arrInstances")
     if not isinstance(instances, list):
@@ -104,7 +107,7 @@ def _restore_unchanged_arr_secrets(incoming: dict, current: dict) -> dict:
         entry["url"] = str(entry.get("url") or "").strip().rstrip("/")
         if entry.get("apiKey") == SECRET_MASK:
             existing = current_by_id.get(entry.get("id")) or {}
-            same = _origin(entry.get("url")) == _origin(existing.get("url"))
+            same = same_origin(entry.get("url"), existing.get("url"))
             entry["apiKey"] = existing.get("apiKey", "") if same else ""
     return incoming
 
@@ -474,21 +477,13 @@ def save_ui_settings_endpoint(payload: UISettings, allow_empty_media_servers: bo
         _old_floppy = (current.get("floppy") or {})
         _new_floppy = (incoming.get("floppy") or {})
         if isinstance(_new_floppy, dict) and _new_floppy.get("token") in (SECRET_MASK, "", None):
-            from urllib.parse import urlparse
-            def _origin(u):
-                p = urlparse(str(u or "").strip())
-                return (p.scheme.lower(), p.netloc.lower())
-            if _origin(_new_floppy.get("url")) != _origin(_old_floppy.get("url")):
+            if not same_origin(_new_floppy.get("url"), _old_floppy.get("url")):
                 incoming["floppy"] = {**_new_floppy, "token": ""}
         # Same rule for the Maintainerr API key.
         _old_mtr = (current.get("maintainerr") or {})
         _new_mtr = (incoming.get("maintainerr") or {})
         if "maintainerr" in payload.model_fields_set and isinstance(_new_mtr, dict)                 and _new_mtr.get("apiKey") in (SECRET_MASK, "", None):
-            from urllib.parse import urlparse as _urlparse
-            def _origin_m(u):
-                p = _urlparse(str(u or "").strip())
-                return (p.scheme.lower(), p.netloc.lower())
-            if _origin_m(_new_mtr.get("url")) != _origin_m(_old_mtr.get("url")):
+            if not same_origin(_new_mtr.get("url"), _old_mtr.get("url")):
                 incoming["maintainerr"] = {**_new_mtr, "apiKey": ""}
         incoming = _restore_unchanged_secrets(incoming, current)
         incoming = _restore_unchanged_media_server_secrets(incoming, current)

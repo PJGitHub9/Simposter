@@ -14,7 +14,7 @@ from typing import Any, Dict
 from fastapi import APIRouter, HTTPException, Query
 
 from .. import database as db
-from ..config import logger, settings, SECRET_FIELD_PATHS
+from ..config import logger, settings, SECRET_FIELD_PATHS, same_origin
 
 router = APIRouter()
 
@@ -24,6 +24,27 @@ _SECRET_DB_KEYS = {f"{section}.{field}" for section, field in SECRET_FIELD_PATHS
 _MEDIA_SERVER_SECRET_FIELDS = ("token", "apiKey")
 _BACKUP_FORMAT = "simposter-db-backup"
 _BACKUP_VERSION = 2
+
+# Saved credentials that belong to one server address: restoring a backup that
+# points the address somewhere else must not carry this install's key over.
+_HOST_BOUND_SECRETS = {
+    "plex.token": "plex.url",
+    "floppy.token": "floppy.url",
+    "maintainerr.apiKey": "maintainerr.url",
+}
+
+
+def _setting_text(value) -> str:
+    """A settings-table value as plain text (strings may be stored JSON-quoted)."""
+    if value is None:
+        return ""
+    s = str(value)
+    if s.startswith('"'):
+        try:
+            return str(json.loads(s))
+        except ValueError:
+            pass
+    return s
 
 
 def _strip_media_server_secrets(value: str) -> str:
@@ -57,9 +78,7 @@ def _fill_media_server_secrets(value: str, current_value: str) -> str:
         existing = by_id.get(s.get("id")) or {}
         # Only hand over a stored credential when the server address is the same;
         # a backup pointing the same id at another server must not get our key.
-        url_new = (s.get("url") or "").strip().rstrip("/").lower()
-        url_old = (existing.get("url") or "").strip().rstrip("/").lower()
-        if url_new and url_old and url_new != url_old:
+        if not same_origin(s.get("url"), existing.get("url")):
             continue
         for f in _MEDIA_SERVER_SECRET_FIELDS:
             if not s.get(f) and existing.get(f):
@@ -212,6 +231,7 @@ def api_import_database(data: Dict[str, Any]):
             cursor.execute("DELETE FROM arr_tags")
             cursor.execute("DELETE FROM arr_tag_sync")
             restored_keys = set()
+            restored_values = {}
             for key, setting_data in data["settings"].items():
                 if key == "app.version":
                     continue
@@ -229,10 +249,16 @@ def api_import_database(data: Dict[str, Any]):
                     (key, value, category),
                 )
                 restored_keys.add(key)
+                restored_values[key] = value
 
             # Credentials left out of the backup: keep this install's own.
             for key in _SECRET_DB_KEYS:
                 if key not in restored_keys and current.get(key):
+                    url_key = _HOST_BOUND_SECRETS.get(key)
+                    if url_key and not same_origin(_setting_text(restored_values.get(url_key)),
+                                                   _setting_text(current.get(url_key))):
+                        logger.info(f"[DB IMPORT] Not keeping {key}: the backup uses a different address")
+                        continue
                     cursor.execute(
                         "INSERT INTO settings (key, value, category, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)",
                         (key, current[key], key.split(".", 1)[0]),

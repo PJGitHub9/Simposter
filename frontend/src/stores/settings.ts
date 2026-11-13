@@ -1,5 +1,6 @@
 import { ref, computed } from 'vue'
 import { getApiBase } from '../services/apiBase'
+import { SECRET_MASK, sameOrigin } from '../services/serverOrigin'
 
 const apiBase = getApiBase()
 
@@ -274,6 +275,35 @@ const saveBatchInSubfolder = ref<boolean>(false)
 const saveToAssetFolderOnSend = ref<boolean>(false)
 const plex = ref<PlexSettings>({ url: '', token: '', movieLibraryName: '', movieLibraryNames: [], libraryMappings: [], tvShowLibraryName: '', tvShowLibraryNames: [], tvShowLibraryMappings: [] })
 const mediaServers = ref<MediaServerEntry[]>([])
+// The address each saved key belongs to ('plex', 'ms:<id>', 'arr:<id>'), as of
+// the last load or save. The backend only reuses a saved (masked) key for that
+// same address; the Settings page uses this to say when one must be retyped.
+const savedServerUrls = ref<Record<string, string>>({})
+
+function recordSavedServerUrls() {
+  const out: Record<string, string> = { plex: plex.value.url || '' }
+  for (const s of mediaServers.value) out[`ms:${s.id}`] = s.url || ''
+  for (const i of arrInstances.value) out[`arr:${i.id}`] = i.url || ''
+  savedServerUrls.value = out
+}
+
+// After a save, a masked key whose address changed was dropped by the backend
+// (it never moves a saved key to another address); show it as empty here too.
+function clearKeysWithChangedAddress() {
+  const saved = savedServerUrls.value
+  if (plex.value.token === SECRET_MASK && !sameOrigin(plex.value.url, saved.plex)) {
+    plex.value = { ...plex.value, token: '' }
+  }
+  mediaServers.value = mediaServers.value.map(s => {
+    if (sameOrigin(s.url, saved[`ms:${s.id}`])) return s
+    const next = { ...s }
+    if (next.token === SECRET_MASK) next.token = ''
+    if (next.apiKey === SECRET_MASK) next.apiKey = ''
+    return next
+  })
+  arrInstances.value = arrInstances.value.map(i =>
+    i.apiKey === SECRET_MASK && !sameOrigin(i.url, saved[`arr:${i.id}`]) ? { ...i, apiKey: '' } : i)
+}
 // Plex is in use when it has a URL + token and its main server ('plex-1') isn't
 // switched off with the Enabled checkbox in Settings -> Media Servers -- the
 // same rule as Jellyfin/Emby, whose entries are skipped when disabled.
@@ -379,6 +409,7 @@ async function loadSettings() {
     mediaServers.value = data.mediaServers ?? []
     libraryGroups.value = data.libraryGroups ?? []
     arrInstances.value = data.arrInstances ?? []
+    recordSavedServerUrls()
     tmdb.value = { apiKey: data.tmdb?.apiKey ?? '' }
     tvdb.value = { apiKey: data.tvdb?.apiKey ?? '', comingSoon: data.tvdb?.comingSoon ?? true }
     fanart.value = { apiKey: data.fanart?.apiKey ?? '' }
@@ -531,6 +562,8 @@ async function saveSettings(opts: { allowEmptyMediaServers?: boolean } = {}) {
     })
     if (!res.ok) throw new Error(`API error ${res.status}`)
     posterApiEnabledSaved.value = !!payload.posterApi?.enabled
+    clearKeysWithChangedAddress()
+    recordSavedServerUrls()
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : 'Failed to save settings'
     error.value = message
@@ -555,6 +588,7 @@ export function useSettingsStore() {
     plex,
     plexActive,
     mediaServers,
+    savedServerUrls,
     libraryGroups,
     arrInstances,
     tmdb,

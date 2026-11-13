@@ -223,12 +223,13 @@ def _is_tag_reason(reason) -> bool:
     return str(reason or "").startswith(_ARR_REASONS)
 
 
-def group_arr(group_id: str, max_age: int = 60) -> Tuple[Optional[str], Optional[str], bool]:
+def group_arr(group_id: str, max_age: Optional[int] = 60) -> Tuple[Optional[str], Optional[str], bool]:
     """The group's linked Radarr/Sonarr: (instance id, type, usable).
 
     No link: (None, None, False) -- tag rules then match nothing. A link whose
     instance is missing, disabled, of the wrong type, or can't be read is not
-    usable: its tags are unknown, so tag-rule modes must be left as they are."""
+    usable: its tags are unknown, so tag-rule modes must be left as they are.
+    max_age None: don't contact Radarr/Sonarr, use the tags read last time."""
     g = _find_group(group_id)
     iid = _s((g or {}).get("arrInstanceId"))
     if not iid:
@@ -238,6 +239,8 @@ def group_arr(group_id: str, max_age: int = 60) -> Tuple[Optional[str], Optional
     want = "sonarr" if (g.get("mediaType") or "movie") == "tv" else "radarr"
     if not inst or inst.get("type") != want:
         return (iid, inst.get("type") if inst else None, False)
+    if max_age is None:
+        return (iid, want, inst.get("enabled") is not False and arr_client.sync_ok(iid))
     return (iid, want, arr_client.refresh(iid, max_age))
 
 
@@ -327,12 +330,13 @@ def _cached_rows(members: List[Tuple[str, str]], media_type: str) -> List[Any]:
         return conn.execute(f"SELECT {cols} FROM {table} WHERE {where}", params).fetchall()
 
 
-def evaluate_group(group_id: str, tags_max_age: int = 60) -> Dict[str, Any]:
+def evaluate_group(group_id: str, tags_max_age: Optional[int] = 60, apply: bool = True) -> Dict[str, Any]:
     """Re-apply the group's rules to its cached items (Plex members' labels,
     the linked Radarr/Sonarr's tags), replacing every rule mode in the group.
     Manual modes are kept. When the linked Radarr/Sonarr can't be read, each
     title keeps the result its tag rules gave last time (label rules are still
-    applied), and the match count of a tag rule is None (unknown)."""
+    applied), and the match count of a tag rule is None (unknown).
+    apply False: only count the matches (Settings shows them), change nothing."""
     media_types, members, rules = _group_shape(group_id)
     matched = changed = 0
     per_rule: List[Optional[int]] = [0] * len(rules)
@@ -387,6 +391,8 @@ def evaluate_group(group_id: str, tags_max_age: int = 60) -> Dict[str, Any]:
             elif per_rule[i] is not None:
                 per_rule[i] += len(keys)
         matched += len(matches)
+        if not apply:
+            continue
         changed += len(set_rule_modes(group_id, mt, matches, None if outage else tag_modes))
     if changed:
         logger.info("[MODE] %s: %d title(s) matched poster mode rules, %d changed", group_id, matched, changed)

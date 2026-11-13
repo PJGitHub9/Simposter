@@ -74,3 +74,10 @@ def api_dismiss_mode_warning(req: PosterModeDismissRequest):
 def api_reevaluate_poster_modes(req: PosterModeReevaluateRequest):
     # An explicit re-check (Settings Save) always reads the linked Radarr/Sonarr again.
     return poster_mode.evaluate_group(req.group_id, tags_max_age=0)
+
+
+@router.get("/poster-modes/rule-counts")
+def api_poster_mode_rule_counts(group_id: str):
+    """How many titles each rule of the group matches now, from the cached library
+    and the Radarr/Sonarr tags read last time. Changes no modes and contacts nothing."""
+    return poster_mode.evaluate_group(group_id, tags_max_age=None, apply=False)

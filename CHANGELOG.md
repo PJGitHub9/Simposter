@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.8.73 (2026-11-13) — `dev-overlayonly` branch
+
+### Bug Fixes
+- **Saved keys only go to their own address** — new `config.url_origin()`/`same_origin()` (scheme, host, port with defaults, path ignored; `frontend/src/services/serverOrigin.ts` mirrors it). `GET /api/test-plex-connection` only falls back to the saved Plex token when `plex_url` is the saved Plex address (it's a GET, so any web page could trigger it); `POST /api/media-server/test-connection` only resolves a masked key for the stored address; `POST /api/ui-settings` drops a masked Plex token or media-server key whose address changed (`_restore_unchanged_secrets()`, `_restore_unchanged_media_server_secrets()`), like Radarr/Sonarr/Floppy/Maintainerr already did; a database restore no longer keeps this install's Plex/Floppy/Maintainerr key when the backup points that service at another address (`_HOST_BOUND_SECRETS`), and media-server keys use the same check.
+
+### Improvements
+- **"Enter the key again" hint** — Settings → Media Servers (Plex, Jellyfin/Emby, Radarr/Sonarr cards) shows a note when an address changed while the key is still the saved (masked) one; after saving, such a key shows as empty (`savedServerUrls` in the settings store). The test-connection result shows the reason.
+- **TMDb ratings follow the ratings interval** — with the audience source set to TMDb (or TMDb used as the fallback), `server_ratings.tmdb_audience_rating()` read TMDb live on every render (5-minute memory cache only), so each scheduled Overlay Refresh saw the latest score and re-sent posters of new titles whose score crossed a band. The score is now stored in `item_ratings` under `tmdbscore:<movie|tv>:<id>` and reused for "Re-check ratings every N days" (unrated titles: 1 day); a stale value is kept when TMDb can't be reached. "Refresh ratings & lists now" drops the stored TMDb scores of tracked posters (`forget_tmdb_scores()`), which are then read on each poster's next render.
+- **Rule match counts load with the page** — the "titles matched" count next to each poster mode rule was only set by the re-check after a Save, so titles a scan matched later (a Sonarr tag added after saving the rule) still showed "0 titles matched". New `GET /api/poster-modes/rule-counts` (`evaluate_group(..., tags_max_age=None, apply=False)`: cached library and the tags read last time, no Radarr/Sonarr call, no mode changes), loaded by `PosterModeRules.vue` when shown.
+- **Tested servers are added** — in Settings → Media Servers, a successful Test Connection in an add form (Radarr/Sonarr in `ArrInstancesSection.vue`, Plex/Jellyfin/Emby in `MediaServersTab.vue`) adds the server, as the Add button does. A tested form left open was dropped by the page Save (reported: two Radarr + one Sonarr tested, only one Radarr saved).
+
 ## v1.8.72 (2026-11-12) — `dev-overlayonly` branch
 
 ### New Features

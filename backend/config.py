@@ -413,6 +413,33 @@ def _known_secrets() -> tuple:
     return values
 
 
+def url_origin(url) -> tuple:
+    """(scheme, host, port) of a server address, lower-cased, default port filled
+    in, path ignored. "plex.local:32400" (no scheme) counts as http."""
+    from urllib.parse import urlparse
+    s = str(url or "").strip()
+    if not s:
+        return ("", "", None)
+    if "://" not in s:
+        s = "http://" + s
+    p = urlparse(s)
+    scheme = (p.scheme or "").lower()
+    try:
+        port = p.port
+    except ValueError:
+        port = None
+    if port is None:
+        port = {"http": 80, "https": 443}.get(scheme)
+    return (scheme, (p.hostname or "").lower(), port)
+
+
+def same_origin(a, b) -> bool:
+    """True when two server addresses point at the same server. A saved API key
+    or token may only be reused for the address it was saved with; anything else
+    must ask for the key again, so a stored key is never sent to another host."""
+    return url_origin(a) == url_origin(b)
+
+
 def redact_secrets(text) -> str:
     """Hide API keys, tokens and secrets in a string before it is logged or
     returned to the browser."""

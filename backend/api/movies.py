@@ -467,7 +467,17 @@ def test_plex_connection(plex_url: str = None, plex_token: str = None):
     # freshly-typed URL can connect fine once (e.g. during initial setup, if it happened
     # not to have a trailing slash that time) but fail on a later re-test that does.
     test_url = (plex_url or settings.PLEX_URL or "").rstrip("/")
-    test_token = plex_token if (plex_token and plex_token != SECRET_MASK) else settings.PLEX_TOKEN
+    typed_token = plex_token if (plex_token and plex_token != SECRET_MASK) else ""
+    test_token = typed_token
+    if not typed_token:
+        # The saved token is only ever sent to the saved Plex address. This is a
+        # GET, so any web page could otherwise make Simposter send it elsewhere.
+        from ..config import same_origin
+        if test_url and settings.PLEX_TOKEN and not same_origin(test_url, settings.PLEX_URL):
+            return {"status": "error", "error": "Address changed",
+                    "message": "enter the Plex token again to test a different address",
+                    "plex_url": test_url, "has_token": False, "sections": []}
+        test_token = settings.PLEX_TOKEN
 
     if not test_url:
         # A Jellyfin/Emby-only install: nothing to test, not an error.

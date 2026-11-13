@@ -832,6 +832,10 @@ const saveSettings = async () => {
     .map(g => String(g.id))
 
   await settings.save({ allowEmptyMediaServers: pendingServerCachePurge.value.size > 0 })
+  // The save drops a masked Plex token whose address changed; the field follows.
+  if (!settings.error.value && localPlexToken.value !== settings.plex.value.token) {
+    localPlexToken.value = settings.plex.value.token
+  }
 
   if (!settings.error.value) {
     await updateScheduler()

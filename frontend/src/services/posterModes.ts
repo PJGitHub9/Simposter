@@ -86,8 +86,19 @@ export async function reevaluatePosterModes(
   }
 }
 
-// Match counts from the last re-evaluation, per group id (shown next to each
-// rule in Settings after Save).
+/** Current match count of each saved rule of a group (read-only, no Radarr/Sonarr call). */
+export async function fetchRuleCounts(groupId: string): Promise<(number | null)[] | null> {
+  try {
+    const res = await fetch(`${getApiBase()}/api/poster-modes/rule-counts?group_id=${encodeURIComponent(groupId)}`)
+    if (!res.ok) return null
+    return (await res.json()).per_rule ?? null
+  } catch {
+    return null
+  }
+}
+
+// Match counts per group id, shown next to each rule in Settings: loaded when
+// the rules are shown, and replaced by the re-evaluation after a Save.
 // null = unknown (a tag rule while Radarr/Sonarr couldn't be read).
 export const ruleMatchCounts = ref<Record<string, (number | null)[]>>({})
 

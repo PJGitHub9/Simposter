@@ -838,27 +838,30 @@ def refresh_all_data() -> Dict[str, Any]:
             out["lists"] = list_sources.refresh_due(needs["lists"], force=True)
             data_refresh_status["lists"] = out["lists"]
         from . import mdblist_client as mdb
-        if mdb.has_key():
-            states = db.get_all_overlay_states()
-            by_config: Dict[str, bool] = {}
-            for kind, media in (("movie", "movie"), ("show", "tv")):
-                ids = []
-                for s in states:
-                    if s.get("media_type") != media or not s.get("tmdb_id"):
-                        continue
-                    for cid in state_overlay_ids(s):
-                        if cid not in by_config:
-                            cfg = db.get_overlay_config(cid) or {}
-                            els = [e for e in cfg.get("elements") or [] if isinstance(e, dict)]
-                            if cfg.get("conditions"):
-                                els.append({"conditions": cfg["conditions"]})
-                            by_config[cid] = bool(overlay_engine.needed_data(els)["ratings"])
-                        if by_config[cid]:
-                            ids.append(s["tmdb_id"])
-                            break
-                if ids:
+        from . import server_ratings
+        states = db.get_all_overlay_states()
+        by_config: Dict[str, bool] = {}
+        for kind, media in (("movie", "movie"), ("show", "tv")):
+            ids = []
+            for s in states:
+                if s.get("media_type") != media or not s.get("tmdb_id"):
+                    continue
+                for cid in state_overlay_ids(s):
+                    if cid not in by_config:
+                        cfg = db.get_overlay_config(cid) or {}
+                        els = [e for e in cfg.get("elements") or [] if isinstance(e, dict)]
+                        if cfg.get("conditions"):
+                            els.append({"conditions": cfg["conditions"]})
+                        by_config[cid] = bool(overlay_engine.needed_data(els)["ratings"])
+                    if by_config[cid]:
+                        ids.append(s["tmdb_id"])
+                        break
+            if ids:
+                # TMDb scores are read again on each poster's next render.
+                server_ratings.forget_tmdb_scores(media, ids)
+                if mdb.has_key():
                     out["ratings"] += mdb.prefetch_ratings(kind, ids, force=True)
-                    data_refresh_status["ratings"] = out["ratings"]
+                data_refresh_status["ratings"] = out["ratings"]
         logger.info("[OVERLAY_REFRESH] Refreshed %d list(s) and %d rating(s) on request", out["lists"], out["ratings"])
         data_refresh_status.update({"state": "done", **out, "finished_at": datetime.now().isoformat(timespec="seconds")})
     except Exception as e:

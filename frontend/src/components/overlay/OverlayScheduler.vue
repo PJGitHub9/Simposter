@@ -172,7 +172,7 @@ onMounted(load)
       <label class="field">
         <span class="label">Re-check ratings every</span>
         <span class="input-row"><input v-model.number="ratingsDays" type="number" min="1" max="90" step="1" /> days</span>
-        <span class="help">One request per 100 items, only for items whose overlay uses a rating.</span>
+        <span class="help">MDBList and TMDb ratings. MDBList: one request per 100 items, only for items whose overlay uses a rating. TMDb scores are re-read one item at a time when they're due; titles with no TMDb votes yet are checked daily.</span>
       </label>
       <label class="field">
         <span class="label">Re-check lists every</span>

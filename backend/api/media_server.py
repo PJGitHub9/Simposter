@@ -119,6 +119,12 @@ def api_test_media_server_connection(payload: MediaServerTestRequest):
             None,
         )
         if stored:
+            # The stored credential only goes to the stored address.
+            from ..config import same_origin
+            has_stored = bool(stored.get("token") or stored.get("apiKey"))
+            if has_stored and not same_origin(payload.url, stored.get("url")):
+                return {"connected": False, "sections": [],
+                        "error": "The address changed, so enter the API key again"}
             if token == SECRET_MASK:
                 token = stored.get("token") or ""
             if api_key == SECRET_MASK:

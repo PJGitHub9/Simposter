@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import type { PosterModeRule } from '@/stores/settings'
-import { ruleMatchCounts } from '@/services/posterModes'
+import { fetchRuleCounts, ruleMatchCounts } from '@/services/posterModes'
 import { getApiBase } from '@/services/apiBase'
 
 const props = defineProps<{
@@ -36,6 +36,15 @@ async function loadTags() {
   }
 }
 watch(() => props.arrInstanceId, loadTags, { immediate: true })
+
+// Counts as of now (a scan may have matched titles since the last Save).
+async function loadCounts() {
+  const id = props.groupId
+  if (!id) return
+  const perRule = await fetchRuleCounts(id)
+  if (perRule && props.groupId === id) ruleMatchCounts.value = { ...ruleMatchCounts.value, [id]: perRule }
+}
+watch(() => props.groupId, loadCounts, { immediate: true })
 
 function update(i: number, patch: Partial<PosterModeRule>) {
   emit('update:rules', props.rules.map((r, idx) => (idx === i ? { ...r, ...patch } : r)))

@@ -53,6 +53,9 @@
             <input v-model="localPlexUrl" placeholder="http://localhost:32400" class="server-url-input" />
             <input v-model="localPlexToken" type="password" placeholder="X-Plex-Token" class="server-credential-input" />
           </div>
+          <p v-if="keyNeedsReentry(localPlexUrl, localPlexToken, settingsStore.savedServerUrls.value.plex)" class="reentry-hint">
+            The address changed, so enter the Plex token again. A saved token is only ever sent to the address it was saved with.
+          </p>
           <div class="server-card-row">
             <button
               class="secondary"
@@ -104,6 +107,12 @@
               class="server-credential-input"
             />
           </div>
+          <p
+            v-if="keyNeedsReentry(server.url, server.type === 'plex' ? server.token : server.apiKey, settingsStore.savedServerUrls.value[`ms:${server.id}`])"
+            class="reentry-hint"
+          >
+            The address changed, so enter the {{ server.type === 'plex' ? 'token' : 'API key' }} again. A saved key is only ever sent to the address it was saved with.
+          </p>
           <div class="server-card-row">
             <button class="secondary" @click="testServerConnection(server)" :disabled="testingId === server.id">
               {{ testingId === server.id ? 'Testing…' : 'Test Connection' }}
@@ -251,6 +260,7 @@ import { computed, reactive, ref } from 'vue'
 import { useSettingsStore, type MediaServerEntry } from '@/stores/settings'
 import { getApiBase } from '@/services/apiBase'
 import { mediaServerId } from '@/services/mediaServerId'
+import { keyNeedsReentry } from '@/services/serverOrigin'
 import ArrInstancesSection from '@/components/settings/ArrInstancesSection.vue'
 
 // Plex is deliberately threaded through as props/emits (mirroring exactly how
@@ -461,7 +471,7 @@ async function testConnectionRequest(type: string, url: string, credential: stri
     })
     if (!res.ok) return { ok: false, message: '✗ Could not connect' }
     const data = await res.json()
-    if (!data.connected) return { ok: false, message: '✗ Could not connect' }
+    if (!data.connected) return { ok: false, message: `✗ ${data.error || 'Could not connect'}` }
     return { ok: true, message: buildConnectionMessage(data.sections || []) }
   } catch {
     return { ok: false, message: '✗ Could not connect' }
@@ -535,6 +545,14 @@ async function testNewServer(type: 'plex' | 'jellyfin' | 'emby') {
     state.testResult = { ok: false, message: '✗ Could not connect' }
   } finally {
     state.testing = false
+  }
+  // A server that tests fine is added straight away: a tested-but-not-added
+  // form was easy to leave open, and the page Save silently left it out.
+  const result = state.testResult
+  if (result?.ok && state.url.trim() && state.credential) {
+    const id = mediaServerId(type, state.url)
+    addServer(type)
+    testResults[id] = result
   }
 }
 
@@ -667,6 +685,12 @@ h3 {
   margin-bottom: 16px;
   color: var(--text-secondary);
   font-size: 18px;
+}
+
+.reentry-hint {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: #f5a524;
 }
 
 .hint {

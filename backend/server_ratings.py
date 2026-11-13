@@ -35,20 +35,78 @@ MDBLIST_FALLBACK = {"audience_rating": "imdb", "critic_rating": "tomatoes"}
 _FALLBACK_LABELS = {"imdb": "MDBList (IMDb)", "tomatoes": "MDBList (Rotten Tomatoes)"}
 
 
-def tmdb_audience_rating(media_type: str, tmdb_id: Any) -> Optional[float]:
-    """TMDb's user score (vote_average, 0-10) for the item, from the cached
-    details call the render already makes. None when unknown or unrated."""
-    if tmdb_id in (None, ""):
-        return None
+# A title with no TMDb votes yet is checked again after a day, so its badge
+# appears once it has a score instead of waiting the full ratings interval.
+_TMDB_UNRATED_MAX_AGE = 86400
+
+
+def _tmdb_score_key(media_type: str, tmdb_id: Any) -> str:
+    # Its own prefix in item_ratings: MDBList's keys are "<type>:<provider>:<id>".
+    return f"tmdbscore:{'tv' if media_type in ('tv', 'show') else 'movie'}:{tmdb_id}"
+
+
+def _fetch_tmdb_score(media_type: str, tmdb_id: Any) -> Optional[Dict[str, Any]]:
+    """{"score": x} or {} (no votes yet); None when TMDb couldn't be asked."""
     try:
         from .tmdb_client import get_movie_details, get_tv_show_details
         details = get_movie_details(int(tmdb_id)) if media_type == "movie" else get_tv_show_details(int(tmdb_id))
     except Exception:
         return None
+    if not details:
+        return None
     if not details.get("vote_count"):
-        return None  # no votes yet: TMDb reports 0.0, which isn't a real score
+        return {}  # no votes yet: TMDb reports 0.0, which isn't a real score
     value = _num(details.get("vote_average"))
-    return round(value, 1) if value is not None else None
+    return {"score": round(value, 1)} if value is not None else {}
+
+
+def tmdb_audience_rating(media_type: str, tmdb_id: Any) -> Optional[float]:
+    """TMDb's user score (vote_average, 0-10) for the item. None when unknown
+    or unrated. Stored and reused like MDBList's ratings (Overlays > Scheduler,
+    "ratings every N days"), so a score that moves a little each day doesn't
+    re-send the poster on every Overlay Refresh run."""
+    if tmdb_id in (None, ""):
+        return None
+    import time
+    from . import database as db
+    key = _tmdb_score_key(media_type, tmdb_id)
+    stale: Optional[Dict[str, Any]] = None
+    try:
+        cached = db.get_item_ratings(key)
+    except Exception:
+        cached = None
+    if cached:
+        data, fetched_at = cached
+        try:
+            from .list_sources import ratings_max_age
+            max_age = ratings_max_age()
+        except Exception:
+            max_age = 45 * 86400
+        if "score" not in data:
+            max_age = min(max_age, _TMDB_UNRATED_MAX_AGE)
+        if time.time() - fetched_at < max_age:
+            return data.get("score")
+        stale = data
+    fresh = _fetch_tmdb_score(media_type, tmdb_id)
+    if fresh is None:
+        return (stale or {}).get("score")
+    try:
+        db.save_item_ratings(key, fresh, time.time())
+    except Exception:
+        pass
+    return fresh.get("score")
+
+
+def forget_tmdb_scores(media_type: str, tmdb_ids: List[Any]) -> int:
+    """Drop stored TMDb scores so the next render reads them again (Refresh now)."""
+    from . import database as db
+    keys = [_tmdb_score_key(media_type, t) for t in tmdb_ids if t not in (None, "")]
+    if not keys:
+        return 0
+    with db.get_db() as conn:
+        cur = conn.executemany("DELETE FROM item_ratings WHERE cache_key = ?", [(k,) for k in keys])
+        conn.commit()
+        return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
 
 
 def _num(value: Any, scale: float = 1.0) -> Optional[float]:
