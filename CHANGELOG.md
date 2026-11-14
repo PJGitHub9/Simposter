@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.8.77 (2026-11-14) — `dev-overlayonly` branch
+
+### Bug Fixes
+- **Season overlays in the TV editor** — `restoreSettingsForCurrent()` called `applyPresetOptions(..., { keepOverlays: true })`, added in v1.8.22 when overlays weren't per-season, so a season shown for the first time kept the series' overlay ticks. Presets have had season overlay lists since v1.8.31, so the option was removed: each target gets the preset's own list (season override, else the series list). Ticks changed by hand stay in `settingsCache` (a deep copy of `options`) and come back via `applySettings()`. In Overlay only mode the preview and the send of the viewed season now use the season's list too.
+
 ## v1.8.76 (2026-11-14) — `dev-overlayonly` branch
 
 ### Improvements

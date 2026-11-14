@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.77',
+    date: '2026-11-14',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          "TV show editor: switching from the series to a season (or back) now loads that poster's own overlays from the preset. Before, the overlays ticked on the series stayed ticked on every season, even when the preset's season list is different (Template Manager → Season → Overlays). Overlays you tick by hand on a season or the series are still kept when you switch back.",
+        ],
+      },
+    ],
+  },
+  {
     version: 'v1.8.76',
     date: '2026-11-14',
     sections: [
