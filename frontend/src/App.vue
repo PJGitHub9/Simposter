@@ -27,6 +27,7 @@ import { getApiBase } from '@/services/apiBase'
 import { libraryInfo } from '@/services/libraryLabel'
 import { onboardingLaunchRequested, notifyOnboardingSaved } from '@/composables/useOnboardingLauncher'
 import { apiEditorRequest } from '@/composables/useApiEditorLauncher'
+import { APP_VERSION } from '@/version'
 
 // Phase 8a -- a LibraryGroup with at least one member but NO Plex member represents a
 // standalone Jellyfin/Emby-only library (created via Settings -> Libraries's "Jellyfin/
@@ -215,6 +216,26 @@ const sidebarOpen = ref(false)
 const sidebarCollapsed = ref(localStorage.getItem('sidebarCollapsed') === 'true')
 const showChangelog = ref(false)
 const showOnboarding = ref(false)
+const settingsLoadFailed = ref(false)
+
+// What's New only for installs that are set up; a brand-new install gets the
+// setup wizard instead (it used to open What's New behind the wizard).
+const showUpdateAnnouncement = computed(
+  () => settings.loaded.value && settings.onboardingCompleted.value && !showOnboarding.value
+)
+
+function onOnboardingDone() {
+  // The wizard was the introduction; don't follow it with this version's notes.
+  try { localStorage.setItem('simposter-last-seen-version', APP_VERSION) } catch { /* ignore */ }
+  showOnboarding.value = false
+  showQuickGuide.value = true
+  notifyOnboardingSaved()
+}
+
+async function retrySettingsLoad() {
+  await settings.load()
+  if (settings.loaded.value) window.location.reload()
+}
 const showQuickGuide = ref(false)
 
 // Settings → Advanced's "Run Startup Wizard" button lives in a routed view, well outside
@@ -707,7 +728,13 @@ onMounted(async () => {
   // Check if any server is configured — show onboarding for new users. Phase 8a: an
   // install with only Jellyfin/Emby configured (no Plex) is no longer redirected to
   // Settings — matches the tabs computed's identical anyServerConfigured check above.
-  if (!settings.onboardingCompleted.value) {
+  // Only a settings load that SUCCEEDED can say "not set up yet". A refused or
+  // failed load (rate limit, server restarting) leaves onboardingCompleted at
+  // its default false, which used to open the setup wizard on a configured
+  // install; show a reload message instead.
+  if (!settings.loaded.value) {
+    settingsLoadFailed.value = true
+  } else if (!settings.onboardingCompleted.value) {
     showOnboarding.value = true
   } else if (serverless.value && LIBRARY_ROUTE_NAMES.has(String(route.name || ''))) {
     // Server-less mode lands on the Poster API page (the router guard handles deep links).
@@ -1087,9 +1114,13 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
 <template>
   <div class="shell">
     <NotificationContainer />
-    <OnboardingModal v-if="showOnboarding" @done="showOnboarding = false; showQuickGuide = true; notifyOnboardingSaved()" />
+    <div v-if="settingsLoadFailed && !settings.loaded.value" class="settings-load-error" role="alert">
+      Simposter couldn't load its settings (the server may be busy or restarting).
+      <button type="button" @click="retrySettingsLoad">Try again</button>
+    </div>
+    <OnboardingModal v-if="showOnboarding" @done="onOnboardingDone" />
     <QuickStartGuide v-if="showQuickGuide" :serverless="!anyServerConfigured" @done="handleQuickGuideDone" />
-    <UpdateAnnouncementModal @view-full-changelog="showChangelog = true" />
+    <UpdateAnnouncementModal v-if="showUpdateAnnouncement" @view-full-changelog="showChangelog = true" />
 
     <!-- Mobile sidebar overlay -->
     <div v-if="sidebarOpen" class="sidebar-overlay" @click="closeSidebar"></div>
@@ -1260,6 +1291,31 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
 
 
 <style scoped>
+.settings-load-error {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: calc(100vw - 32px);
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 107, 107, 0.5);
+  background: #2a1416;
+  color: #ffd6d6;
+  font-size: 0.9rem;
+}
+.settings-load-error button {
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  cursor: pointer;
+}
 .shell {
   display: flex;
   flex-direction: column;

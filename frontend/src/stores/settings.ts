@@ -360,11 +360,38 @@ const notifications = ref<NotificationSettings>({
   appriseNotifyOverlayRefresh: true
 })
 
-async function loadSettings() {
+// Calls made while a load is already running share it (a page load used to
+// start three at once: router guard, App.vue and the view), and a refused or
+// failed request is retried a few times. A failed load must never look like a
+// fresh install: App.vue only opens the setup wizard once `loaded` is true.
+let loadInFlight: Promise<void> | null = null
+
+function loadSettings(): Promise<void> {
+  if (!loadInFlight) {
+    loadInFlight = doLoadSettings().finally(() => { loadInFlight = null })
+  }
+  return loadInFlight
+}
+
+async function fetchSettingsWithRetry(): Promise<Response> {
+  const delays = [1000, 2000, 4000, 8000]
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const res = await fetch(`${apiBase}/api/ui-settings`)
+      const retryable = res.status === 429 || res.status >= 500
+      if (res.ok || !retryable || attempt >= delays.length) return res
+    } catch (e) {
+      if (attempt >= delays.length) throw e
+    }
+    await new Promise((r) => setTimeout(r, delays[attempt]))
+  }
+}
+
+async function doLoadSettings() {
   loading.value = true
   error.value = null
   try {
-    const res = await fetch(`${apiBase}/api/ui-settings`)
+    const res = await fetchSettingsWithRetry()
     if (!res.ok) throw new Error(`API error ${res.status}`)
     const data = (await res.json()) as UISettings
     theme.value = data.theme || 'neon'

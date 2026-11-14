@@ -830,7 +830,7 @@ const processBatch = async () => {
       options: {},
       send_to_plex: sendToPlex.value,
       save_locally: saveLocally.value,
-      send_logos_to_plex: sendToPlex.value && sendLogos.value,
+      send_logos_to_plex: hasAnySendTarget.value && sendLogos.value,
       labels: sendToPlex.value ? Array.from(labelsToRemove.value) : [],
       library_id: currentLibrary.value || undefined,
       targets: Array.from(selectedTargets.value),

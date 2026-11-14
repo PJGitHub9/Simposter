@@ -655,7 +655,7 @@ watch(
         />
         <span>Send logos to media servers by default</span>
       </label>
-      <p class="help-text">When enabled, the "Send logo" option will be pre-checked in the poster editor and batch edit screens. In the manual poster editor this already applies to whichever server(s) an item is linked to (Plex, Jellyfin, or Emby); Batch Edit's logo send is still Plex-only for now.</p>
+      <p class="help-text">When on, sending a poster also sends the logo, from the poster editor and from Batch Edit, to every server the poster goes to. Batch Edit has its own "Send logos" checkbox that starts from this setting.</p>
     </div>
 
     <div v-if="plexConfigured" class="scan-all-row">

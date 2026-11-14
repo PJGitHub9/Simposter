@@ -50,7 +50,9 @@ export const router = createRouter({
     { path: '/history', name: 'history', component: HistoryView },
     { path: '/settings', name: 'settings', component: SettingsView },
     { path: '/poster-api', name: 'poster-api', component: PosterApiView },
-    { path: '/logs', name: 'logs', component: LogsView }
+    { path: '/logs', name: 'logs', component: LogsView },
+    // An unknown address used to render an empty page; send it home instead.
+    { path: '/:pathMatch(.*)*', redirect: '/' }
   ]
 })
 

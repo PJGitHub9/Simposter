@@ -105,7 +105,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             "/api/webhook": 10,
 
             # Settings and metadata
-            "/api/ui-settings": 30,
+            # Every page load reads settings; 30 was hit by a few refreshes or two
+            # open tabs, and a refused read used to open the setup wizard.
+            "/api/ui-settings": 120,
             "/api/logs": 20,
             "/api/history": 30,
         }

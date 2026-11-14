@@ -61,7 +61,7 @@
           </optgroup>
         </select>
       </div>
-      <p class="link-hint">Picking a library links it immediately — click Save Changes to keep it.</p>
+      <p class="link-hint">Picking a library adds it to this group. Click Save Changes to keep it.</p>
       <p v-if="!pickerGroups.length && !group.members.length" class="no-labels-hint">
         No media servers configured yet, or none reachable — add one in Settings → Media Servers.
       </p>
@@ -83,7 +83,7 @@
       <span class="help-text">
         On (default): the same movie/show on Plex and Jellyfin shows as one card, using whichever server the grid's "Show posters from" preference picks.
         Off: each linked server's own copy shows as its own separate card.
-        Applies immediately to the Movies/TV grid -- no need to click Save Changes.
+        Takes effect on the Movies/TV grid after you click Save Changes.
       </span>
     </div>
 

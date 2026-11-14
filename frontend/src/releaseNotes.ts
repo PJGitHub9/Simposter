@@ -10,6 +10,27 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.74',
+    date: '2026-11-14',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          "Simposter no longer shows the setup wizard (or empty pages) to an install that's already set up. This happened when the server refused or couldn't answer the settings request, for example after refreshing a few times or with two tabs open. Settings are now retried, and if they still can't load you get a \"couldn't load its settings\" message with a Try again button.",
+          "A brand-new install no longer shows What's New behind the setup wizard, and What's New doesn't pop up right after finishing the wizard.",
+          "Batch Edit's \"Send logos\" now also sends logos to Jellyfin and Emby. Before, logos were only sent when Plex was ticked, so a Jellyfin-only batch never sent them.",
+          "Typing an address that doesn't exist in Simposter now takes you to the home page instead of an empty page.",
+        ],
+      },
+      {
+        title: 'Improvements',
+        items: [
+          "Settings → Libraries: the help texts for linking a library, \"Merge items\" and \"Send logos to media servers by default\" now say what actually happens (changes take effect after Save Changes; logos go to every server the poster goes to).",
+        ],
+      },
+    ],
+  },
+  {
     version: 'v1.8.73',
     date: '2026-11-13',
     sections: [

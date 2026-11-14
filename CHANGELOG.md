@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.8.74 (2026-11-14) — `dev-overlayonly` branch
+
+### Bug Fixes
+- **Setup wizard on a configured install** — `App.vue` opened the onboarding wizard whenever `onboardingCompleted` was false after `settings.load()`, including when the load failed (it stays at its default `false`). `GET /api/ui-settings` was limited to 30/min and each page load made three calls (router guard, App.vue, the view), so a few refreshes or two tabs got 429s and the wizard (and empty pages) over a live install. Now: the wizard only opens after a successful load; a failed load shows a "couldn't load its settings" banner with Try again. `stores/settings.ts` shares one in-flight load between concurrent callers and retries 429/5xx/network errors (1, 2, 4, 8 s). The limit is now 120/min.
+- **What's New behind the wizard** — `UpdateAnnouncementModal` is only mounted once settings loaded and onboarding is done; finishing the wizard marks the current version as seen.
+- **Batch Edit logos only with Plex ticked** — both Batch Edit views sent `send_logos_to_plex: sendToPlex && sendLogos`, so a Jellyfin/Emby-only batch never sent logos although `sync_render_to_linked_servers()` takes them. Now `hasAnySendTarget && sendLogos`.
+- **Unknown routes** — a catch-all route redirects to `/` instead of rendering an empty page.
+
+### Improvements
+- **Help texts** — `LibraryGroupCard.vue` (library picker, Merge items: both wait for Save Changes since v1.8.57) and `LibrariesTab.vue` Logo Defaults (Batch Edit's logo send isn't Plex-only, and the editors no longer have a per-send logo checkbox) corrected.
+
 ## v1.8.73 (2026-11-13) — `dev-overlayonly` branch
 
 ### Bug Fixes
