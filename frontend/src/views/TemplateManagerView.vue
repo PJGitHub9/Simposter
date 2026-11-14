@@ -51,7 +51,7 @@ const languageOptions = [
   { code: 'ar', label: 'Arabic' },
 ]
 const savingFallback = ref(false)
-const showDefaultsOpen = ref(true)
+const showDefaultsOpen = ref(false)
 const selectedPresets = ref<Set<string>>(new Set())
 const deleting = ref<string | null>(null)
 
@@ -80,6 +80,18 @@ const movieSearchResults = computed<PreviewItem[]>(() => {
   if (!query) return movies.value.slice(0, 25)
   return movies.value.filter((m) => (m.title || '').toLowerCase().includes(query)).slice(0, 25)
 })
+
+// Movie/TV (uniformlogo) presets first; collection-only (kometa) presets last.
+const TEMPLATE_ORDER = ['uniformlogo', 'kometa']
+const orderedTemplates = computed(() =>
+  Object.entries(presets.value || {}).sort(([a], [b]) => {
+    const ia = TEMPLATE_ORDER.indexOf(a)
+    const ib = TEMPLATE_ORDER.indexOf(b)
+    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib) || a.localeCompare(b)
+  })
+)
+const templateHeading = (id: string) =>
+  id === 'uniformlogo' ? 'Movie & TV presets' : id === 'kometa' ? 'Collection presets (Kometa)' : id
 
 const presetCount = computed(() =>
   Object.values(presets.value).reduce((acc, tpl) => acc + (tpl.presets?.length || 0), 0)
@@ -660,77 +672,6 @@ onMounted(async () => {
     <div class="layout">
       <div class="column">
 
-        <!-- Default Batch Settings (collapsible) -->
-        <div class="section">
-          <button class="section-toggle" @click="showDefaultsOpen = !showDefaultsOpen">
-            <div class="toggle-left">
-              <h3>Default Batch Settings</h3>
-              <span class="help">Applied when a preset doesn't override — batch, webhook &amp; scheduled renders</span>
-            </div>
-            <svg class="acc-chevron" :class="{ open: showDefaultsOpen }" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <polyline points="6 9 12 15 18 9" />
-            </svg>
-          </button>
-          <div v-show="showDefaultsOpen" class="defaults-body">
-            <div class="grid preferences-grid">
-              <label>
-                <span class="label-text">Language preference (TMDb)</span>
-                <select v-model="languagePreference">
-                  <option v-for="lang in languageOptions" :key="lang.code" :value="lang.code">{{ lang.label }} ({{ lang.code }})</option>
-                </select>
-              </label>
-              <label>
-                <span class="label-text">Logo source priority</span>
-                <select v-model="logoSource">
-                  <option value="tmdb">TMDb only</option>
-                  <option value="fanart">Fanart.tv only</option>
-                  <option value="tmdb_fanart">TMDb first, Fanart fallback (recommended)</option>
-                  <option value="fanart_tmdb">Fanart first, TMDb fallback</option>
-                  <option value="both">Both merged (all results)</option>
-                </select>
-              </label>
-              <label>
-                <span class="label-text">Default poster filter</span>
-                <select v-model="fallbackPosterFilter">
-                  <option value="all">All posters (no filter)</option>
-                  <option value="en">English only</option>
-                  <option value="original">Original language only</option>
-                  <option value="no_text">Textless only</option>
-                </select>
-              </label>
-              <label>
-                <span class="label-text">Default logo filter</span>
-                <select v-model="fallbackLogoFilter">
-                  <option value="all">All logos (no filter)</option>
-                  <option value="en">English only</option>
-                  <option value="original">Original language only</option>
-                </select>
-              </label>
-              <label>
-                <span class="label-text">Default logo selection</span>
-                <select v-model="fallbackLogoMode">
-                  <option value="first">First available</option>
-                  <option value="white">White / light (low saturation)</option>
-                  <option value="color">Colored (high saturation)</option>
-                  <option value="none">No logo</option>
-                </select>
-              </label>
-              <label>
-                <span class="label-text">White logo fallback</span>
-                <select v-model="whiteLogoFallback">
-                  <option value="use_next">Use next available logo</option>
-                  <option value="skip">Render without logo</option>
-                </select>
-              </label>
-            </div>
-            <div class="actions" style="justify-content: flex-end; margin-top: 4px;">
-              <button class="primary" type="button" @click="saveFallback" :disabled="savingFallback">
-                {{ savingFallback ? 'Saving…' : 'Save Defaults' }}
-              </button>
-            </div>
-          </div>
-        </div>
-
         <!-- Presets -->
         <div class="section">
           <div class="section-header">
@@ -747,9 +688,9 @@ onMounted(async () => {
 
           <div v-if="loading" class="loading">Loading presets…</div>
           <div v-else class="presets-list">
-            <div v-for="(tpl, templateId) in presets" :key="templateId" class="template-block">
+            <div v-for="[templateId, tpl] in orderedTemplates" :key="templateId" class="template-block">
               <div class="template-header">
-                <h4>{{ templateId }}</h4>
+                <h4>{{ templateHeading(templateId) }}</h4>
                 <span class="count">{{ tpl.presets?.length || 0 }} preset{{ tpl.presets?.length === 1 ? '' : 's' }}</span>
               </div>
 
@@ -848,6 +789,77 @@ onMounted(async () => {
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Default Batch Settings (collapsible) -->
+        <div class="section">
+          <button class="section-toggle" @click="showDefaultsOpen = !showDefaultsOpen">
+            <div class="toggle-left">
+              <h3>Default Batch Settings</h3>
+              <span class="help">Applied when a preset doesn't override — batch, webhook &amp; scheduled renders</span>
+            </div>
+            <svg class="acc-chevron" :class="{ open: showDefaultsOpen }" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+          </button>
+          <div v-show="showDefaultsOpen" class="defaults-body">
+            <div class="grid preferences-grid">
+              <label>
+                <span class="label-text">Language preference (TMDb)</span>
+                <select v-model="languagePreference">
+                  <option v-for="lang in languageOptions" :key="lang.code" :value="lang.code">{{ lang.label }} ({{ lang.code }})</option>
+                </select>
+              </label>
+              <label>
+                <span class="label-text">Logo source priority</span>
+                <select v-model="logoSource">
+                  <option value="tmdb">TMDb only</option>
+                  <option value="fanart">Fanart.tv only</option>
+                  <option value="tmdb_fanart">TMDb first, Fanart fallback (recommended)</option>
+                  <option value="fanart_tmdb">Fanart first, TMDb fallback</option>
+                  <option value="both">Both merged (all results)</option>
+                </select>
+              </label>
+              <label>
+                <span class="label-text">Default poster filter</span>
+                <select v-model="fallbackPosterFilter">
+                  <option value="all">All posters (no filter)</option>
+                  <option value="en">English only</option>
+                  <option value="original">Original language only</option>
+                  <option value="no_text">Textless only</option>
+                </select>
+              </label>
+              <label>
+                <span class="label-text">Default logo filter</span>
+                <select v-model="fallbackLogoFilter">
+                  <option value="all">All logos (no filter)</option>
+                  <option value="en">English only</option>
+                  <option value="original">Original language only</option>
+                </select>
+              </label>
+              <label>
+                <span class="label-text">Default logo selection</span>
+                <select v-model="fallbackLogoMode">
+                  <option value="first">First available</option>
+                  <option value="white">White / light (low saturation)</option>
+                  <option value="color">Colored (high saturation)</option>
+                  <option value="none">No logo</option>
+                </select>
+              </label>
+              <label>
+                <span class="label-text">White logo fallback</span>
+                <select v-model="whiteLogoFallback">
+                  <option value="use_next">Use next available logo</option>
+                  <option value="skip">Render without logo</option>
+                </select>
+              </label>
+            </div>
+            <div class="actions" style="justify-content: flex-end; margin-top: 4px;">
+              <button class="primary" type="button" @click="saveFallback" :disabled="savingFallback">
+                {{ savingFallback ? 'Saving…' : 'Save Defaults' }}
+              </button>
             </div>
           </div>
         </div>

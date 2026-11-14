@@ -76,7 +76,8 @@ const { serverless } = useServerless()
 // Honors a custom name set on the primary Plex entry (Quirk #81's Name field),
 // same as every other place a server gets labeled -- previously hardcoded
 // "Plex" here regardless of what was configured.
-const plexServerLabel = computed(() => sharedMediaServerLabel('plex-1', settingsStore.mediaServers.value))
+// The saved name: the Settings page edits mediaServers as you type.
+const plexServerLabel = computed(() => sharedMediaServerLabel('plex-1', settingsStore.savedMediaServers.value))
 
 const plexStatusTitle = computed(() => {
   if (plexStatus.value === 'up') return 'Plex server is online'
@@ -114,7 +115,11 @@ const checkMediaServerStatus = async () => {
   }
 }
 
+// Saved name first (updates as soon as Save succeeds, like the Plex pill);
+// the status endpoint's name only refreshes on its next 30s poll.
 const mediaServerLabel = (s: MediaServerStatus) => {
+  const saved = settingsStore.savedMediaServers.value.find(m => m.id === s.server_id)
+  if (saved?.name && saved.name.trim()) return saved.name.trim()
   if (s.name && s.name.trim()) return s.name.trim()
   return s.type === 'jellyfin' ? 'Jellyfin' : s.type === 'emby' ? 'Emby' : s.type
 }

@@ -308,7 +308,7 @@ The section also lists every library group's **Overlay Refresh** schedule (below
 
 ## Overlay Refresh
 
-A poster's overlay can change after it's been sent: a better rating, a new list membership, a 4K upgrade, an edited overlay. **Overlay Refresh** (🔁, in each library's sidebar menu) finds posters whose overlay would now come out differently and re-renders them.
+A poster's overlay can change after it's been sent: a better rating, a new list membership, a 4K upgrade, an edited overlay. **Overlay Refresh** (each library's **Tools** page in the sidebar) finds posters whose overlay would now come out differently and re-renders them.
 
 - **Check for changes** lists the posters that would change, with the reason: what changed in the item's data, then the layers, e.g. "now on list Trending: added Trending frame" or "Audience rating 8.4 → 8.7: added High score". Only data that crossed one of the overlay's rules is named, so a rating moving from 8.4 to 8.5 without crossing a threshold isn't a change. It doesn't send anything.
 - **Refresh changed posters** re-renders and sends those posters. **Re-send all** re-sends every tracked poster.

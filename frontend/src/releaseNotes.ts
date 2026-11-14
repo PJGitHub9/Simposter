@@ -10,6 +10,31 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.75',
+    date: '2026-11-14',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          "Shorter sidebar: each library now has Batch Edit, Collections, Artwork and Tools. Artwork holds Logos, Backdrops, Square Art and Thumb Art as tabs; Tools holds Overlay Refresh, Media Mirror, Local Assets and Backup / Restore. Old links and bookmarks still work.",
+          "Settings → Libraries: each library group is shown as a one-line summary (its servers, auto-generate, labels and rules). Click Edit to change it.",
+          "The labels to remove when sending to Plex are now set in each library group's Edit view, instead of one long list at the bottom of the page.",
+          "Kometa compatibility now always removes the \"Overlay\" label for every Plex library, not only for libraries added after you turned it on.",
+          "\"Send logos with posters by default\" moved to Settings → Automation.",
+          "Settings → Media Servers is split into Media servers (Plex, Jellyfin, Emby) and an optional Radarr & Sonarr area below it, then the Poster API.",
+          "Template Manager shows your presets first (movie & TV presets, then collection presets); Default Batch Settings is folded away below them.",
+        ],
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          "Renaming a media server or a library group in Settings no longer changes the top bar pill or the sidebar until you click Save.",
+          "The labels to remove for a TV library were ignored by webhooks, auto-generate, scheduled scans and resends; only movie libraries' labels were removed. The TV show editor also pre-ticked the movie libraries' labels instead of the show's own.",
+        ],
+      },
+    ],
+  },
+  {
     version: 'v1.8.74',
     date: '2026-11-14',
     sections: [

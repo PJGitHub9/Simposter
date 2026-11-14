@@ -21,6 +21,8 @@ const props = defineProps<{
   retryIntervalHours: number
   retryMaxAttempts: number
   reuseCachedPosterDays: number
+  sendLogosToPlex: boolean
+  logoDefaultsChanged?: boolean
   unsavedChanges: boolean
   automationChanged?: boolean
 }>()
@@ -36,6 +38,7 @@ const emit = defineEmits<{
   'update:retryIntervalHours': [value: number]
   'update:retryMaxAttempts': [value: number]
   'update:reuseCachedPosterDays': [value: number]
+  'update:sendLogosToPlex': [value: boolean]
   'save': []
 }>()
 
@@ -427,6 +430,23 @@ const webhookInstructions = computed(() => {
           If a webhook or scheduled scan discovers what looks like a brand-new item, but a poster was already sent for the same TMDb title within this many days, Simposter resends that cached poster instead of generating a fresh one. Protects against a tool like Radarr/Sonarr (or something re-grabbing a trailer file) causing the media server to re-match an item under a new internal ID — which otherwise looks identical to a genuinely new library addition, and would silently overwrite a poster you already tuned. Only applies to webhook/auto-generate — manual batch, save, and send always render fresh.
         </span>
       </label>
+    </div>
+
+    <!-- Logos (moved here from Settings -> Libraries) -->
+    <div class="section" :class="{ 'unsaved-changes': logoDefaultsChanged }">
+      <h3>Logos</h3>
+      <label class="checkbox-label">
+        <input
+          type="checkbox"
+          :checked="sendLogosToPlex"
+          @change="emit('update:sendLogosToPlex', ($event.target as HTMLInputElement).checked)"
+        />
+        <span>Send logos with posters by default</span>
+      </label>
+      <p class="section-description">
+        When on, sending a poster also sends the logo, from the poster editor and from Batch Edit, to every server the poster goes to.
+        Batch Edit has its own "Send logos" checkbox that starts from this setting.
+      </p>
     </div>
 
     <!-- Retry queue -->

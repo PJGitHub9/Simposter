@@ -86,7 +86,6 @@ const props = defineProps<{
   // the whole-section yellow border above, which a user can miss when
   // there are several groups and only one of them actually changed.
   initialLibraryGroups?: any[]
-  sendLogosToPlex: boolean
   kometaCompatibility: boolean
 }>()
 
@@ -102,7 +101,6 @@ const emit = defineEmits<{
   'update:schedulerLibraryIds': [value: string[]]
   'update:defaultLabelsToRemove': [value: Record<string, string[]>]
   'update:defaultTvLabelsToRemove': [value: Record<string, string[]>]
-  'update:sendLogosToPlex': [value: boolean]
   'update:kometaCompatibility': [value: boolean]
   'scan-library': [libraryId?: string, forceRefresh?: boolean]
   'save': []
@@ -298,22 +296,34 @@ const fetchLibraryLabels = async () => {
   }
 }
 
-const toggleLabel = (libraryId: string, label: string, isTv: boolean) => {
-  const targetObj = isTv ? localTvLabelsToRemove.value : localLabelsToRemove.value
-  if (!targetObj[libraryId]) {
-    targetObj[libraryId] = []
-  }
-  const index = targetObj[libraryId].indexOf(label)
-  if (index > -1) {
-    targetObj[libraryId].splice(index, 1)
-  } else {
-    targetObj[libraryId].push(label)
-  }
+// Labels ticked for one Plex library. A library id is looked up in both lists
+// (the setup wizard stored TV libraries in the movie list), matching the backend.
+const labelsForLibrary = (libraryId: string): string[] => {
+  const movie = localLabelsToRemove.value?.[libraryId] || []
+  const tv = localTvLabelsToRemove.value?.[libraryId] || []
+  return [...new Set([...movie, ...tv])]
 }
 
-const isLabelChecked = (libraryId: string, label: string, isTv: boolean) => {
-  const targetObj = isTv ? localTvLabelsToRemove.value : localLabelsToRemove.value
-  return targetObj[libraryId]?.includes(label) || false
+// Unticking removes the label from both lists; ticking adds it to the list for
+// the library's own type. New objects are emitted so the page sees the change.
+const toggleLibraryLabel = (libraryId: string, label: string, isTv: boolean) => {
+  const movie = { ...(localLabelsToRemove.value || {}) }
+  const tv = { ...(localTvLabelsToRemove.value || {}) }
+  if (labelsForLibrary(libraryId).includes(label)) {
+    // An emptied list is dropped, so ticking then unticking leaves nothing changed.
+    for (const map of [movie, tv]) {
+      if (!map[libraryId]) continue
+      const left = map[libraryId].filter(l => l !== label)
+      if (left.length) map[libraryId] = left
+      else delete map[libraryId]
+    }
+  } else if (isTv) {
+    tv[libraryId] = [...(tv[libraryId] || []), label]
+  } else {
+    movie[libraryId] = [...(movie[libraryId] || []), label]
+  }
+  localLabelsToRemove.value = movie
+  localTvLabelsToRemove.value = tv
 }
 
 // The scan schedule picks library GROUPS ("group:<id>"), covering every server
@@ -644,18 +654,15 @@ watch(
       Manage your media servers in <router-link to="/settings?tab=media-servers">Settings → Media Servers</router-link>.
     </p>
 
-    <!-- Global Logo Settings -->
-    <div :class="['section', { 'section-unsaved': changed?.logoDefaults }]">
-      <h3>Logo Defaults</h3>
+    <div v-if="plexConfigured" :class="['kometa-row', { 'section-unsaved': changed?.labels }]">
       <label class="checkbox-label">
-        <input
-          type="checkbox"
-          :checked="sendLogosToPlex"
-          @change="emit('update:sendLogosToPlex', ($event.target as HTMLInputElement).checked)"
-        />
-        <span>Send logos to media servers by default</span>
+        <input type="checkbox" v-model="localKometaCompatibility" />
+        <span>Kometa compatibility</span> <span class="plex-only-tag">Plex only</span>
       </label>
-      <p class="help-text">When on, sending a poster also sends the logo, from the poster editor and from Batch Edit, to every server the poster goes to. Batch Edit has its own "Send logos" checkbox that starts from this setting.</p>
+      <p class="section-description">
+        Always removes the "Overlay" label (the one Kometa adds) when a poster is sent to Plex, for every library.
+        The other labels to remove are set per library group: click Edit on a group below.
+      </p>
     </div>
 
     <div v-if="plexConfigured" class="scan-all-row">
@@ -684,7 +691,7 @@ watch(
          group with no Plex member is just a group like any other. -->
     <div class="libraries-grid">
       <!-- Movie Libraries -->
-      <div :class="['section', { 'section-unsaved': movieLibrariesChanged }]">
+      <div :class="['section', { 'section-unsaved': movieLibrariesChanged || changed?.labels }]">
         <div class="section-header-inline">
           <h3>Movie Libraries</h3>
           <button @click="addNewGroup('movie')" class="secondary-small">
@@ -705,6 +712,11 @@ watch(
           :mapping="card.mappingIdx !== null ? localLibraries[card.mappingIdx] : undefined"
           :saved-library-ids="savedLibraryIds"
           :available-labels="card.mappingIdx !== null ? (availableLabels[localLibraries[card.mappingIdx]!.id] || []) : []"
+          :remove-labels="card.mappingIdx !== null ? labelsForLibrary(String(localLibraries[card.mappingIdx]!.id)) : []"
+          :kometa-compatibility="localKometaCompatibility"
+          :labels-loading="labelsLoading"
+          @toggle-label="label => card.mappingIdx !== null && toggleLibraryLabel(String(localLibraries[card.mappingIdx]!.id), label, false)"
+          @refresh-labels="fetchLibraryLabels"
           :scan-cooldown="scanCooldown"
           :scanning-library-id="scanningLibraryId"
           :status="groupStatus[card.group.id] || null"
@@ -720,7 +732,7 @@ watch(
       </div>
 
       <!-- TV Show Libraries -->
-      <div :class="['section', { 'section-unsaved': tvLibrariesChanged }]">
+      <div :class="['section', { 'section-unsaved': tvLibrariesChanged || changed?.labels }]">
         <div class="section-header-inline">
           <h3>TV Show Libraries</h3>
           <button @click="addNewGroup('tv')" class="secondary-small">
@@ -741,6 +753,11 @@ watch(
           :mapping="card.mappingIdx !== null ? localTvShowLibraries[card.mappingIdx] : undefined"
           :saved-library-ids="savedTvShowLibraryIds"
           :available-labels="card.mappingIdx !== null ? (availableLabels[localTvShowLibraries[card.mappingIdx]!.id] || []) : []"
+          :remove-labels="card.mappingIdx !== null ? labelsForLibrary(String(localTvShowLibraries[card.mappingIdx]!.id)) : []"
+          :kometa-compatibility="localKometaCompatibility"
+          :labels-loading="labelsLoading"
+          @toggle-label="label => card.mappingIdx !== null && toggleLibraryLabel(String(localTvShowLibraries[card.mappingIdx]!.id), label, true)"
+          @refresh-labels="fetchLibraryLabels"
           :scan-cooldown="scanCooldown"
           :scanning-library-id="scanningLibraryId"
           :status="groupStatus[card.group.id] || null"
@@ -752,77 +769,6 @@ watch(
         />
         <p v-if="!tvUnifiedCards.length" class="no-labels-hint">
           No TV show library groups yet — click "+ New Group" to add one.
-        </p>
-      </div>
-    </div>
-
-    <!-- Default Labels to Remove -- Plex-only by nature (label removal has no
-         Jellyfin/Emby equivalent, and Kometa only ever runs against Plex), so
-         the whole section is hidden rather than shown-but-inert for an
-         install with no Plex configured at all. -->
-    <div v-if="plexConfigured" :class="['section', { 'section-unsaved': changed?.labels }]">
-      <div class="section-header-inline">
-        <div>
-          <h3 style="margin-bottom: 4px;">Default Labels to Remove <span class="plex-only-tag">Plex only</span></h3>
-          <p class="section-description" style="margin-bottom: 0;">
-            When sending to Plex, these labels will be removed by default for each library. Label removal has no
-            Jellyfin/Emby equivalent, so this has no effect on a linked non-Plex library.
-          </p>
-          <label class="checkbox-label" style="margin-top: 10px;">
-            <input type="checkbox" v-model="localKometaCompatibility" />
-            <span>Kometa Compatibility</span> <span class="plex-only-tag">Plex only</span>
-          </label>
-          <p class="section-description" style="margin: 2px 0 0 0;">
-            When enabled, any library you add from now on automatically gets "Overlay" checked here too — matching what the "Using Kometa?" step in the startup wizard does for libraries selected during onboarding, but for libraries added afterward. Kometa itself only ever runs against Plex, so this doesn't apply to Jellyfin/Emby libraries either.
-          </p>
-        </div>
-        <button @click="fetchLibraryLabels" class="refresh-labels-btn" :disabled="labelsLoading">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="23 4 23 10 17 10"/>
-            <polyline points="1 20 1 14 7 14"/>
-            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-          </svg>
-          {{ labelsLoading ? 'Loading...' : 'Refresh Labels' }}
-        </button>
-      </div>
-
-      <div v-if="labelsLoading" class="labels-loading">
-        <svg class="spinner" width="20" height="20" viewBox="0 0 24 24">
-          <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="3" opacity="0.25"/>
-          <path fill="currentColor" d="M12 2a10 10 0 0 1 10 10h-3a7 7 0 0 0-7-7V2z"/>
-        </svg>
-        <span>Loading labels...</span>
-      </div>
-
-      <div v-else-if="localLibraries.length === 0 && localTvShowLibraries.length === 0" class="no-labels">
-        <p>No libraries configured. Add libraries above to manage labels.</p>
-      </div>
-
-      <!-- Unified Library Labels (both Movies and TV Shows) -->
-      <div v-for="lib in [...localLibraries, ...localTvShowLibraries]" :key="lib.id" v-show="lib.id" class="library-labels-section">
-        <h4 class="library-labels-title">
-          {{ lib.displayName || lib.title || lib.id }}
-          <span class="library-type-badge" :class="localLibraries.includes(lib) ? 'movie' : 'show'">
-            {{ localLibraries.includes(lib) ? 'Movies' : 'TV' }}
-          </span>
-          <span style="font-size: 11px; color: #666;">(ID: {{ lib.id }}, Labels: {{ (availableLabels[lib.id] || []).length }})</span>
-        </h4>
-        <div v-if="(availableLabels[lib.id] || []).length > 0" class="labels-grid">
-          <label
-            v-for="label in availableLabels[lib.id] || []"
-            :key="`${lib.id}-${label}`"
-            class="label-checkbox"
-          >
-            <input
-              type="checkbox"
-              :checked="isLabelChecked(lib.id, label, !localLibraries.includes(lib))"
-              @change="toggleLabel(lib.id, label, !localLibraries.includes(lib))"
-            />
-            <span>{{ label }}</span>
-          </label>
-        </div>
-        <p v-else-if="!labelsLoading" class="no-labels-message">
-          No labels found for this library yet. Click "Refresh Labels" above after scanning the library to discover labels.
         </p>
       </div>
     </div>
@@ -904,6 +850,14 @@ watch(
 </template>
 
 <style scoped>
+.kometa-row {
+  margin-bottom: 14px;
+  padding: 12px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.kometa-row .section-description { margin: 4px 0 0; }
 .tab-content {
   padding: 20px;
   max-width: 1600px;

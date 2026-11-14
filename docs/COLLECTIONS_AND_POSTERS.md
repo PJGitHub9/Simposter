@@ -72,7 +72,7 @@ Every layer can have **Show when** rules (file name, ratings, MDBList lists, sho
 
 ## Logos, Backdrops, Square Art & Thumb Art
 
-Each library's sidebar menu has a page per artwork type, showing what every item currently has on your server, with search, sort and label filters (Logos, Backdrops and Square Art also filter by "missing"). Click an item to open its editor:
+Each library's **Artwork** page (in its sidebar menu) has a tab per artwork type, showing what every item currently has on your server, with search, sort and label filters (Logos, Backdrops and Square Art also filter by "missing"). Click an item to open its editor:
 
 - **🖼️ Logos**: pick a clear logo from TMDb, Fanart.tv or TVDB (or upload one) and send it.
 - **🎞️ Backdrops**: pick a background image and send it.

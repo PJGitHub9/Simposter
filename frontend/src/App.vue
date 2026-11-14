@@ -11,6 +11,7 @@ import UpdateAnnouncementModal from './components/UpdateAnnouncementModal.vue'
 import ChangelogModal from './components/ChangelogModal.vue'
 import OnboardingModal from './components/OnboardingModal.vue'
 import QuickStartGuide from './components/QuickStartGuide.vue'
+import SectionTabs, { type SectionTab } from './components/layout/SectionTabs.vue'
 import SearchEditChoiceModal, { type SearchEditChoice } from './components/SearchEditChoiceModal.vue'
 import LogoEditorModal from './components/LogoEditorModal.vue'
 import BackdropEditorModal from './components/BackdropEditorModal.vue'
@@ -36,63 +37,35 @@ import { APP_VERSION } from '@/version'
 // existing `tab.replace('movies-', '')`-style parsing naturally yields `group-{id}`,
 // which resolveLibraryTarget() below already knows how to turn into a real
 // {server, library} pair -- no prefix-branching needed at the call sites.
-// Media Mirror only makes sense once a group has a real source AND target to
-// copy between -- a single-library group has nothing to mirror to/from.
-// Shared by both the Plex-anchored tabs and the non-Plex group tabs below.
-const groupMemberCount = (serverId: string, libraryId: string): number => {
-  const group = (settings.libraryGroups.value || []).find(g =>
-    (g.members || []).some(m => m.serverId === serverId && m.libraryId === libraryId)
-  )
-  return group?.members?.length ?? 1
-}
-
-// Thumb Art is Jellyfin/Emby-only (Plex has no such slot) -- the mirror of Square
-// Art being Plex-only -- so its submenu entry only shows when the library's group
-// has a Jellyfin or Emby member.
-const groupHasNonPlexMember = (serverId: string, libraryId: string): boolean => {
-  const group = (settings.libraryGroups.value || []).find(g =>
-    (g.members || []).some(m => m.serverId === serverId && m.libraryId === libraryId)
-  )
-  return (group?.members || []).some(m => m.serverId !== 'plex-1')
-}
-
+// Which Artwork/Tools tabs a library shows is decided by sectionTabs below.
 const nonPlexGroupTabs = (mediaType: 'movie' | 'tv'): MenuItem[] => {
-  const groups = (settings.libraryGroups.value || []).filter(g =>
+  // Saved groups only: a group renamed or added in Settings appears after Save.
+  const groups = (settings.savedLibraryGroups.value || []).filter(g =>
     g.mediaType === mediaType &&
     (g.members?.length ?? 0) > 0 &&
     !(g.members || []).some(m => m.serverId === 'plex-1')
   )
   const prefix = mediaType === 'movie' ? 'movies' : 'tv-shows'
   const icon = mediaType === 'movie' ? '\u{1F3AC}' : '\u{1F4FA}'
-  // Square Art is Plex-only (no Jellyfin/Emby equivalent, Quirk #44/#92) -- omit it
-  // from a non-Plex tab's submenu entirely rather than linking to a permanently-empty view.
+  // Same entries as a Plex library's menu; the Artwork and Tools pages decide
+  // which tabs apply (no Square Art without Plex, Media Mirror only with two or
+  // more servers).
   const movieItems: [string, string][] = [
     ['batch', '\u{270F}\uFE0F Batch Edit'],
     ['collections', '\u{1F4DA} Collections'],
-    ['logos', '\u{1F5BC}\uFE0F Logos'],
-    ['backdrops', '\u{1F39E}\uFE0F Backdrops'],
-    ['thumb-art', '\u{1F304} Thumb Art'],
-    ['media-mirror', '\u{1FA9E} Media Mirror'],
-    ['overlay-refresh', '\u{1F501} Overlay Refresh'],
-    ['assets', '\u{1F4C1} Local Assets'],
-    ['backup', '\u{1F4E6} Backup / Restore'],
+    ['artwork', '\u{1F5BC}\uFE0F Artwork'],
+    ['tools', '\u{1F9F0} Tools'],
   ]
   const tvItems: [string, string][] = [
     ['tv-batch', '\u{270F}\uFE0F Batch Edit'],
-    ['tv-logos', '\u{1F5BC}\uFE0F Logos'],
-    ['tv-backdrops', '\u{1F39E}\uFE0F Backdrops'],
-    ['tv-thumb-art', '\u{1F304} Thumb Art'],
-    ['tv-media-mirror', '\u{1FA9E} Media Mirror'],
-    ['tv-overlay-refresh', '\u{1F501} Overlay Refresh'],
-    ['tv-assets', '\u{1F4C1} Local Assets'],
-    ['tv-backup', '\u{1F4E6} Backup / Restore'],
+    ['tv-artwork', '\u{1F5BC}\uFE0F Artwork'],
+    ['tv-tools', '\u{1F9F0} Tools'],
   ]
   const items = mediaType === 'movie' ? movieItems : tvItems
   return groups.map(g => ({
     key: `${prefix}-group-${g.id}`,
     label: `${icon} ${g.name || 'Library'}`,
     submenu: items
-      .filter(([k]) => !k.includes('media-mirror') || g.members.length > 1)
       .map(([k, label]) => ({ key: `${k}-group-${g.id}`, label }))
   }))
 }
@@ -105,7 +78,7 @@ const nonPlexGroupTabs = (mediaType: 'movie' | 'tv'): MenuItem[] => {
 const resolveLibraryTarget = (libId: string): { library: string; server?: string } => {
   if (libId.startsWith('group-')) {
     const groupId = libId.slice('group-'.length)
-    const group = (settings.libraryGroups.value || []).find(g => g.id === groupId)
+    const group = (settings.savedLibraryGroups.value || []).find(g => g.id === groupId)
     const member = group?.members?.[0]
     if (member) return { library: member.libraryId, server: member.serverId }
   }
@@ -162,14 +135,8 @@ const tabs = computed<MenuItem[]>(() => {
     submenu: [
       { key: `batch-${lib.id || idx}`, label: '\u{270F}\uFE0F Batch Edit' },
       { key: `collections-${lib.id || idx}`, label: '\u{1F4DA} Collections' },
-      { key: `logos-${lib.id || idx}`, label: '\u{1F5BC}\uFE0F Logos' },
-      { key: `backdrops-${lib.id || idx}`, label: '\u{1F39E}\uFE0F Backdrops' },
-      { key: `square-art-${lib.id || idx}`, label: '\u{1F533} Square Art' },
-      ...(groupHasNonPlexMember('plex-1', String(lib.id)) ? [{ key: `thumb-art-${lib.id || idx}`, label: '\u{1F304} Thumb Art' }] : []),
-      ...(groupMemberCount('plex-1', String(lib.id)) > 1 ? [{ key: `media-mirror-${lib.id || idx}`, label: '\u{1FA9E} Media Mirror' }] : []),
-      { key: `overlay-refresh-${lib.id || idx}`, label: '\u{1F501} Overlay Refresh' },
-      { key: `assets-${lib.id || idx}`, label: '\u{1F4C1} Local Assets' },
-      { key: `backup-${lib.id || idx}`, label: '\u{1F4E6} Backup / Restore' }
+      { key: `artwork-${lib.id || idx}`, label: '\u{1F5BC}\uFE0F Artwork' },
+      { key: `tools-${lib.id || idx}`, label: '\u{1F9F0} Tools' }
     ]
   }))
 
@@ -182,14 +149,8 @@ const tabs = computed<MenuItem[]>(() => {
     label: `\u{1F4FA} ${lib.displayName || lib.title || `TV Library ${idx + 1}`}`,
     submenu: [
       { key: `tv-batch-${lib.id || idx}`, label: '\u{270F}\uFE0F Batch Edit' },
-      { key: `tv-logos-${lib.id || idx}`, label: '\u{1F5BC}\uFE0F Logos' },
-      { key: `tv-backdrops-${lib.id || idx}`, label: '\u{1F39E}\uFE0F Backdrops' },
-      { key: `tv-square-art-${lib.id || idx}`, label: '\u{1F533} Square Art' },
-      ...(groupHasNonPlexMember('plex-1', String(lib.id)) ? [{ key: `tv-thumb-art-${lib.id || idx}`, label: '\u{1F304} Thumb Art' }] : []),
-      ...(groupMemberCount('plex-1', String(lib.id)) > 1 ? [{ key: `tv-media-mirror-${lib.id || idx}`, label: '\u{1FA9E} Media Mirror' }] : []),
-      { key: `tv-overlay-refresh-${lib.id || idx}`, label: '\u{1F501} Overlay Refresh' },
-      { key: `tv-assets-${lib.id || idx}`, label: '\u{1F4C1} Local Assets' },
-      { key: `tv-backup-${lib.id || idx}`, label: '\u{1F4E6} Backup / Restore' }
+      { key: `tv-artwork-${lib.id || idx}`, label: '\u{1F5BC}\uFE0F Artwork' },
+      { key: `tv-tools-${lib.id || idx}`, label: '\u{1F9F0} Tools' }
     ]
   })) : []
 
@@ -599,6 +560,66 @@ watch(
   { immediate: true }
 )
 
+// Artwork and Tools: one sidebar entry each per library; the pages inside them
+// keep their own routes and show a tab strip (SectionTabs.vue) to switch.
+const ARTWORK_ROUTES = {
+  movie: ['logos', 'backdrops', 'square-art', 'thumb-art'],
+  tv: ['tv-logos', 'tv-backdrops', 'tv-square-art', 'tv-thumb-art'],
+}
+const TOOLS_ROUTES = {
+  movie: ['overlay-refresh', 'media-mirror', 'local-assets'],
+  tv: ['tv-overlay-refresh', 'tv-media-mirror', 'tv-local-assets'],
+}
+
+const sectionTabs = computed<{ title: string; tabs: SectionTab[] } | null>(() => {
+  if (serverless.value) return null
+  const name = String(route.name || '')
+  const isBackup = name === 'backup'
+  const isTv = isBackup ? route.query.type === 'tv-show' : name.startsWith('tv-')
+  const kind = isTv ? 'tv' : 'movie'
+  const section = ARTWORK_ROUTES[kind].includes(name) ? 'artwork'
+    : (TOOLS_ROUTES[kind].includes(name) || isBackup) ? 'tools' : null
+  if (!section) return null
+  const library = String(route.query.library || '')
+  const server = String(route.query.server || 'plex-1')
+  const query: Record<string, string> = { library }
+  if (route.query.server) query.server = String(route.query.server)
+  const group = (settings.libraryGroups.value || []).find(g =>
+    (g.members || []).some(m => m.serverId === server && m.libraryId === library)
+  )
+  const members = group?.members || [{ serverId: server, libraryId: library }]
+  const hasPlex = members.some(m => m.serverId === 'plex-1')
+  const hasNonPlex = members.some(m => m.serverId !== 'plex-1')
+  const p = isTv ? 'tv-' : ''
+  const tab = (routeName: string, label: string): SectionTab => ({
+    key: routeName, label, to: { name: routeName, query }, active: name === routeName,
+  })
+  if (section === 'artwork') {
+    return {
+      title: 'Artwork',
+      tabs: [
+        tab(`${p}logos`, 'Logos'),
+        tab(`${p}backdrops`, 'Backdrops'),
+        ...(hasPlex ? [tab(`${p}square-art`, 'Square Art')] : []),
+        ...(hasNonPlex ? [tab(`${p}thumb-art`, 'Thumb Art')] : []),
+      ],
+    }
+  }
+  return {
+    title: 'Tools',
+    tabs: [
+      tab(`${p}overlay-refresh`, 'Overlay Refresh'),
+      ...(members.length > 1 ? [tab(`${p}media-mirror`, 'Media Mirror')] : []),
+      tab(`${p}local-assets`, 'Local Assets'),
+      {
+        key: 'backup', label: 'Backup / Restore',
+        to: { name: 'backup', query: { ...query, type: isTv ? 'tv-show' : 'movie' } },
+        active: isBackup,
+      },
+    ],
+  }
+})
+
 const activeTab = computed<TabKey>(() => {
   if (serverless.value) return (route.name as TabKey) || 'poster-api'
   const libQuery = resolveTabSuffix((route.query.library as string) || '', (route.query.server as string) || '')
@@ -627,24 +648,13 @@ const activeSubmenu = computed<string>(() => {
   if (route.name === 'batch-edit') return `batch-${libQuery || 'default'}`
   if (route.name === 'tv-batch-edit') return `tv-batch-${libQuery || 'default'}`
   if (route.name === 'collections') return `collections-${libQuery || 'default'}`
-  if (route.name === 'logos') return `logos-${libQuery || 'default'}`
-  if (route.name === 'tv-logos') return `tv-logos-${libQuery || 'default'}`
-  if (route.name === 'backdrops') return `backdrops-${libQuery || 'default'}`
-  if (route.name === 'tv-backdrops') return `tv-backdrops-${libQuery || 'default'}`
-  if (route.name === 'square-art') return `square-art-${libQuery || 'default'}`
-  if (route.name === 'tv-square-art') return `tv-square-art-${libQuery || 'default'}`
-  if (route.name === 'thumb-art') return `thumb-art-${libQuery || 'default'}`
-  if (route.name === 'tv-thumb-art') return `tv-thumb-art-${libQuery || 'default'}`
-  if (route.name === 'media-mirror') return `media-mirror-${libQuery || 'default'}`
-  if (route.name === 'tv-media-mirror') return `tv-media-mirror-${libQuery || 'default'}`
-  if (route.name === 'overlay-refresh') return `overlay-refresh-${libQuery || 'default'}`
-  if (route.name === 'tv-overlay-refresh') return `tv-overlay-refresh-${libQuery || 'default'}`
-  if (route.name === 'local-assets') return `assets-${libQuery || 'default'}`
-  if (route.name === 'tv-local-assets') return `tv-assets-${libQuery || 'default'}`
-  if (route.name === 'backup') {
-    const type = route.query.type as string
-    return type === 'tv-show' ? `tv-backup-${libQuery || 'default'}` : `backup-${libQuery || 'default'}`
-  }
+  const lib = libQuery || 'default'
+  const name = String(route.name || '')
+  if (ARTWORK_ROUTES.movie.includes(name)) return `artwork-${lib}`
+  if (ARTWORK_ROUTES.tv.includes(name)) return `tv-artwork-${lib}`
+  if (TOOLS_ROUTES.movie.includes(name)) return `tools-${lib}`
+  if (TOOLS_ROUTES.tv.includes(name)) return `tv-tools-${lib}`
+  if (name === 'backup') return route.query.type === 'tv-show' ? `tv-tools-${lib}` : `tools-${lib}`
   return ''
 })
 const showBackButton = computed(() => !!ui.selectedMovie.value)
@@ -1064,7 +1074,11 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
   if (parentKey.startsWith('movies-')) {
     const libId = parentKey.replace('movies-', '')
     const target = resolveLibraryTarget(libId)
-    if (submenuKey.startsWith('batch-')) {
+    if (submenuKey.startsWith('artwork-')) {
+      router.push({ name: 'logos', query: target })
+    } else if (submenuKey.startsWith('tools-')) {
+      router.push({ name: 'overlay-refresh', query: target })
+    } else if (submenuKey.startsWith('batch-')) {
       router.push({ name: 'batch-edit', query: target })
     } else if (submenuKey.startsWith('collections-')) {
       router.push({ name: 'collections', query: target })
@@ -1088,7 +1102,11 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
   } else if (parentKey.startsWith('tv-shows-')) {
     const libId = parentKey.replace('tv-shows-', '')
     const target = resolveLibraryTarget(libId)
-    if (submenuKey.startsWith('tv-batch-')) {
+    if (submenuKey.startsWith('tv-artwork-')) {
+      router.push({ name: 'tv-logos', query: target })
+    } else if (submenuKey.startsWith('tv-tools-')) {
+      router.push({ name: 'tv-overlay-refresh', query: target })
+    } else if (submenuKey.startsWith('tv-batch-')) {
       router.push({ name: 'tv-batch-edit', query: target })
     } else if (submenuKey.startsWith('tv-logos-')) {
       router.push({ name: 'tv-logos', query: target })
@@ -1261,6 +1279,7 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
     <div v-if="!ui.selectedMovie.value" class="workspace" :style="{ '--sidebar-w': sidebarCollapsed ? '52px' : '260px' }">
       <Sidebar :tabs="tabs" :active="activeTab" :active-submenu="activeSubmenu" :mobile-open="sidebarOpen" :collapsed="sidebarCollapsed" @select="(tab) => { handleTabSelect(tab); closeSidebar() }" @submenu-click="(parentKey, submenuKey) => { handleSubmenuClick(parentKey, submenuKey); closeSidebar() }" @toggle-collapse="toggleSidebarCollapsed" />
       <section class="main-pane glass">
+        <SectionTabs v-if="sectionTabs" :title="sectionTabs.title" :tabs="sectionTabs.tabs" />
         <router-view :key="activeTab" :search="searchQuery" @select="handleSelect" />
       </section>
     </div>

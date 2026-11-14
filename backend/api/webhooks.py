@@ -331,12 +331,25 @@ def _get_default_remove_labels(library_id: str) -> List[str]:
         ui_settings = db.get_ui_settings()
         if not ui_settings:
             return []
-        default_labels = ui_settings.get("defaultLabelsToRemove", {}) or {}
-        if isinstance(default_labels, dict):
-            return [l for l in (default_labels.get(str(library_id), []) or []) if l]
-        elif isinstance(default_labels, list):
-            return [l for l in default_labels if l]
-        return []
+        labels: List[str] = []
+        # Both lists: TV libraries' labels live in defaultTvLabelsToRemove (this
+        # used to read only the movie list, so TV labels were never removed by
+        # webhooks/auto-generate/scans), and the setup wizard has stored TV
+        # libraries in the movie list. Plex library ids are unique per server.
+        for key in ("defaultLabelsToRemove", "defaultTvLabelsToRemove"):
+            raw = ui_settings.get(key) or {}
+            if isinstance(raw, dict):
+                labels.extend(raw.get(str(library_id), []) or [])
+            elif isinstance(raw, list):
+                labels.extend(raw)
+        # Kometa compatibility always removes Kometa's "Overlay" label.
+        if (ui_settings.get("automation") or {}).get("kometaCompatibility"):
+            labels.append("Overlay")
+        out: List[str] = []
+        for l in labels:
+            if l and l not in out:
+                out.append(l)
+        return out
     except Exception as e:
         logger.warning(f"[WEBHOOK] Failed to get default remove labels for library {library_id}: {e}")
         return []

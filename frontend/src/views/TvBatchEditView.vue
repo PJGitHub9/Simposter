@@ -10,6 +10,7 @@ import { useLibraryGroupPreference } from '@/composables/useLibraryGroupPreferen
 import PosterModeMenu from '@/components/PosterModeMenu.vue'
 import { MODE_FILTER_OPTIONS, groupIdFor, type PosterMode } from '@/services/posterModes'
 import { posterThumbUrl } from '@/services/posterThumb'
+import { labelsToRemoveFor } from '@/services/labelsToRemove'
 
 
 type TvShow = {
@@ -321,8 +322,7 @@ const statusLoading = ref(false)
 
 const syncLabelsFromSettings = () => {
   const libId = currentLibrary.value || 'default'
-  const defaults = settings.defaultTvLabelsToRemove.value?.[libId]
-  labelsToRemove.value = new Set(Array.isArray(defaults) ? defaults : [])
+  labelsToRemove.value = new Set(libId === 'default' ? [] : labelsToRemoveFor(libId, 'tv'))
 }
 
 const apiBase = getApiBase()

@@ -106,8 +106,8 @@ function linkedGroups(id: string): string {
   <div :class="['section', { 'section-unsaved': changed }]">
     <h3>{{ label }}</h3>
     <p class="scan-hint section-hint">
-      Simposter only reads tags from {{ label }}, for poster mode rules. Link an instance to a
-      {{ type === 'radarr' ? 'movie' : 'TV show' }} library group in Settings → Libraries.
+      Link an instance to a {{ type === 'radarr' ? 'movie' : 'TV show' }} library group in Settings → Libraries
+      (Edit on the group).
     </p>
 
     <div class="server-list">

@@ -61,7 +61,7 @@ Webhooks (Radarr/Sonarr) can target a whole library group. See [WEBHOOKS.md](WEB
 
 ## Media Mirror
 
-**Media Mirror** copies artwork from one server to the others in a group, so they stay in sync. Open it from the group's sidebar menu (🪞 Media Mirror). It only appears once the group has more than one server.
+**Media Mirror** copies artwork from one server to the others in a group, so they stay in sync. Open it from the group's **Tools** page in the sidebar (Media Mirror tab). The tab only appears once the group has more than one server.
 
 - Choose the **source** server, the **target** servers, and which artwork to copy: posters, logos, backdrops and/or square art (square art is Plex-only).
 - **Also mirror Collections** copies collection artwork too, with its own artwork choices.
@@ -111,5 +111,5 @@ History and your saved poster files are kept. If you remove Plex, Simposter stop
 Jellyfin and Emby have no equivalent for these:
 
 - **Square art**: it's a Plex artwork type.
-- **Labels**: "Default Labels to Remove", "Label to Add After Sending", Kometa compatibility, poster-mode label rules, the Overlay Refresh label and the **Label** overlay rule only apply to Plex items.
+- **Labels**: the labels to remove when sending (each library group's Edit view), "Label to Add After Sending", Kometa compatibility, poster-mode label rules, the Overlay Refresh label and the **Label** overlay rule only apply to Plex items.
 - **Edition**: the edition overlay badge and rule read Plex's edition field. On Jellyfin/Emby, match the edition tag in the file name instead (see [OVERLAYS.md](OVERLAYS.md#show-when-rules)).

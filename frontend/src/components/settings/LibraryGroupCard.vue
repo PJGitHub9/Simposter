@@ -25,7 +25,32 @@
           </svg>
         </button>
       </template>
+      <button type="button" class="edit-toggle" :aria-expanded="expanded" @click="expanded = !expanded">
+        {{ expanded ? 'Done' : 'Edit' }}
+      </button>
     </div>
+
+    <!-- Collapsed: one summary line per group, so a page with several groups
+         stays short. Edit opens every setting below. -->
+    <div v-if="!expanded" class="group-summary">
+      <div class="summary-servers">
+        <span
+          v-for="m in summaryMembers"
+          :key="`${m.serverId}:${m.libraryId}`"
+          class="summary-chip"
+          :class="{ 'chip-broken': !memberAvailable(m) }"
+        >
+          <span class="summary-type" :class="serverTypeFor(m.serverId)">{{ serverTypeFor(m.serverId) }}</span>
+          {{ memberLibraryName(m) }}
+        </span>
+        <span v-if="!group.members.length" class="summary-muted">No libraries linked yet</span>
+      </div>
+      <p class="summary-text">
+        <span v-for="(part, i) in summaryParts" :key="i" :class="{ 'summary-warn': part.warn }">{{ part.text }}</span>
+      </p>
+    </div>
+
+    <template v-if="expanded">
 
     <!-- One row per server type (Plex, Jellyfin, Emby), all identical: a chip
          per linked library ("Server name: Library") with an ✕ to unlink, or
@@ -135,6 +160,36 @@
       @update:rules="onRulesChange"
     />
 
+    <!-- Plex labels removed when a poster is sent to this group's Plex library
+         (moved here from the Libraries page). "Overlay" is always removed while
+         Kometa compatibility is on. -->
+    <div v-if="plexMember" class="labels-section">
+      <div class="labels-head">
+        <span class="label-text">Labels to remove when sending to Plex</span>
+        <button type="button" class="link-btn" :disabled="labelsLoading" @click="emit('refresh-labels')">
+          {{ labelsLoading ? 'Loading…' : 'Refresh labels' }}
+        </button>
+      </div>
+      <div v-if="labelChoices.length" class="labels-grid">
+        <label
+          v-for="label in labelChoices"
+          :key="label"
+          class="label-checkbox"
+          :class="{ locked: isKometaLocked(label) }"
+          :title="isKometaLocked(label) ? 'Always removed while Kometa compatibility is on (Settings → Libraries)' : undefined"
+        >
+          <input
+            type="checkbox"
+            :checked="isKometaLocked(label) || removeLabels.includes(label)"
+            :disabled="isKometaLocked(label)"
+            @change="emit('toggle-label', label)"
+          />
+          <span>{{ label }}</span>
+        </label>
+      </div>
+      <p v-else class="help-text">No labels found in this Plex library yet. Scan it, then click Refresh labels.</p>
+    </div>
+
     <!-- Settings for this group that live on its own pages (Media Mirror,
          Overlay Refresh), shown here so they aren't missed. Read-only. -->
     <div v-if="status && hasAnyMember && groupSaved" class="group-status">
@@ -150,6 +205,8 @@
       </div>
     </div>
 
+    </template>
+
     <div class="library-actions">
       <!-- One Scan button for every group, disabled while ANY scan is running
            (one scan at a time, server-wide). A group with a main-Plex library
@@ -164,7 +221,7 @@
       >
         {{ thisGroupScanning ? 'Scanning...' : 'Scan' }}
       </button>
-      <button @click="removeGroup" class="remove-btn">Remove Group</button>
+      <button v-if="expanded" @click="removeGroup" class="remove-btn">Remove Group</button>
     </div>
     <p v-if="scanError" class="scan-error">{{ scanError }}</p>
   </div>
@@ -185,6 +242,7 @@
 // (CLAUDE.md's own documented, deliberate scope limit -- rewiring those
 // consumers to LibraryGroup directly is real, separate, larger work).
 import { computed, nextTick, ref, watch } from 'vue'
+import { KOMETA_LABEL } from '@/services/labelsToRemove'
 import { useSettingsStore, type LibraryGroup, type LibraryGroupMember, type PosterModeRule } from '@/stores/settings'
 import { mediaServerLabel } from '@/services/mediaServerLabel'
 import PosterModeRules from './PosterModeRules.vue'
@@ -254,10 +312,60 @@ const props = defineProps<{
   initialGroup?: LibraryGroup | null
   // Media Mirror / Overlay Refresh status from /api/media-server/library-groups/status.
   status?: GroupStatus | null
+  // Labels ticked for this group's Plex library, and the Kometa compatibility
+  // setting (which always adds "Overlay").
+  removeLabels?: string[]
+  kometaCompatibility?: boolean
+  labelsLoading?: boolean
 }>()
 
 // Status line helpers (Media Mirror / Overlay Refresh).
 const groupSaved = computed(() => !!props.initialGroup)
+
+// Collapsed to a summary by default; a new group with nothing linked opens
+// straight away, since there's nothing to summarize yet.
+const expanded = ref(!props.group.members.length)
+
+// Label checklist: the library's own labels, plus "Overlay" (shown ticked and
+// locked) while Kometa compatibility is on, even if no item has it yet.
+const removeLabels = computed(() => props.removeLabels || [])
+const isKometaLocked = (label: string) => !!props.kometaCompatibility && label === KOMETA_LABEL
+const labelChoices = computed(() => {
+  const set = new Set<string>(props.availableLabels || [])
+  removeLabels.value.forEach(l => set.add(l))
+  if (props.kometaCompatibility) set.add(KOMETA_LABEL)
+  return [...set].sort((a, b) => a.localeCompare(b))
+})
+
+// Plex, then Jellyfin, then Emby, as in the edit view.
+const summaryMembers = computed(() => {
+  const order = ['plex', 'jellyfin', 'emby']
+  const rank = (m: LibraryGroupMember) => { const i = order.indexOf(serverTypeFor(m.serverId)); return i === -1 ? 9 : i }
+  return [...props.group.members].sort((x, y) => rank(x) - rank(y))
+})
+
+const summaryParts = computed<{ text: string; warn?: boolean }[]>(() => {
+  const parts: { text: string; warn?: boolean }[] = []
+  if (props.group.members.some(m => !memberAvailable(m))) {
+    parts.push({ text: 'A linked server is missing or disabled', warn: true })
+  }
+  if (autoGenEnabled.value) {
+    const preset = props.allPresets.find(p => p.id === presetValue.value)
+    parts.push(preset
+      ? { text: `Auto-generate: ${preset.name}` }
+      : { text: 'Auto-generate on, no preset picked', warn: true })
+  } else {
+    parts.push({ text: 'Auto-generate off' })
+  }
+  if (hasMultipleMembers.value && !mergeEnabled.value) parts.push({ text: 'Not merged' })
+  if (plexMember.value) {
+    const n = new Set([...(props.removeLabels || []), ...(props.kometaCompatibility ? [KOMETA_LABEL] : [])]).size
+    if (n) parts.push({ text: `Removes ${n} Plex label${n === 1 ? '' : 's'}` })
+  }
+  const rules = (props.group.posterModeRules || []).length
+  if (rules) parts.push({ text: `${rules} poster mode rule${rules === 1 ? '' : 's'}` })
+  return parts
+})
 
 const whenText = (iso: string | null): string => {
   if (!iso) return ''
@@ -313,6 +421,8 @@ const emit = defineEmits<{
   // group's removal is handled entirely inside this component instead
   // (no mapping-array entry to coordinate).
   'remove-group': []
+  'toggle-label': [label: string]
+  'refresh-labels': []
 }>()
 
 const settingsStore = useSettingsStore()
@@ -656,6 +766,101 @@ function removeGroup() {
   transition: all 0.2s;
 }
 .icon-btn:hover { color: var(--accent); background: rgba(255, 255, 255, 0.06); }
+.edit-toggle {
+  margin-left: auto;
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+.edit-toggle:hover { border-color: var(--accent); color: var(--accent); }
+.group-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.summary-servers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.summary-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 4px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 0.85rem;
+}
+.summary-chip.chip-broken { border-color: rgba(255, 107, 107, 0.5); }
+.summary-type {
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  background: rgba(255, 255, 255, 0.08);
+}
+.summary-type.plex { color: #e5a00d; background: rgba(229, 160, 13, 0.14); }
+.summary-type.jellyfin { color: #aa5cc3; background: rgba(170, 92, 195, 0.14); }
+.summary-type.emby { color: #52b54b; background: rgba(82, 181, 75, 0.14); }
+.summary-muted { color: var(--text-secondary); font-size: 0.85rem; }
+.summary-text {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  color: var(--text-secondary);
+  font-size: 0.83rem;
+}
+.summary-warn { color: #ffb86b; }
+.labels-section {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.labels-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+.link-btn:disabled { opacity: 0.5; cursor: default; }
+.labels-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 6px;
+}
+.label-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 0.85rem;
+  cursor: pointer;
+  min-width: 0;
+}
+.label-checkbox span { overflow: hidden; text-overflow: ellipsis; }
+.label-checkbox.locked { opacity: 0.75; cursor: default; }
 
 .linked-card {
   border: 1px solid rgba(255, 255, 255, 0.05);

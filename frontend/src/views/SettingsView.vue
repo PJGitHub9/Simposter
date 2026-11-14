@@ -803,25 +803,8 @@ const saveSettings = async () => {
   const newlyAddedTvLibraryIds = localTvShowLibraries.value.filter(l => l.id && !savedTvShowLibraryIds.value.has(String(l.id))).map(l => String(l.id))
   const newlyAddedLibraryIds = [...newlyAddedMovieLibraryIds, ...newlyAddedTvLibraryIds]
 
-  // Kometa Compatibility: auto-check "Overlay" for any library added since the last save
-  // (settings.defaultLabelsToRemove/defaultTvLabelsToRemove.value already hold what's about
-  // to be saved, assigned above from localDefaultLabelsToRemove/localDefaultTvLabelsToRemove).
-  // Mirrors what the startup wizard's "Using Kometa?" toggle does for libraries selected
-  // during onboarding — this covers the same thing for libraries added afterward.
-  if (localKometaCompatibility.value) {
-    for (const id of newlyAddedMovieLibraryIds) {
-      const current = settings.defaultLabelsToRemove.value[id] || []
-      if (!current.includes('Overlay')) {
-        settings.defaultLabelsToRemove.value = { ...settings.defaultLabelsToRemove.value, [id]: [...current, 'Overlay'] }
-      }
-    }
-    for (const id of newlyAddedTvLibraryIds) {
-      const current = settings.defaultTvLabelsToRemove.value[id] || []
-      if (!current.includes('Overlay')) {
-        settings.defaultTvLabelsToRemove.value = { ...settings.defaultTvLabelsToRemove.value, [id]: [...current, 'Overlay'] }
-      }
-    }
-  }
+  // Kometa compatibility needs nothing here: "Overlay" is added when labels are
+  // read (services/labelsToRemove.ts, webhooks._get_default_remove_labels()).
 
   // Poster mode rules that changed since the last save (compared with the last-saved
   // groups); re-applied to the library cache right after the save succeeds.
@@ -1759,9 +1742,7 @@ onMounted(() => {
         :movieLibrariesChanged="sectionsWithChanges.movieLibraries"
         :tvLibrariesChanged="sectionsWithChanges.tvLibraries"
         :initialLibraryGroups="initialLibraryGroups"
-        :sendLogosToPlex="localSendLogosToPlex"
         :kometaCompatibility="localKometaCompatibility"
-        @update:sendLogosToPlex="localSendLogosToPlex = $event; hasUnsavedChanges = true"
         @update:kometaCompatibility="localKometaCompatibility = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @update:libraries="localLibraries = $event; hasUnsavedChanges = true"
         @update:tvShowLibraries="localTvShowLibraries = $event; hasUnsavedChanges = true"
@@ -1859,6 +1840,8 @@ onMounted(() => {
         :retryIntervalHours="localRetryIntervalHours"
         :retryMaxAttempts="localRetryMaxAttempts"
         :reuseCachedPosterDays="localReuseCachedPosterDays"
+        :sendLogosToPlex="localSendLogosToPlex"
+        :logoDefaultsChanged="sectionsWithChanges.logoDefaults"
         :automationChanged="sectionsWithChanges.automation"
         :unsavedChanges="hasUnsavedChanges"
         @update:webhookAutoSend="localWebhookAutoSend = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
@@ -1871,6 +1854,7 @@ onMounted(() => {
         @update:retryIntervalHours="localRetryIntervalHours = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @update:retryMaxAttempts="localRetryMaxAttempts = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @update:reuseCachedPosterDays="localReuseCachedPosterDays = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
+        @update:sendLogosToPlex="localSendLogosToPlex = $event; hasUnsavedChanges = true"
         @save="saveSettings"
       />
 

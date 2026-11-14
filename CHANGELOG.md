@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.8.75 (2026-11-14) — `dev-overlayonly` branch
+
+### Improvements
+- **Sidebar: Artwork and Tools** — each library's submenu is now Batch Edit, Collections (movies), Artwork and Tools instead of up to ten entries. New `components/layout/SectionTabs.vue`, rendered by `App.vue` (`sectionTabs`, `ARTWORK_ROUTES`/`TOOLS_ROUTES`) above the page for the Logos/Backdrops/Square Art/Thumb Art routes and the Overlay Refresh/Media Mirror/Local Assets/Backup routes. Square Art shows when the group has Plex, Thumb Art with Jellyfin/Emby, Media Mirror with two or more servers. Routes are unchanged; `activeSubmenu` maps each route to its Artwork/Tools entry. Jellyfin/Emby-only group tabs use the same entries.
+- **Settings → Libraries** — `LibraryGroupCard.vue` collapses to a summary (servers Plex-first, auto-generate preset, labels removed, poster mode rules, warnings) with Scan and Edit; Remove Group only while editing; a new empty group opens.
+- **Labels to remove per group** — the "Default Labels to Remove" section is gone; each group's Edit view lists its Plex library's labels (`toggle-label`/`refresh-labels` emits; `LibrariesTab.vue` `labelsForLibrary()`/`toggleLibraryLabel()` emit new objects and drop emptied lists). Kometa compatibility is a single checkbox on the page.
+- **Kometa compatibility** — now always adds "Overlay" wherever labels to remove are read (`webhooks._get_default_remove_labels()`, new `services/labelsToRemove.ts` used by both editors and both Batch Edit views; shown ticked and locked in the group checklist). The save-time step that ticked "Overlay" for newly added libraries was removed.
+- **Logos setting** moved from Libraries to Automation ("Send logos with posters by default").
+- **Settings → Media Servers** — `MediaServersTab.vue` is grouped into a "Media servers" area (Plex, Jellyfin, Emby, Silo placeholder), a "Radarr & Sonarr" area marked Optional (two-column, own explanation; `ArrInstancesSection.vue` hint shortened), then "Other" (Poster API). Both grids stack to one column under 900px.
+- **Template Manager** — presets first (`orderedTemplates`: uniformlogo "Movie & TV presets", then kometa "Collection presets (Kometa)"); Default Batch Settings collapsed below them.
+
+### Bug Fixes
+- **Names shown before Save** — the top bar Plex pill and the sidebar's library-group tabs read `mediaServers`/`libraryGroups`, which the Settings page edits in place, so a rename showed up while typing. New store snapshots `savedMediaServers`/`savedLibraryGroups` (set with `recordSavedServerUrls()` on load and after a successful save) feed `TopNav.vue`'s pill labels (Jellyfin/Emby pills too, which otherwise kept the old name until the next 30s status poll) and `App.vue`'s `nonPlexGroupTabs()`/`resolveLibraryTarget()`. Plex library mappings were already staged until Save.
+- **TV labels to remove ignored by automation** — `_get_default_remove_labels()` only read `defaultLabelsToRemove`, so labels set for a TV library (`defaultTvLabelsToRemove`) were never removed by webhooks, auto-generate, scheduled scans or resend. It now reads both lists by library id. The TV editor read the movie lists for its pre-ticked labels; it now uses the show's library.
+
 ## v1.8.74 (2026-11-14) — `dev-overlayonly` branch
 
 ### Bug Fixes

@@ -39,7 +39,7 @@ const emit = defineEmits<{ openScheduler: []; openAdvanced: [] }>()
       </li>
       <li>
         <span class="num">4</span>
-        <p><strong>Keep them current:</strong> Overlay Refresh (🔁 in each library's menu) re-sends posters whose overlay would now look different. The
+        <p><strong>Keep them current:</strong> Overlay Refresh (each library's Tools page) re-sends posters whose overlay would now look different. The
           <button type="button" class="btn-link" @click="emit('openScheduler')">Scheduler</button> sets how often ratings and lists are re-checked.</p>
       </li>
     </ol>

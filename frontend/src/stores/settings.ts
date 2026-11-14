@@ -279,12 +279,20 @@ const mediaServers = ref<MediaServerEntry[]>([])
 // the last load or save. The backend only reuses a saved (masked) key for that
 // same address; the Settings page uses this to say when one must be retyped.
 const savedServerUrls = ref<Record<string, string>>({})
+// Media servers and library groups as of the last load or save. The Settings
+// page edits mediaServers/libraryGroups in place, so anything shown outside it
+// (top bar status pills, sidebar library tabs) reads these instead, and only
+// changes once Save succeeds.
+const savedMediaServers = ref<MediaServerEntry[]>([])
+const savedLibraryGroups = ref<LibraryGroup[]>([])
 
 function recordSavedServerUrls() {
   const out: Record<string, string> = { plex: plex.value.url || '' }
   for (const s of mediaServers.value) out[`ms:${s.id}`] = s.url || ''
   for (const i of arrInstances.value) out[`arr:${i.id}`] = i.url || ''
   savedServerUrls.value = out
+  savedMediaServers.value = JSON.parse(JSON.stringify(mediaServers.value || []))
+  savedLibraryGroups.value = JSON.parse(JSON.stringify(libraryGroups.value || []))
 }
 
 // After a save, a masked key whose address changed was dropped by the backend
@@ -616,6 +624,8 @@ export function useSettingsStore() {
     plexActive,
     mediaServers,
     savedServerUrls,
+    savedMediaServers,
+    savedLibraryGroups,
     libraryGroups,
     arrInstances,
     tmdb,

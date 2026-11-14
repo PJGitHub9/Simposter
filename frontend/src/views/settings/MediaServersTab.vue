@@ -1,10 +1,14 @@
 <template>
   <div class="media-servers-tab">
     <h2>Media Servers</h2>
-    <p class="hint">
-      Connect Simposter to one or more media servers — Plex, Jellyfin, or Emby.
-      More than one can be enabled at once.
-    </p>
+
+    <div class="area-head">
+      <h3 class="area-title">Media servers</h3>
+      <p class="hint">
+        Where Simposter reads your libraries and sends posters. Connect Plex, Jellyfin and/or Emby;
+        more than one can be enabled at once.
+      </p>
+    </div>
 
     <!-- One section per server type (Plex / Jellyfin / Emby), each laid out
          identically -- requested directly so the three "look the same in
@@ -212,16 +216,29 @@
       </div>
     </div>
 
-    <!-- Radarr / Sonarr: read only, their tags feed poster mode rules. -->
-    <ArrInstancesSection type="radarr" :changed="radarrChanged" />
-    <ArrInstancesSection type="sonarr" :changed="sonarrChanged" />
-
     <!-- Placeholder for a planned server type; nothing here is functional. -->
     <div class="section section-coming-soon" aria-disabled="true">
       <h3>Silo <span class="coming-soon-badge">Future update</span></h3>
       <p class="empty-state">Silo support is planned for a future update.</p>
       <button type="button" class="secondary-small add-server-toggle" disabled>+ Add a Silo Server</button>
     </div>
+    </div>
+
+    <!-- Radarr / Sonarr: optional, read only; their tags feed poster mode rules. -->
+    <div class="area-head">
+      <h3 class="area-title">Radarr &amp; Sonarr <span class="optional-tag">Optional</span></h3>
+      <p class="hint">
+        Only needed for poster mode rules based on Radarr or Sonarr tags. Simposter only reads tags and never
+        changes anything in them. Webhooks from Radarr/Sonarr are set up in Settings → Automation.
+      </p>
+    </div>
+    <div class="server-groups-grid">
+      <ArrInstancesSection type="radarr" :changed="radarrChanged" />
+      <ArrInstancesSection type="sonarr" :changed="sonarrChanged" />
+    </div>
+
+    <div class="area-head">
+      <h3 class="area-title">Other</h3>
     </div>
 
     <!-- Poster API: off by default; the sidebar page only appears once it's on
@@ -238,16 +255,6 @@
       </label>
       <router-link v-if="posterApiEnabled && settingsStore.posterApiEnabledSaved.value" to="/poster-api" class="poster-api-link">Open the Poster API page</router-link>
     </div>
-
-    <!-- "When the same item is found on more than one server, prefer..." used
-         to live here as one global setting (Quirk #74). Moved to Settings ->
-         Libraries, scoped per Library Group instead (see
-         LinkedServerLibraries.vue's own preferred-server dropdown) -- one
-         global choice applied to every linked group at once wasn't granular
-         enough once an install has more than one group linked, and the
-         user's own framing ("add it in the library category sections") is
-         also just a better fit: this choice is about a specific library's
-         merged content, not a server-wide default. -->
 
     <div class="save-row">
       <button class="primary" @click="emit('save')">Save Media Servers</button>
@@ -671,6 +678,34 @@ function removePrimaryPlex() {
 
 .server-groups-grid .section {
   margin-bottom: 0;
+}
+.area-head {
+  margin: 8px 0 12px;
+}
+.area-head .hint { margin-bottom: 0; }
+h3.area-title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin: 0 0 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.optional-tag {
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text-secondary);
+}
+@media (max-width: 900px) {
+  .server-groups-grid { grid-template-columns: 1fr; }
 }
 
 h2 {

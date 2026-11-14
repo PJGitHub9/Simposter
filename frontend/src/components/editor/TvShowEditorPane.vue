@@ -22,6 +22,7 @@ import UploadPosterModal from './UploadPosterModal.vue'
 import { getApiBase } from '../../services/apiBase'
 import { notifySendSummary } from '../../services/sendNotify'
 import { mediaServerLabel } from '../../services/mediaServerLabel'
+import { labelsToRemoveFor } from '../../services/labelsToRemove'
 
 // Simple debounce helper
 function debounce<T extends (...args: any[]) => any>(fn: T, delay: number): (...args: Parameters<T>) => void {
@@ -1740,16 +1741,9 @@ const fetchLabels = async () => {
     const data = await res.json()
     labels.value = data.labels || []
     // Apply default labels to remove from settings
-    const defaultLabelsConfig = settings.defaultLabelsToRemove.value || {}
-    let defaultToRemove: string[] = []
-
-    // Handle both legacy array format and new Record format
-    if (Array.isArray(defaultLabelsConfig)) {
-      defaultToRemove = defaultLabelsConfig
-    } else {
-      // Get labels from all libraries (since we don't have library context here)
-      defaultToRemove = Object.values(defaultLabelsConfig).flat()
-    }
+    // This show's library (all TV libraries when unknown; this used to read the
+    // movie list), plus "Overlay" while Kometa compatibility is on.
+    const defaultToRemove = labelsToRemoveFor(props.movie.library_id, 'tv')
 
     selectedLabels.value = new Set(defaultToRemove.filter((label: string) => labels.value.includes(label)))
   } catch (e) {
