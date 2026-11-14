@@ -7,6 +7,8 @@ import type { MovieInput } from '@/services/types'
 
 const props = defineProps<{ movie: MovieInput }>()
 
+const emit = defineEmits<{ (e: 'mode', mode: string): void }>()
+
 const apiBase = getApiBase()
 const mode = ref<string>(props.movie.poster_mode || 'full')
 const reason = ref<string>(props.movie.poster_mode_reason || '')
@@ -76,6 +78,9 @@ async function onChanged(_m: PosterMode | null, updated: number) {
   if (updated > 0) await reloadMode()
 }
 
+// The editor hides its manual settings for an Overlay only title.
+watch(mode, m => emit('mode', m), { immediate: true })
+
 watch(() => props.movie.key, () => {
   mode.value = props.movie.poster_mode || 'full'
   reason.value = props.movie.poster_mode_reason || ''
@@ -100,10 +105,10 @@ watch(() => props.movie.key, () => {
 <style scoped>
 .poster-mode-line {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 12px;
-  margin: 6px 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 16px 0 6px;
   font-size: 12px;
   color: var(--muted);
 }

@@ -18,6 +18,7 @@ from __future__ import annotations
 import io
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -221,6 +222,38 @@ def _usable_background(state: Optional[Dict[str, Any]]) -> Optional[str]:
     return bg if bg and not _self_referencing_background(bg) else None
 
 
+# Editor previews: the base poster is kept in memory for a few minutes so
+# ticking overlays doesn't download the server's full-size poster every time.
+# Sends never use it.
+_PREVIEW_BASE_TTL = 300
+_preview_bases: Dict[Tuple[str, str, Optional[int]], Tuple[float, bytes, str]] = {}
+_preview_lock = threading.Lock()
+
+
+def _preview_base(server_id: str, rating_key: str, season_index: Optional[int], is_tv: bool,
+                  refresh: bool = False) -> Tuple[Optional[bytes], str]:
+    key = (server_id, str(rating_key), season_index)
+    now = time.time()
+    with _preview_lock:
+        hit = _preview_bases.get(key)
+        if hit and not refresh and now - hit[0] < _PREVIEW_BASE_TTL:
+            return hit[1], hit[2]
+    base, base_from = resolve_base(server_id, rating_key, season_index, is_tv)
+    with _preview_lock:
+        for k in [k for k, v in _preview_bases.items() if now - v[0] >= _PREVIEW_BASE_TTL]:
+            _preview_bases.pop(k, None)
+        if base is not None:
+            _preview_bases[key] = (now, base, base_from)
+        else:
+            _preview_bases.pop(key, None)
+    return base, base_from
+
+
+def _forget_preview_base(server_id: str, rating_key: str, season_index: Optional[int]) -> None:
+    with _preview_lock:
+        _preview_bases.pop((server_id, str(rating_key), season_index), None)
+
+
 def resolve_base(server_id: str, rating_key: str, season_index: Optional[int], is_tv: bool) -> Tuple[Optional[bytes], str]:
     """The image to draw overlays on. The server's poster is looked at first
     (the other app may have changed it since the clean copy was saved): when it
@@ -378,7 +411,8 @@ def apply_for_item(server_id: str, rating_key: str, library_id: Optional[str], i
                    season_index: Optional[int] = None,
                    overlay_lists: Optional[Dict[str, Any]] = None,
                    upload: bool = True, title_hint: Optional[str] = None,
-                   year_hint: Any = None) -> Dict[str, Any]:
+                   year_hint: Any = None, preview: bool = False,
+                   refresh_base: bool = False) -> Dict[str, Any]:
     """Draw the preset's overlays (or `overlay_lists`) on this item's clean
     copy and upload the result. Returns {"status": "ok"|"skipped"|"error", ...};
     an ok result carries "image_bytes"/"content_type" (the encoded poster).
@@ -390,7 +424,12 @@ def apply_for_item(server_id: str, rating_key: str, library_id: Optional[str], i
         return {"status": "skipped", "reason": "preset has no overlays"}
 
     log_title = _title_for_log(rating_key, season_index)
-    base, base_from = resolve_base(server_id, rating_key, season_index, is_tv)
+    if preview:
+        upload = False
+        base, base_from = _preview_base(server_id, rating_key, season_index, is_tv, refresh=refresh_base)
+    else:
+        base, base_from = resolve_base(server_id, rating_key, season_index, is_tv)
+        _forget_preview_base(server_id, rating_key, season_index)
     if base is None:
         return {"status": "skipped", "reason": base_from}
 
@@ -419,7 +458,14 @@ def apply_for_item(server_id: str, rating_key: str, library_id: Optional[str], i
 
     try:
         img = render_overlay_only(base, opts, template_id=template_id)
-        payload, content_type = encode_poster_for_plex(img, for_plex=server_id == "plex-1")
+        if preview:
+            # Half size JPEG: a full-size PNG takes ~1s to encode and is several MB.
+            buf = io.BytesIO()
+            img.resize((CANVAS[0] // 2, CANVAS[1] // 2), Image.LANCZOS).save(
+                buf, "JPEG", quality=90, subsampling=0)
+            payload, content_type = buf.getvalue(), "image/jpeg"
+        else:
+            payload, content_type = encode_poster_for_plex(img, for_plex=server_id == "plex-1")
     except Exception as e:
         logger.error("[OVERLAY_ONLY] Rendering %s failed: %s", log_title, e)
         return {"status": "error", "reason": f"render failed: {e}"}

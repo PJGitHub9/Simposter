@@ -115,6 +115,86 @@ const sendButtonLabel = computed(() => {
   return 'Send to Media Server'
 })
 
+// ── Overlay only titles ─────────────────────────────────────────────────────
+// For an Overlay only title the manual settings don't apply: the poster is the
+// server's current one and only the preset's overlays are drawn on it.
+const posterMode = ref('full')
+const overlayOnly = computed(() => posterMode.value === 'overlay_only' && !isApiMode.value && props.movie.mediaType !== 'collection')
+const overlayOnlyMessage = ref('')
+let overlayOnlySeq = 0
+function overlayOnlyBody(extra: Record<string, unknown> = {}) {
+  return {
+    server_id: props.movie.server_id || 'plex-1',
+    rating_key: props.movie.key,
+    is_tv: false,
+    library_id: props.movie.library_id != null ? String(props.movie.library_id) : null,
+    template_id: selectedTemplate.value,
+    preset_id: selectedPreset.value,
+    overlay_config_ids: [...options.value.overlayConfigIds],
+    overlay_config_ids_below: [...options.value.overlayConfigIdsBelow],
+    ...extra,
+  }
+}
+// The preview is drawn on the poster of the server picked with ‹ › in the
+// Current column, so it shows what that server will get.
+function overlayOnlyViewing() {
+  const hit = linkedServers.value.find(s => s.server_id === viewingServerId.value)
+  return hit
+    ? { server_id: hit.server_id, rating_key: hit.rating_key }
+    : { server_id: props.movie.server_id || 'plex-1', rating_key: props.movie.key }
+}
+async function doOverlayOnlyPreview(refreshBase = false) {
+  const seq = ++overlayOnlySeq
+  const key = props.movie.key
+  overlayOnlyMessage.value = ''
+  render.loading.value = true
+  try {
+    const res = await fetch(`${apiBase}/api/overlay-only/preview`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(overlayOnlyBody({ ...overlayOnlyViewing(), refresh_base: refreshBase })),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (seq !== overlayOnlySeq || key !== props.movie.key) return
+    if (data.status === 'ok' && data.image_data) {
+      render.lastPreview.value = data.image_data
+      lastPreviewKey.value = key
+      previewDirty.value = false
+    } else {
+      render.lastPreview.value = ''
+      overlayOnlyMessage.value = data.reason || data.detail || 'Could not build the preview.'
+    }
+  } catch {
+    if (seq === overlayOnlySeq) overlayOnlyMessage.value = 'Could not build the preview.'
+  } finally {
+    if (seq === overlayOnlySeq) render.loading.value = false
+  }
+}
+async function doOverlayOnlySend() {
+  const targets = resolveSendTargets()
+  posterSending.value = true
+  try {
+    const res = await fetch(`${apiBase}/api/overlay-only/send`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(overlayOnlyBody({ targets: targets.map(t => ({ server_id: t.server_id, rating_key: t.rating_key })) })),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.detail || 'Failed to send')
+    if (!data.sent) throw new Error(data.results?.[0]?.reason || 'Failed to send')
+    success(data.sent === data.total ? 'Overlays applied and sent!' : `Sent to ${data.sent}/${data.total} server(s)`)
+    await new Promise(resolve => setTimeout(resolve, 600))
+    await fetchExistingPoster()
+  } catch (err: unknown) {
+    notifyError(err instanceof Error ? err.message : 'Failed to send')
+  } finally {
+    posterSending.value = false
+  }
+}
+watch([overlayOnly, () => props.movie.key, viewingServerId], ([on]) => { if (on) doOverlayOnlyPreview() })
+function refreshCurrentPoster() {
+  fetchExistingPoster(true)
+  if (overlayOnly.value) doOverlayOnlyPreview(true)
+}
+
 const tmdbId = ref<number | null>(null)
 const posters = ref<{ url: string; thumb?: string; has_text?: boolean; language?: string; source?: string }[]>([])
 // Backdrops offered as poster backgrounds. Editor-only: which list is shown, and the
@@ -1320,6 +1400,7 @@ const toggleLabel = (label: string) => {
 }
 
 const doPreview = async () => {
+  if (overlayOnly.value) return doOverlayOnlyPreview()
   if (!bgUrl.value) return
   // Capture the target item's identity and this request's sequence number before
   // it goes out. If the user switches to a different movie/collection, or fires
@@ -1502,6 +1583,7 @@ function onSendModalConfirm(serverIds: string[]) {
 
 const doSend = async () => {
   if (isApiMode.value) return
+  if (overlayOnly.value) return doOverlayOnlySend()
   const targets = resolveSendTargets()
   if (targets.some(t => t.server_id === 'plex-1') && !bgUrl.value) return
   posterSending.value = true
@@ -1859,13 +1941,13 @@ watch(
               </svg>
             </button>
           </div>
-          <div class="preset-row new-preset-row">
+          <div v-if="!overlayOnly" class="preset-row new-preset-row">
             <input v-model="newPresetId" type="text" placeholder="New preset id" class="new-preset-input" />
             <button class="save-preset-btn wide" @click="saveAsNewPreset" title="Save as a new preset">Save As</button>
           </div>
         </div>
 
-        <div class="editor-tabs" role="tablist">
+        <div v-if="!overlayOnly" class="editor-tabs" role="tablist">
           <button
             v-for="tab in editorTabs"
             :key="tab.id"
@@ -1880,7 +1962,7 @@ watch(
           </button>
         </div>
 
-        <div v-show="activeTab === 'image'" class="tab-panel">
+        <div v-show="!overlayOnly && activeTab === 'image'" class="tab-panel">
           <div class="field-row">
             <label class="field-label">
               Images
@@ -2055,7 +2137,7 @@ watch(
           </EditorCard>
         </div>
 
-        <div v-show="activeTab === 'logo'" class="tab-panel">
+        <div v-show="!overlayOnly && activeTab === 'logo'" class="tab-panel">
           <div class="field-row">
             <label class="field-label">
               Logo Mode
@@ -2282,7 +2364,7 @@ watch(
           </EditorCard>
         </div>
 
-        <div v-show="activeTab === 'text'" class="tab-panel">
+        <div v-show="!overlayOnly && activeTab === 'text'" class="tab-panel">
           <TextOverlayPanel
             v-model:enabled="textOverlayEnabled"
             v-model:customText="customText"
@@ -2365,8 +2447,8 @@ watch(
           </TextOverlayPanel>
         </div>
 
-        <div v-show="activeTab === 'extras'" class="tab-panel">
-          <EditorCard title="Border" :default-open="true" :summary="options.borderEnabled ? `${options.borderThickness}px` : 'Off'">
+        <div v-show="overlayOnly || activeTab === 'extras'" class="tab-panel">
+          <EditorCard v-if="!overlayOnly" title="Border" :default-open="true" :summary="options.borderEnabled ? `${options.borderThickness}px` : 'Off'">
             <div class="slider">
               <label class="checkbox-label">
                 <input v-model="options.borderEnabled" type="checkbox" />
@@ -2437,6 +2519,7 @@ watch(
     <div class="preview-pane" :class="{ 'mobile-preview-small': mobilePreviewSmall }">
       <div class="preview-inner">
         <template v-if="!isApiMode">
+        <PosterModeLine v-if="currentCollapsed" v-show="false" :movie="props.movie" @mode="posterMode = $event" />
         <button v-if="currentCollapsed" type="button" class="current-expand" title="Show the current poster and logo" @click="currentCollapsed = false">Current ›</button>
         <div v-else class="preview-existing">
           <button type="button" class="current-collapse" title="Hide this column" @click="currentCollapsed = true">‹ Hide</button>
@@ -2447,7 +2530,7 @@ watch(
           </div>
           <div class="preview-label">
             {{ currentPosterLabel }}
-            <button class="refresh-btn" title="Refresh poster" @click="fetchExistingPoster(true)">
+            <button class="refresh-btn" title="Refresh poster" @click="refreshCurrentPoster">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="23 4 23 10 17 10" />
                 <polyline points="1 20 1 14 7 14" />
@@ -2472,13 +2555,14 @@ watch(
             <img v-if="existingLogo" :key="logoRefreshKey" :src="existingLogo" alt="Existing logo" class="existing-logo-img" />
             <div v-else class="empty-preview small">No logo</div>
           </div>
+          <PosterModeLine :movie="props.movie" class="pm-left" @mode="posterMode = $event" />
         </div>
         </template>
 
         <div class="preview-main">
           <div class="preview-header-row">
             <div class="preview-label">
-              Preview
+              Preview<span v-if="overlayOnly" class="status-badge" title="Overlay only: the preset's overlays on the server's current poster"> Overlay only</span>
               <button type="button" class="mobile-preview-toggle" @click="toggleMobilePreview">{{ mobilePreviewSmall ? 'Larger' : 'Smaller' }}</button>
               <span v-if="loading" class="status-badge">Rendering...</span>
               <span v-else-if="lastPreview && previewDirty" class="status-badge stale" title="Settings changed since this render. It re-renders on its own after a moment; click Preview if it does not.">Not up to date</span>
@@ -2490,11 +2574,11 @@ watch(
               </button>
             </div>
             <div v-else class="preview-actions">
-              <button title="Send Logo Only" class="btn-send-logo btn-inline" :disabled="logoSending || !logoUrl" @click="doSendLogoOnly">
+              <button v-if="!overlayOnly" title="Send Logo Only" class="btn-send-logo btn-inline" :disabled="logoSending || !logoUrl" @click="doSendLogoOnly">
                 <svg v-if="logoSending" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spin"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
                 <span class="btn-label">{{ logoSending ? 'Sending...' : 'Send Logo Only' }}</span>
               </button>
-              <button title="Save to Disk" class="btn-save btn-inline" :disabled="loading" @click="doSave">💾 <span class="btn-label">Save to Disk</span></button>
+              <button v-if="!overlayOnly" title="Save to Disk" class="btn-save btn-inline" :disabled="loading" @click="doSave">💾 <span class="btn-label">Save to Disk</span></button>
               <button :title="sendButtonLabel" class="btn-plex btn-inline" :disabled="loading || posterSending" @click="onSendClick">
                 <svg v-if="posterSending" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spin"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
                 <span v-else>📺</span>
@@ -2508,7 +2592,6 @@ watch(
               </div>
             </div>
           </div>
-          <PosterModeLine :movie="props.movie" />
           <SendToServerModal
             v-if="showSendModal"
             :options="sendModalOptions"
@@ -2517,7 +2600,7 @@ watch(
           />
           <div class="preview-container">
             <img v-if="lastPreview" ref="previewImgRef" :src="lastPreview" alt="Preview" class="preview-img" />
-            <div v-else-if="selectedPoster" class="placeholder-state">
+            <div v-else-if="selectedPoster && !overlayOnly" class="placeholder-state">
               <img :src="selectedPoster" alt="Selected poster" class="placeholder-img" referrerpolicy="no-referrer" />
               <div class="placeholder-overlay">
                 <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -2533,7 +2616,7 @@ watch(
                 <circle cx="8.5" cy="8.5" r="1.5" />
                 <polyline points="21 15 16 10 5 21" />
               </svg>
-              <p>Select a poster to begin</p>
+              <p>{{ overlayOnly ? 'Tick an overlay to see it on the current poster' : 'Select a poster to begin' }}</p>
             </div>
 
             <!-- Loading Overlay -->
@@ -2542,8 +2625,10 @@ watch(
               <p>Rendering...</p>
             </div>
 
+            <p v-if="overlayOnly && overlayOnlyMessage && !lastPreview" class="overlay-only-note">{{ overlayOnlyMessage }}</p>
+
             <PreviewOverlay
-              v-if="lastPreview"
+              v-if="lastPreview && !overlayOnly"
               v-model:show-boxes="showBoundingBox"
               :img="previewImgRef"
               :can-show-boxes="isUniformLogo"
@@ -4226,5 +4311,11 @@ button:disabled {
   font-size: 11px;
   background: rgba(61, 214, 183, 0.15);
   color: var(--accent, #3dd6b7);
+}
+.overlay-only-note {
+  margin: 12px;
+  font-size: 13px;
+  color: var(--muted);
+  text-align: center;
 }
 </style>

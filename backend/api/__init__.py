@@ -38,6 +38,7 @@ from . import (
     overlay_refresh,
     poster_api,
     poster_modes,
+    overlay_only,
 )
 
 router = APIRouter()
@@ -79,3 +80,4 @@ router.include_router(overlay_refresh.router)
 router.include_router(overlay_starters.router)
 router.include_router(poster_api.router)
 router.include_router(poster_modes.router)
+router.include_router(overlay_only.router)
