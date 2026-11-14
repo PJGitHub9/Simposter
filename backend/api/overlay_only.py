@@ -59,7 +59,34 @@ async def api_overlay_only_preview(req: OverlayOnlyRequest):
     data = result["image_bytes"]
     mime = result.get("content_type") or "image/jpeg"
     return {"status": "ok", "base": result.get("base"),
+            # Drawn on Simposter's own poster that already has overlays.
+            "overlaid_base": result.get("base") == overlay_only.OVERLAID_BASE,
+            # Simposter knows the poster on this server has its overlays (offer "Remove overlays").
+            "has_overlays": overlay_only.has_overlays(req.server_id, req.rating_key, req.season_index),
             "image_data": f"data:{mime};base64,{base64.b64encode(data).decode()}"}
+
+
+class RemoveOverlaysRequest(BaseModel):
+    server_id: str = "plex-1"
+    rating_key: str
+    season_index: Optional[int] = None
+
+
+@router.post("/overlay-only/remove-overlays")
+async def api_overlay_only_remove(req: RemoveOverlaysRequest):
+    """Put the poster back without Simposter's overlays (Overlay Refresh's
+    remove: the clean copy for an overlay-only poster, else a re-render from the
+    recorded source art) and stop tracking it."""
+    from .. import database as db
+    from ..overlay_refresh import remove_state
+    state = db.get_overlay_state(req.server_id, req.rating_key, req.season_index)
+    if not state:
+        raise HTTPException(status_code=404, detail="Simposter has no record of overlays on this poster.")
+    result = await run_in_threadpool(remove_state, state, "manual")
+    status = result.get("status")
+    if status not in ("removed", "ok"):
+        raise HTTPException(status_code=409, detail=result.get("detail") or f"Couldn't remove the overlays ({status}).")
+    return {"status": "ok"}
 
 
 @router.post("/overlay-only/send")

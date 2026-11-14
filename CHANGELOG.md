@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.8.76 (2026-11-14) — `dev-overlayonly` branch
+
+### Improvements
+- **Overlay only uses Simposter's plain poster as the base** — `overlay_only.resolve_base()` used to wait ("waiting for the other app's poster") whenever the server's poster matched Simposter's own send. Now a match only holds back when Simposter knows that poster has overlays (`has_overlays()`: an Overlay Refresh `overlay_state` row exists, which `record_send()` keeps exactly for sends with overlays). A plain Simposter render is used and kept as the clean copy. With overlays and no clean copy or source art: automatic runs skip (`HAS_OVERLAYS`); editor previews draw on that poster anyway (`allow_overlaid`, `OVERLAID_BASE`). `WAITING` now only means the poster couldn't be downloaded.
+- **Remove overlays in the editor** — `/api/overlay-only/preview` returns `has_overlays` and `overlaid_base`; new `POST /api/overlay-only/remove-overlays` runs `overlay_refresh.remove_state()` (clean copy for an overlay-only poster, re-render from source art otherwise). Both editors show a notice with a Remove overlays button above the preview.
+
 ## v1.8.75 (2026-11-14) — `dev-overlayonly` branch
 
 ### Improvements
@@ -12,6 +18,7 @@
 - **Template Manager** — presets first (`orderedTemplates`: uniformlogo "Movie & TV presets", then kometa "Collection presets (Kometa)"); Default Batch Settings collapsed below them.
 
 ### Bug Fixes
+- **Overlay only preview message** — both editors showed "Tick an overlay to see it on the current poster" whenever there was no preview, even with overlays ticked; the backend's reason (e.g. `overlay_only.WAITING`, "waiting for the other app's poster", when the server's poster is Simposter's own and there's no clean copy or recorded source art) was a small side note. New `overlayOnlyEmptyText` puts the reason in the preview area, with a plain explanation for the waiting case; the side note was removed.
 - **Names shown before Save** — the top bar Plex pill and the sidebar's library-group tabs read `mediaServers`/`libraryGroups`, which the Settings page edits in place, so a rename showed up while typing. New store snapshots `savedMediaServers`/`savedLibraryGroups` (set with `recordSavedServerUrls()` on load and after a successful save) feed `TopNav.vue`'s pill labels (Jellyfin/Emby pills too, which otherwise kept the old name until the next 30s status poll) and `App.vue`'s `nonPlexGroupTabs()`/`resolveLibraryTarget()`. Plex library mappings were already staged until Save.
 - **TV labels to remove ignored by automation** — `_get_default_remove_labels()` only read `defaultLabelsToRemove`, so labels set for a TV library (`defaultTvLabelsToRemove`) were never removed by webhooks, auto-generate, scheduled scans or resend. It now reads both lists by library id. The TV editor read the movie lists for its pre-ticked labels; it now uses the show's library.
 

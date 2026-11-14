@@ -10,6 +10,19 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.76',
+    date: '2026-11-14',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          "Overlay only now draws the overlays on whatever poster is on the server, including a plain poster Simposter sent earlier. It only holds back when Simposter knows that poster already has its overlays (so they aren't added twice). Before, it waited for another app's poster whenever the poster was one Simposter had sent.",
+          "Overlay only, poster editor: when the poster on the server already has Simposter's overlays, the preview still shows, with a \"Remove overlays\" button that puts the poster back without them.",
+        ],
+      },
+    ],
+  },
+  {
     version: 'v1.8.75',
     date: '2026-11-14',
     sections: [
@@ -28,6 +41,7 @@ export const releaseNotes: ReleaseNote[] = [
       {
         title: 'Bug Fixes',
         items: [
+          "Overlay only titles: when there's nothing to draw the overlays on yet (the poster on the server is still Simposter's own render), the editor's preview now says so. Before, it said \"Tick an overlay\" even with overlays ticked, and the real reason was a small note on the side.",
           "Renaming a media server or a library group in Settings no longer changes the top bar pill or the sidebar until you click Save.",
           "The labels to remove for a TV library were ignored by webhooks, auto-generate, scheduled scans and resends; only movie libraries' labels were removed. The TV show editor also pre-ticked the movie libraries' labels instead of the show's own.",
         ],

@@ -29,6 +29,11 @@ from .config import logger
 
 CANVAS = (2000, 3000)
 WAITING = "waiting for the other app's poster"
+# The poster on the server is Simposter's own and still has its overlays, and
+# there is no clean copy or source art to draw on instead.
+HAS_OVERLAYS = "the poster on the server already has Simposter's overlays"
+# Editor previews only: drawn on that poster anyway, so overlays show twice.
+OVERLAID_BASE = "Simposter's poster that already has overlays"
 _FORMAT_EXT = {"JPEG": "jpg", "PNG": "png", "WEBP": "webp", "GIF": "gif", "BMP": "bmp", "TIFF": "tif"}
 
 _waiting_logged: set = set()
@@ -212,8 +217,19 @@ def _log_waiting(server_id: str, rating_key: str, season_index: Optional[int]) -
         if key in _waiting_logged:
             return
         _waiting_logged.add(key)
-    logger.info("[OVERLAY_ONLY] %s on %s: the poster there is Simposter's own and no source art is "
-                "recorded; waiting for the other app's poster", _title_for_log(rating_key, season_index), server_id)
+    logger.info("[OVERLAY_ONLY] %s on %s: couldn't download the poster there and there's no clean copy "
+                "or source art; waiting for the other app's poster", _title_for_log(rating_key, season_index), server_id)
+
+
+def _log_has_overlays(server_id: str, rating_key: str, season_index: Optional[int]) -> None:
+    key = ("overlaid", server_id, str(rating_key), season_index)
+    with _waiting_lock:
+        if key in _waiting_logged:
+            return
+        _waiting_logged.add(key)
+    logger.info("[OVERLAY_ONLY] %s on %s: the poster there is Simposter's own and already has overlays, and "
+                "there's no clean copy or source art; not adding them again (remove them in the editor)",
+                _title_for_log(rating_key, season_index), server_id)
 
 
 def _usable_background(state: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -238,7 +254,7 @@ def _preview_base(server_id: str, rating_key: str, season_index: Optional[int], 
         hit = _preview_bases.get(key)
         if hit and not refresh and now - hit[0] < _PREVIEW_BASE_TTL:
             return hit[1], hit[2]
-    base, base_from = resolve_base(server_id, rating_key, season_index, is_tv)
+    base, base_from = resolve_base(server_id, rating_key, season_index, is_tv, allow_overlaid=True)
     with _preview_lock:
         for k in [k for k, v in _preview_bases.items() if now - v[0] >= _PREVIEW_BASE_TTL]:
             _preview_bases.pop(k, None)
@@ -254,13 +270,29 @@ def _forget_preview_base(server_id: str, rating_key: str, season_index: Optional
         _preview_bases.pop((server_id, str(rating_key), season_index), None)
 
 
-def resolve_base(server_id: str, rating_key: str, season_index: Optional[int], is_tv: bool) -> Tuple[Optional[bytes], str]:
+def has_overlays(server_id: str, rating_key: str, season_index: Optional[int] = None) -> bool:
+    """Does Simposter know the poster it last sent to this copy has overlays?
+    The Overlay Refresh row exists exactly when the last tracked send carried
+    overlays (a send without overlays deletes it, overlay_refresh.record_send)."""
+    try:
+        return db.get_overlay_state(server_id, str(rating_key), season_index) is not None
+    except Exception:
+        return False
+
+
+def resolve_base(server_id: str, rating_key: str, season_index: Optional[int], is_tv: bool,
+                 allow_overlaid: bool = False) -> Tuple[Optional[bytes], str]:
     """The image to draw overlays on. The server's poster is looked at first
-    (the other app may have changed it since the clean copy was saved): when it
-    isn't what Simposter last sent, it replaces the clean copy and is used.
-    When it IS Simposter's own (or can't be downloaded), the stored clean copy
-    is used; else the art Simposter last rendered from. (None, WAITING) when
-    there's nothing usable."""
+    (the other app may have changed it since the clean copy was saved):
+    - not what Simposter last sent: the other app's poster; it replaces the
+      clean copy and is used;
+    - Simposter's own but with no overlays on record: a plain render, used too
+      (and kept as the clean copy);
+    - Simposter's own with overlays: the stored clean copy, else the art
+      Simposter last rendered from. With nothing else, (None, HAS_OVERLAYS), or
+      with allow_overlaid (editor previews) that poster itself, OVERLAID_BASE.
+    (None, WAITING) when the poster couldn't be downloaded and nothing else is
+    usable."""
     existing = clean_base_path(server_id, rating_key, season_index)
 
     from . import media_server, poster_drift
@@ -272,10 +304,12 @@ def resolve_base(server_id: str, rating_key: str, season_index: Optional[int], i
             data = client.download_image(rating_key, ImageType.POSTER)
         except Exception as e:
             logger.debug("[OVERLAY_ONLY] Couldn't download the poster of %s from %s: %s", rating_key, server_id, e)
+    overlaid = False
     if data:
         matches = poster_drift.matches_sent(server_id, rating_key, data)
+        owner: Tuple[str, Optional[int]] = (str(rating_key), season_index)
         # No fingerprint but History has a send: Simposter's own poster from
-        # before fingerprints existed (v1.8.11) -- never keep that as the clean copy.
+        # before fingerprints existed (v1.8.11).
         if matches is None and db.poster_already_sent(server_id, rating_key):
             matches = True
         if matches is not True and season_index is not None:
@@ -284,9 +318,17 @@ def resolve_base(server_id: str, rating_key: str, season_index: Optional[int], i
             show_key = _show_key_for_season(rating_key)
             if show_key and poster_drift.matches_sent(server_id, show_key, data) is True:
                 matches = True
+                owner = (show_key, None)
         if matches is not True:
             save_clean_base(server_id, rating_key, season_index, data)
             return data, "the server's poster"
+        if not has_overlays(server_id, owner[0], owner[1]):
+            # Simposter's own render without overlays: as good a base as the
+            # other app's poster. Kept as the clean copy, so after the overlays
+            # are added (and the server's poster has them) it's still there.
+            save_clean_base(server_id, rating_key, season_index, data)
+            return data, "Simposter's earlier poster (no overlays)"
+        overlaid = True
 
     if existing is not None:
         try:
@@ -300,6 +342,11 @@ def resolve_base(server_id: str, rating_key: str, season_index: Optional[int], i
         if fetched:
             return fetched, "the art Simposter last used"
 
+    if overlaid:
+        if allow_overlaid:
+            return data, OVERLAID_BASE
+        _log_has_overlays(server_id, rating_key, season_index)
+        return None, HAS_OVERLAYS
     _log_waiting(server_id, rating_key, season_index)
     return None, WAITING
 

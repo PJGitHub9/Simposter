@@ -122,6 +122,47 @@ const sendButtonLabel = computed(() => {
 const posterMode = ref('full')
 const overlayOnly = computed(() => posterMode.value === 'overlay_only' && !isApiMode.value && props.movie.mediaType !== 'collection')
 const overlayOnlyMessage = ref('')
+// The big empty-preview text in Overlay only mode: the backend's reason when
+// it couldn't build a preview (it used to be a small side note while this
+// said "Tick an overlay" even with overlays ticked).
+const OVERLAY_ONLY_WAITING = "waiting for the other app's poster"
+const overlayOnlyEmptyText = computed(() => {
+  if (overlayOnlyMessage.value === OVERLAY_ONLY_WAITING) {
+    return "Couldn't download the poster from this server, and there's no saved copy to draw on yet. " +
+      "Check the server is reachable, then refresh the Current poster."
+  }
+  if (!options.value.overlayConfigIds.length) return 'Tick an overlay to see it on the current poster'
+  if (overlayOnlyMessage.value) return overlayOnlyMessage.value
+  return ''
+})
+// Set by each preview: does Simposter know the poster on the viewed server
+// has its overlays (offer "Remove overlays"), and was the preview drawn on that
+// overlaid poster (so the overlays would show twice)?
+const overlayOnlyHasOverlays = ref(false)
+const overlayOnlyOverlaidBase = ref(false)
+const overlayOnlyTarget = ref<{ server_id: string; rating_key: string; season_index: number | null } | null>(null)
+const removingOverlays = ref(false)
+async function removeOverlaysFromPoster() {
+  const target = overlayOnlyTarget.value
+  if (!target || removingOverlays.value) return
+  removingOverlays.value = true
+  try {
+    const res = await fetch(`${apiBase}/api/overlay-only/remove-overlays`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(target),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.detail || 'Failed to remove the overlays')
+    success('Overlays removed from the poster')
+    await new Promise(resolve => setTimeout(resolve, 600))
+    await fetchExistingPoster(true)
+    await doOverlayOnlyPreview(true)
+  } catch (err) {
+    notifyError(err instanceof Error ? err.message : 'Failed to remove the overlays')
+  } finally {
+    removingOverlays.value = false
+  }
+}
 let overlayOnlySeq = 0
 function overlayOnlyBody(extra: Record<string, unknown> = {}) {
   return {
@@ -158,10 +199,15 @@ async function doOverlayOnlyPreview(refreshBase = false) {
     if (seq !== overlayOnlySeq || key !== props.movie.key) return
     if (data.status === 'ok' && data.image_data) {
       render.lastPreview.value = data.image_data
+      overlayOnlyHasOverlays.value = !!data.has_overlays
+      overlayOnlyOverlaidBase.value = !!data.overlaid_base
+      overlayOnlyTarget.value = { ...overlayOnlyViewing(), season_index: null }
       lastPreviewKey.value = key
       previewDirty.value = false
     } else {
       render.lastPreview.value = ''
+      overlayOnlyHasOverlays.value = false
+      overlayOnlyOverlaidBase.value = false
       overlayOnlyMessage.value = data.reason || data.detail || 'Could not build the preview.'
     }
   } catch {
@@ -2592,6 +2638,16 @@ watch(
             @close="showSendModal = false"
             @send="onSendModalConfirm"
           />
+          <div v-if="overlayOnly && lastPreview && (overlayOnlyHasOverlays || overlayOnlyOverlaidBase)" class="overlay-only-banner" :class="{ warn: overlayOnlyOverlaidBase }">
+            <span v-if="overlayOnlyOverlaidBase">
+              The poster on this server already has Simposter's overlays and there's no clean copy to draw on, so they show twice here.
+              Remove them first, then send.
+            </span>
+            <span v-else>This server's poster has Simposter's overlays; the preview is drawn on the poster without them.</span>
+            <button type="button" class="banner-btn" :disabled="removingOverlays" @click="removeOverlaysFromPoster">
+              {{ removingOverlays ? 'Removing…' : 'Remove overlays' }}
+            </button>
+          </div>
           <div class="preview-container">
             <img v-if="lastPreview" ref="previewImgRef" :src="lastPreview" alt="Preview" class="preview-img" />
             <div v-else-if="selectedPoster && !overlayOnly" class="placeholder-state">
@@ -2610,7 +2666,7 @@ watch(
                 <circle cx="8.5" cy="8.5" r="1.5" />
                 <polyline points="21 15 16 10 5 21" />
               </svg>
-              <p>{{ overlayOnly ? 'Tick an overlay to see it on the current poster' : 'Select a poster to begin' }}</p>
+              <p>{{ overlayOnly ? overlayOnlyEmptyText : 'Select a poster to begin' }}</p>
             </div>
 
             <!-- Loading Overlay -->
@@ -2619,7 +2675,6 @@ watch(
               <p>Rendering...</p>
             </div>
 
-            <p v-if="overlayOnly && overlayOnlyMessage && !lastPreview" class="overlay-only-note">{{ overlayOnlyMessage }}</p>
 
             <PreviewOverlay
               v-if="lastPreview && !overlayOnly"
@@ -3659,8 +3714,43 @@ button:disabled {
   opacity: 0.3;
 }
 
+.overlay-only-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.overlay-only-banner.warn {
+  border-color: rgba(255, 184, 107, 0.45);
+  background: rgba(255, 184, 107, 0.08);
+  color: #ffd7a8;
+}
+.overlay-only-banner span { flex: 1 1 260px; }
+.banner-btn {
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.banner-btn:disabled { opacity: 0.6; cursor: default; }
 .empty-preview p {
   font-size: 14px;
+  max-width: 420px;
+  text-align: center;
+  line-height: 1.5;
+  padding: 0 16px;
 }
 
 .loading-overlay {
@@ -4305,11 +4395,5 @@ button:disabled {
   font-size: 11px;
   background: rgba(61, 214, 183, 0.15);
   color: var(--accent, #3dd6b7);
-}
-.overlay-only-note {
-  margin: 12px;
-  font-size: 13px;
-  color: var(--muted);
-  text-align: center;
 }
 </style>
