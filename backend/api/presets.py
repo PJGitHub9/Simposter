@@ -6,7 +6,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, UploadFile, File, Body
 
 from ..config import load_presets, save_presets, USER_PRESETS_PATH, logger, settings
-from ..schemas import PresetDeleteRequest, PresetSaveRequest
+from ..schemas import PresetAddOverlaysRequest, PresetDeleteRequest, PresetSaveRequest
 from .. import database as db
 from .template_manager import _get_fallback_settings
 from ..middleware.validation import validate_preset_id
@@ -681,6 +681,10 @@ def _default_preset_entry(preset: dict) -> dict:
     }
     if preset.get("season_options"):
         entry["season_options"] = preset["season_options"]
+    from ..simposter_assets import asset_url
+    preview = asset_url(preset.get("preview"))
+    if preview:
+        entry["preview_url"] = preview  # shown by the setup wizard; ignored on import
     return entry
 
 
@@ -977,6 +981,41 @@ def api_save_preset(req: PresetSaveRequest):
     except Exception as e:
         logger.error(f"[PRESETS] Error saving preset: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to save preset: {e}")
+
+
+@router.post("/presets/add-overlays")
+def api_add_overlays(req: PresetAddOverlaysRequest):
+    """Add overlays to a preset for movies and series only (setup wizard).
+
+    New ids go after the existing ones, without repeats. Season posters never
+    get them: a season config without its own overlay list would inherit the
+    series list (Quirk #198), so it is given empty lists instead. A season
+    config that already has its own list is left alone."""
+    template_id = req.template_id or "uniformlogo"
+    preset_id = validate_preset_id(req.preset_id)
+    ids = [str(i) for i in req.config_ids if str(i or "").strip()]
+    if not ids:
+        raise HTTPException(status_code=400, detail="config_ids is empty")
+    current = db.get_preset(template_id, preset_id)
+    if not current:
+        raise HTTPException(status_code=404, detail="Preset not found")
+    options = dict(current["options"] or {})
+    stored_season = current.get("season_options") or {}
+    merged = list(options.get("overlay_config_ids") or [])
+    for i in ids:
+        if i not in merged:
+            merged.append(i)
+    season_full = None
+    if "overlay_config_ids" not in stored_season:
+        season_full = db.resolve_season_options(options, stored_season)
+        season_full["overlay_config_ids"] = []
+        season_full["overlay_config_ids_below"] = []
+    options["overlay_config_ids"] = merged
+    db.save_preset(template_id, preset_id, current.get("name") or preset_id, options, season_full)
+    from ..overlay_cache import refresh_preset
+    refresh_preset(template_id, preset_id)
+    logger.info(f"[PRESETS] Added overlays {ids} to preset {preset_id} (movies and series only)")
+    return {"status": "ok", "overlay_config_ids": merged, "season_cleared": season_full is not None}
 
 
 @router.post("/presets/save-season-options")

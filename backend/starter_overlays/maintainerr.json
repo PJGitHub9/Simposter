@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "overlays": [
+    {
+      "id": "starter-maintainerr-leaving-soon",
+      "name": "Maintainerr - Leaving Soon",
+      "description": "A red border and \"Leaving <day>\" text on titles a Maintainerr collection will remove. To be used with a Maintainerr instance (Settings → Ratings & Lists).",
+      "notes": "To be used with Maintainerr instances: the layers only show on titles in a Maintainerr collection (Settings → Ratings & Lists → Maintainerr). Turn off Maintainerr's own overlays. Border image by netplexflix: https://github.com/netplexflix/Overlays (downloaded from that repo when added).",
+      "credit": {
+        "author": "netplexflix (border image)",
+        "url": "https://github.com/netplexflix/Overlays"
+      },
+      "min_version": "v1.8.61",
+      "conditions": [],
+      "fonts": [],
+      "elements": [
+        {
+          "type": "full_cover_image",
+          "position_x": 0.5,
+          "position_y": 0.5,
+          "name": "Leaving Soon Border",
+          "conditions": [
+            {
+              "field": "days_until_removal",
+              "op": "exists"
+            }
+          ],
+          "url": "https://raw.githubusercontent.com/netplexflix/Overlays/74d80171e4c7278d6ff778b6672a9259ecbf8123/UMTK/red_frame_thicker_bottom.png"
+        },
+        {
+          "type": "text_label",
+          "position_x": 0.5,
+          "position_y": 0.97,
+          "anchor": "bottom-center",
+          "text": "Leaving {leaving}",
+          "font_family": "Arial",
+          "font_size": 125,
+          "font_color": "#FFFFFF",
+          "text_align": "center",
+          "name": "Leaving Text",
+          "conditions": [
+            {
+              "field": "removal_date",
+              "op": "exists"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

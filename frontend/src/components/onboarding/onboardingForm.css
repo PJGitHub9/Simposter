@@ -1,0 +1,77 @@
+/* Form styles shared by the wizard's step components (loaded scoped by each
+   one). Same values as OnboardingModal.vue's own ob-* rules. */
+.ob-form { display: flex; flex-direction: column; gap: 14px; }
+.ob-label {
+  font-size: 11px; font-weight: 600; color: #a8b3cf;
+  text-transform: uppercase; letter-spacing: 0.05em;
+  margin-bottom: 4px; display: block;
+}
+.ob-input {
+  width: 100%; padding: 9px 11px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px; color: #eef2ff; font-size: 14px;
+  box-sizing: border-box; transition: border-color 0.15s;
+}
+.ob-input:focus { outline: none; border-color: var(--accent, #3dd6b7); }
+.ob-key-row { display: flex; flex-direction: column; gap: 5px; }
+.ob-key-header { display: flex; align-items: center; justify-content: space-between; }
+.ob-key-input-row { display: flex; gap: 6px; }
+.ob-key-input-row .ob-input { flex: 1; }
+.ob-key-link { font-size: 11px; color: var(--accent, #3dd6b7); text-decoration: none; }
+.ob-key-link:hover { text-decoration: underline; }
+.ob-key-status { font-size: 12px; padding: 3px 0; }
+.ob-key-status.ok { color: var(--accent, #3dd6b7); }
+.ob-key-status.error { color: #ff8080; }
+.ob-btn-test {
+  padding: 0 14px; background: rgba(255, 255, 255, 0.07); color: #dbe4ff;
+  border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 8px; font-size: 13px;
+  font-weight: 600; cursor: pointer; white-space: nowrap; display: flex; align-items: center; gap: 6px;
+  transition: background 0.15s; flex-shrink: 0; min-height: 36px;
+}
+.ob-btn-test:disabled { opacity: 0.45; cursor: not-allowed; }
+.ob-btn-test:not(:disabled):hover { background: rgba(255, 255, 255, 0.11); }
+.ob-optional { font-size: 10px; color: #8892aa; text-transform: uppercase; margin-left: 6px; }
+.ob-lib-section { display: flex; flex-direction: column; gap: 6px; }
+.ob-lib-heading { font-size: 11px; font-weight: 600; color: #a8b3cf; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 2px; }
+.ob-lib-row {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px;
+  cursor: pointer; font-size: 14px; color: #c8d0e0; transition: all 0.15s; user-select: none;
+}
+.ob-lib-row:hover { background: rgba(255, 255, 255, 0.04); }
+.ob-lib-row.selected { border-color: rgba(61, 214, 183, 0.4); background: rgba(61, 214, 183, 0.08); color: #eef2ff; }
+.ob-lib-row.disabled { cursor: default; opacity: 0.75; }
+.ob-checkbox {
+  width: 18px; height: 18px; border: 2px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px; display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; transition: all 0.15s;
+}
+.ob-checkbox.checked { background: var(--accent, #3dd6b7); border-color: var(--accent, #3dd6b7); color: #0b0d14; }
+.ob-checkbox.radio { border-radius: 50%; }
+.ob-server-form { padding: 14px; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; display: flex; flex-direction: column; gap: 10px; }
+.ob-server-heading { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #eef2ff; cursor: pointer; user-select: none; }
+.ob-server-icon { width: 18px; height: 18px; flex-shrink: 0; }
+.ob-hint-text { font-size: 12px; color: #8892aa; margin-top: 4px; line-height: 1.45; }
+.ob-hint-text code { font-family: monospace; background: rgba(255,255,255,0.06); padding: 1px 5px; border-radius: 4px; }
+.ob-error { padding: 10px 12px; background: rgba(255, 100, 100, 0.1); border: 1px solid rgba(255, 100, 100, 0.25); border-radius: 8px; color: #ff8080; font-size: 13px; }
+.ob-success { padding: 10px 12px; background: rgba(61, 214, 183, 0.1); border: 1px solid rgba(61, 214, 183, 0.25); border-radius: 8px; color: #3dd6b7; font-size: 13px; }
+.ob-info-box { padding: 10px 12px; background: rgba(91, 141, 238, 0.1); border: 1px solid rgba(91, 141, 238, 0.25); border-radius: 8px; color: #a8c4f0; font-size: 13px; line-height: 1.5; }
+.ob-row-body { flex: 1; min-width: 0; }
+.ob-row-title { font-size: 14px; color: inherit; }
+.ob-row-desc { font-size: 12px; color: #8892aa; line-height: 1.4; margin-top: 2px; }
+.ob-row-status { font-size: 12px; flex-shrink: 0; }
+.ob-row-status.ok { color: var(--accent, #3dd6b7); }
+.ob-row-status.error { color: #ff8080; }
+.ob-small-btn {
+  padding: 5px 10px; background: rgba(255, 255, 255, 0.07); color: #dbe4ff;
+  border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 7px; font-size: 12px;
+  font-weight: 600; cursor: pointer; white-space: nowrap;
+}
+.ob-small-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.ob-spinner {
+  display: inline-block; width: 14px; height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.25); border-top-color: currentColor;
+  border-radius: 50%; animation: ob-spin 0.8s linear infinite;
+}
+@keyframes ob-spin { to { transform: rotate(360deg); } }

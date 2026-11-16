@@ -95,6 +95,13 @@ class PresetSaveRequest(BaseModel):
     season_options: Optional[Dict[str, Any]] = None
 
 
+class PresetAddOverlaysRequest(BaseModel):
+    """Append overlays to a preset's movie/series overlay list (setup wizard)."""
+    template_id: str = "uniformlogo"
+    preset_id: str
+    config_ids: List[str]
+
+
 class PresetDeleteRequest(BaseModel):
     template_id: str = "uniformlogo"
     preset_id: str

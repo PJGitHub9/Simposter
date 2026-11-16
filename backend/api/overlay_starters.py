@@ -148,6 +148,9 @@ def _find(starter_id: str) -> Dict[str, Any]:
     return starter
 
 
+from ..simposter_assets import asset_url  # noqa: E402
+
+
 @router.get("/overlay-starters")
 def api_list_starters(refresh: bool = False):
     items = []
@@ -161,6 +164,7 @@ def api_list_starters(refresh: bool = False):
             "installed": db.get_overlay_config(s["id"]) is not None,
             "needs_version": _version_block(s),
             "source": s.get("_source"),
+            "preview_url": asset_url(s.get("preview")),
         })
     items.sort(key=lambda i: i["name"].lower())
     return {"starters": items}

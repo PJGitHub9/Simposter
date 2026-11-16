@@ -10,6 +10,43 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.80',
+    date: '2026-11-16',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          "Setup wizard: the default presets and starter overlays now show a picture of what they look like. Click one to see it larger.",
+          "Setup wizard: a new Library groups step right after picking libraries. Libraries with the same name on different servers start out in one group (\"4k Movies\" and \"4k-Movies\" count as the same name); you can rename a group or move a library to another group or its own.",
+          "Setup wizard: a new Group settings step after Radarr & Sonarr. Pick each group's Radarr or Sonarr and add poster mode rules (a Plex label or Radarr/Sonarr tag gives matching titles Overlay only or Leave alone), the same rules as Settings → Libraries.",
+          "Setup wizard: the Automation step can turn on Overlay Refresh for every library group, with the time it runs and the Plex label for posters with overlays (default \"Simposter-Overlay\").",
+        ],
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          "Running the setup wizard again: a saved Jellyfin or Emby connection now keeps its API key, so Test works without typing it again. Changing the address clears it, since a saved key is only used with the address it was saved for.",
+          "Setup wizard: pressing Next on the server step now tests any server you ticked but didn't test yourself. Before, testing only one server dropped the others from the wizard (their libraries disappeared). A server that doesn't connect keeps you on that step with its error; leave its fields empty to skip it.",
+        ],
+      },
+    ],
+  },
+  {
+    version: 'v1.8.79',
+    date: '2026-11-16',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          "The setup wizard now finishes the job: pick your default preset and any starter overlays, connect Radarr and Sonarr (Simposter can create its webhook in them for you), and add Maintainerr, MDBList, WeTrakr, SIMKL or Floppy keys. When you click Finish, new movies and shows get their poster automatically with that preset.",
+          "New starter overlay: Maintainerr - Leaving Soon. A red border and \"Leaving <day>\" text on titles Maintainerr is about to remove. Meant for Maintainerr users.",
+          "Overlays added in the wizard go on the preset's movie and show posters, not season posters.",
+          "Running the wizard again only changes what you change in it; your existing libraries, labels and automation settings are kept.",
+        ],
+      },
+    ],
+  },
+  {
     version: 'v1.8.78',
     date: '2026-11-16',
     sections: [

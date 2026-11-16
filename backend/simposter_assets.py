@@ -257,3 +257,19 @@ def get_full_map() -> dict[str, str]:
     for slug, url in _fetch_logos().items():
         merged[slug] = url
     return merged
+
+
+# ── Preview images (setup wizard) ──────────────────────────────────────────
+_ASSETS_RAW_BASE = "https://raw.githubusercontent.com/PJGitHub9/simposter-assets/main/"
+_PREVIEW_PATH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*\.(jpg|jpeg|png|webp)$", re.IGNORECASE)
+
+
+def asset_url(path: object) -> Optional[str]:
+    """Link to an image in simposter-assets from a repo-relative path, as used
+    by the `preview` field of default presets and starter overlays. Anything
+    that isn't a plain relative image path (absolute, `..`, a URL) gives None."""
+    if not isinstance(path, str) or not _PREVIEW_PATH_RE.match(path):
+        return None
+    if ".." in path.split("/"):
+        return None
+    return _ASSETS_RAW_BASE + urllib.parse.quote(path)

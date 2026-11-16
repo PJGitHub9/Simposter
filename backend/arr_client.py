@@ -69,6 +69,106 @@ def _get(url: str, api_key: str, path: str, timeout: int) -> Any:
         raise ArrError("The answer wasn't JSON; check the address (including any URL base)")
 
 
+def _send(method: str, url: str, api_key: str, path: str, json_body: Any = None, timeout: int = 30):
+    """Like _get(), but returns (status_code, parsed JSON or None) so a 400
+    validation answer can be read. Only used to create the Simposter webhook."""
+    base = str(url or "").strip().rstrip("/")
+    if not base.lower().startswith(("http://", "https://")):
+        raise ArrError("The address must start with http:// or https://")
+    try:
+        r = requests.post(f"{base}{path}", json=json_body,
+                          headers={"X-Api-Key": str(api_key or ""), "User-Agent": api_user_agent()},
+                          timeout=timeout, allow_redirects=False) if method == "POST" else None
+    except requests.RequestException as e:
+        raise ArrError(redact_secrets(f"Couldn't reach {base}: {e}"))
+    if r is None:
+        raise ArrError(f"Unsupported method {method}")
+    if r.status_code in (401, 403):
+        raise ArrError("The API key was rejected")
+    if 300 <= r.status_code < 400:
+        raise ArrError("The address redirects somewhere else; use the direct address (including any URL base)")
+    try:
+        data = r.json()
+    except ValueError:
+        data = None
+    return r.status_code, data
+
+
+def build_webhook_url(type: str, simposter_url: str, template_id: str, preset_id: str, secret: str) -> str:
+    """The Simposter webhook URL Radarr/Sonarr should call (same shape as
+    Settings -> Automation's generator)."""
+    from urllib.parse import quote, urlencode
+    base = str(simposter_url or "").strip().rstrip("/")
+    url = f"{base}/api/webhook/{type}/{quote(str(template_id), safe='')}/{quote(str(preset_id), safe='')}"
+    params = []
+    if type == "sonarr":
+        params.append(("include_seasons", "true"))
+    if secret:
+        params.append(("secret", secret))
+    return f"{url}?{urlencode(params)}" if params else url
+
+
+def _field(entry: Dict[str, Any], name: str):
+    for f in entry.get("fields") or []:
+        if isinstance(f, dict) and f.get("name") == name:
+            return f
+    return None
+
+
+def create_webhook(instance: Dict[str, Any], webhook_url: str) -> Dict[str, Any]:
+    """Add a "Simposter" webhook (on import and upgrade) to one Radarr/Sonarr.
+    Leaves things alone when a Simposter webhook is already there. Radarr/
+    Sonarr test the URL before saving, so an address they can't reach comes
+    back as an error naming it."""
+    from urllib.parse import urlparse
+    type_ = str(instance.get("type") or "")
+    app = type_.capitalize() or "Radarr"
+    url, key = instance.get("url"), instance.get("apiKey")
+    out = {"status": "error", "name": "", "error": ""}
+    try:
+        existing = _get(url, key, "/api/v3/notification", 15)
+        for n in existing if isinstance(existing, list) else []:
+            if not isinstance(n, dict) or n.get("implementation") != "Webhook":
+                continue
+            f = _field(n, "url")
+            if f and f"/api/webhook/{type_}/" in str(f.get("value") or ""):
+                return {"status": "exists", "name": str(n.get("name") or ""), "error": ""}
+        schema = _get(url, key, "/api/v3/notification/schema", 15)
+        entry = next((s for s in schema if isinstance(s, dict) and s.get("implementation") == "Webhook"), None)             if isinstance(schema, list) else None
+        if not entry:
+            out["error"] = f"{app} didn't offer a Webhook connection type"
+            return out
+        entry["name"] = "Simposter"
+        for k in list(entry.keys()):
+            if k.startswith("on") and isinstance(entry[k], bool):
+                entry[k] = False
+        entry["onDownload"] = True
+        entry["onUpgrade"] = True
+        uf = _field(entry, "url")
+        if uf is None:
+            entry.setdefault("fields", []).append({"name": "url", "value": webhook_url})
+        else:
+            uf["value"] = webhook_url
+        mf = _field(entry, "method")
+        if mf is not None:
+            mf["value"] = 1  # POST
+        status, data = _send("POST", url, key, "/api/v3/notification", entry)
+    except ArrError as e:
+        out["error"] = str(e)
+        return out
+    if status >= 400:
+        msg = ""
+        if isinstance(data, list) and data and isinstance(data[0], dict):
+            msg = str(data[0].get("errorMessage") or "")
+        elif isinstance(data, dict):
+            msg = str(data.get("message") or "")
+        p = urlparse(webhook_url)
+        out["error"] = redact_secrets(f"{app} couldn't reach Simposter at {p.scheme}://{p.netloc}: {msg or f'answer {status}'}")
+        return out
+    logger.info("[ARR] Created the Simposter webhook in %s (%s)", instance.get("name") or app, url)
+    return {"status": "created", "name": "Simposter", "error": ""}
+
+
 def test_connection(type: str, url: str, api_key: str) -> Dict[str, Any]:
     out = {"ok": False, "app": "", "version": "", "error": ""}
     if type not in TYPES:

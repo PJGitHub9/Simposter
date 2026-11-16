@@ -45,6 +45,30 @@ def api_arr_test(req: ArrTestRequest):
     return arr_client.test_connection(req.type, req.url, key)
 
 
+class ArrWebhookRequest(BaseModel):
+    simposter_url: str
+    template_id: str = "uniformlogo"
+    preset_id: str
+
+
+@router.post("/arr/{instance_id}/webhook")
+def api_arr_webhook(instance_id: str, req: ArrWebhookRequest):
+    """Create the Simposter webhook inside a saved Radarr/Sonarr instance
+    (setup wizard). The instance's stored key is used."""
+    from .. import database as db
+    instance = arr_client.get_instance(instance_id)
+    if not instance:
+        raise HTTPException(status_code=404, detail="Unknown Radarr/Sonarr instance (save it first)")
+    if not str(req.simposter_url or "").strip().lower().startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="The Simposter address must start with http:// or https://")
+    secret = str(((db.get_ui_settings() or {}).get("automation") or {}).get("webhookSecret") or "")
+    url = arr_client.build_webhook_url(instance.get("type"), req.simposter_url, req.template_id, req.preset_id, secret)
+    result = arr_client.create_webhook(instance, url)
+    # The page never sees the webhook secret (it's masked in Settings).
+    from ..config import redact_secrets
+    return {**result, "url": redact_secrets(url)}
+
+
 @router.get("/arr/{instance_id}/tags")
 def api_arr_tags(instance_id: str):
     if not arr_client.get_instance(instance_id):

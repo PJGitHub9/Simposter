@@ -1,5 +1,26 @@
 # Changelog
 
+## v1.8.80 (2026-11-16) — `dev-overlayonly` branch
+
+### New Features
+- **Wizard previews** — `simposter_assets.asset_url()` turns a repo-relative `preview` path (plain image path, no `..`/URL) into a raw.githubusercontent link; `/api/overlay-starters` items get `preview_url`, `/api/presets/default-template` preset entries too (ignored on import). `LookStep.vue` shows a thumbnail per preset/starter with a click-to-enlarge lightbox. The pictures live in simposter-assets `previews/`.
+- **Library groups step** (`groups`, after `libraries`) — `onboarding/groupProposals.ts` (`proposeGroups`, `moveMember`, `moveTargets`, `finalizeGroups`, `groupsChanged`; names match ignoring case, spaces, dashes, underscores; one library per server per group; ids `group-{type}-{plexId}` or `group-{type}-{server}-{library}`) and `onboarding/GroupsStep.vue`. Groups are saved on leaving the step; the Finish-time group creation is gone. On a re-run, existing groups can be renamed and receive newly picked libraries; their own libraries stay put. Groups this run saved stay editable after going Back.
+- **Group settings step** (`grouprules`, after `arr`) — `onboarding/GroupRulesStep.vue`: per group a Radarr/Sonarr select (starts from the arr step's choice) and `PosterModeRules.vue`; only changed groups are written, then `reevaluatePosterModes()` for groups whose rules changed. Replaces the Finish-time `applyArrLinks()`.
+- **Overlay Refresh on the Automation step** — switch, hour and Plex label; on Finish `POST /api/overlay-refresh/config` for every group (first run only when on; re-run only when changed).
+
+### Bug Fixes
+- **Wizard re-run lost the Jellyfin/Emby API key** — the connect step left the key blank on purpose (from before test-connection could resolve the mask). It now fills the masked key, sends the saved server's `server_id` with the test (backend uses the stored key, same origin only, Quirk #81) and keeps the saved id so the save restores the key; editing the address clears it (`keyNeedsReentry`). Test errors show the backend's message.
+- **Wizard dropped untested servers** — Next on the connect step set `wants*` false for any picked server that wasn't tested, so testing only Plex dropped Jellyfin (no libraries, not saved). Next now runs the test for every picked server that's filled in but untested (`untestedServers()`); a failure stays on the step with its error. Next is enabled when something is connected or ready to test. A picked server left empty is still skipped.
+
+## v1.8.79 (2026-11-16) — `dev-overlayonly` branch
+
+### New Features
+- **Setup wizard covers the rest of setup** — three new steps in `OnboardingModal.vue` (`components/onboarding/LookStep.vue`, `ArrStep.vue`, `ExtrasStep.vue`, shared `onboardingForm.css`). Look: default preset (defaults to `simposter-main`) and starter overlays (installed on Next). Radarr & Sonarr: add/test instances (saved on Test & add), a Simposter address, and "Set up webhook", which calls the new `POST /api/arr/{id}/webhook` (`arr_client.create_webhook()`: GET notification schema, POST a Webhook named "Simposter" with only On Import/On Upgrade on; leaves an existing Simposter webhook alone; reports when Radarr/Sonarr can't reach the address). Extras: Maintainerr, MDBList, WeTrakr/SIMKL client id, Floppy, each with Test. At Finish: auto-generate on with the chosen preset for every library group, groups linked to the chosen Radarr/Sonarr instance, ticked overlays added to the preset via new `POST /api/presets/add-overlays` (movie/show list only; a preset with no season overlay list gets an empty one so seasons don't inherit them). Finish screen notes that existing posters need a Batch Edit.
+- **Maintainerr starter overlay** — `backend/starter_overlays/maintainerr.json` ("Maintainerr - Leaving Soon", border image linked from netplexflix/Overlays at a fixed commit, "Leaving {leaving}" text; layers only draw when Maintainerr has a removal date).
+
+### Bug Fixes
+- **Wizard re-runs changed settings that weren't touched** — a re-run selected every Plex library, re-enabled webhook auto-send, forced retry-until-template-met and rewrote labels to remove. Now only on a first run; auto-generate and Radarr/Sonarr links only change on a re-run when the preset or instance is changed there.
+
 ## v1.8.78 (2026-11-16) — `dev-overlayonly` branch
 
 ### Bug Fixes
