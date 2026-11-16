@@ -494,6 +494,10 @@ class JellyfinClient(MediaServerClient):
                 "Recursive": "true",
                 "IncludeItemTypes": item_type,
                 "Fields": "ProviderIds",
+                # Without this, a library with "group movies into collections"
+                # returns a movie that's in a BoxSet (Rocky, Moana...) only as
+                # the BoxSet, so the lookup never finds it (Quirk #230).
+                "CollapseBoxSetItems": "false",
             }
             if library_id:
                 # Real bug fix, not defensive: without this, a tmdb_id present

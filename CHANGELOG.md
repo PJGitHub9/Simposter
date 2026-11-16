@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.8.81 (2026-11-16) — `dev-overlayonly` branch
+
+### Bug Fixes
+- **Jellyfin lookups missed movies in a collection** — `JellyfinClient.find_item_by_external_id()` queried `/Items` without `CollapseBoxSetItems=false`, so with Jellyfin's "group movies into collections" on, a movie in a BoxSet came back only as the BoxSet and the TMDb match failed. Affected every send-time lookup by id: Batch Edit's linked-server sync, webhook cross-server sync, Media Mirror, stale-id recovery. The scan's `list_items()` already sent the flag, which is why the cache had these movies. Found from a user's batch run: all six titles that reached only Plex were in a Jellyfin collection, none of the 14 that reached Jellyfin were.
+
 ## v1.8.80 (2026-11-16) — `dev-overlayonly` branch
 
 ### New Features

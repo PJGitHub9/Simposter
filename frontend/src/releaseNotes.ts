@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.81',
+    date: '2026-11-16',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          "Batch Edit, webhooks and Media Mirror skipped Jellyfin for movies that Jellyfin groups into a collection (Rocky, Moana 2, 101 Dalmatians...), sending only to Plex with \"no item with TMDb ... in its linked library\" in the log. Those movies are now found and sent.",
+        ],
+      },
+    ],
+  },
+  {
     version: 'v1.8.80',
     date: '2026-11-16',
     sections: [
