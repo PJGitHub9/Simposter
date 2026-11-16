@@ -1232,6 +1232,21 @@ def init_database():
             )
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_overlay_state_library ON overlay_state(server_id, library_id)")
+        # A tracked poster whose item disappeared (404) is parked here instead
+        # of being forgotten, so it can be re-attached when the title comes
+        # back under a new id (Plex rating key / Jellyfin item id). See
+        # overlay_refresh.restore_parked().
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS overlay_state_parked (
+                server_id TEXT NOT NULL,
+                rating_key TEXT NOT NULL,
+                season_index INTEGER NOT NULL DEFAULT -1,
+                library_id TEXT,
+                row_json TEXT NOT NULL,
+                parked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (server_id, rating_key, season_index)
+            )
+        """)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS overlay_refresh_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2845,6 +2860,73 @@ def count_overlay_states(pairs: List[tuple]) -> int:
         params += [sid, str(lid)]
     with get_db() as conn:
         return conn.execute(f"SELECT COUNT(*) FROM overlay_state WHERE {clause}", params).fetchone()[0]
+
+
+def park_overlay_state(server_id: str, rating_key: str, season_index: Optional[int] = None) -> bool:
+    """Move a tracked poster whose item is gone into overlay_state_parked,
+    so it can be re-attached if the title comes back under a new id."""
+    row = get_overlay_state(server_id, rating_key, season_index)
+    if not row:
+        return False
+    with get_db() as conn:
+        conn.execute("""
+            INSERT OR REPLACE INTO overlay_state_parked (server_id, rating_key, season_index, library_id, row_json, parked_at)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        """, (server_id, str(rating_key), _season_db(season_index),
+              str(row["library_id"]) if row.get("library_id") is not None else None,
+              json.dumps(row, default=str)))
+        conn.execute(
+            "DELETE FROM overlay_state WHERE server_id = ? AND rating_key = ? AND season_index = ?",
+            (server_id, str(rating_key), _season_db(season_index)),
+        )
+    return True
+
+
+def get_parked_overlay_states(pairs: List[tuple]) -> List[Dict[str, Any]]:
+    """Parked tracked posters in the given (server_id, library_id) pairs.
+    Each dict is the original overlay_state row plus parked_at."""
+    if not pairs:
+        return []
+    clause = " OR ".join("(server_id = ? AND library_id = ?)" for _ in pairs)
+    params: List[Any] = []
+    for sid, lid in pairs:
+        params += [sid, str(lid)]
+    with get_db() as conn:
+        try:
+            rows = conn.execute(f"SELECT row_json, parked_at FROM overlay_state_parked WHERE {clause}", params).fetchall()
+        except sqlite3.OperationalError:
+            return []
+    out = []
+    for r in rows:
+        try:
+            d = json.loads(r["row_json"])
+        except Exception:
+            continue
+        d["parked_at"] = r["parked_at"]
+        out.append(d)
+    return out
+
+
+def delete_parked_overlay_state(server_id: str, rating_key: str, season_index: Optional[int] = None) -> None:
+    with get_db() as conn:
+        conn.execute(
+            "DELETE FROM overlay_state_parked WHERE server_id = ? AND rating_key = ? AND season_index = ?",
+            (server_id, str(rating_key), _season_db(season_index)),
+        )
+
+
+def find_cached_key_by_tmdb(server_id: str, library_id: Optional[str], media_type: str, tmdb_id: int) -> Optional[str]:
+    """The current cached item id for a TMDb id on one server/library (the
+    scan cache), or None."""
+    table = "tv_cache" if media_type == "tv" else "movie_cache"
+    sql = f"SELECT rating_key FROM {table} WHERE server_id = ? AND tmdb_id = ?"
+    params: List[Any] = [server_id, int(tmdb_id)]
+    if library_id is not None:
+        sql += " AND library_id = ?"
+        params.append(str(library_id))
+    with get_db() as conn:
+        row = conn.execute(sql + " LIMIT 1", params).fetchone()
+    return str(row["rating_key"]) if row else None
 
 
 def add_overlay_refresh_log(run_id: str, group_id: Optional[str], entries: List[Dict[str, Any]]) -> None:
@@ -5376,6 +5458,7 @@ def purge_server_cache(server_id: str) -> Dict[str, Any]:
 
         cursor.execute("DELETE FROM overlay_state WHERE server_id = ?", (server_id,))
         counts["overlay_state"] = cursor.rowcount
+        cursor.execute("DELETE FROM overlay_state_parked WHERE server_id = ?", (server_id,))
 
     logger.info("[MEDIA_SERVER] Purged DB cache for removed server %s: %s", server_id, counts)
     try:

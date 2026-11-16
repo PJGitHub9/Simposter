@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.8.78 (2026-11-16) — `dev-overlayonly` branch
+
+### Bug Fixes
+- **Overlay Refresh kept nothing when an item was briefly gone** — on a 404 that `_find_moved_item()`/`refresh_stale_item_id()` couldn't resolve, `refresh_state()` and `run_group()` deleted the `overlay_state` row, so a title replaced by a new file (new Plex rating key / Jellyfin id) that came back later was never tracked again. The row now goes to a new `overlay_state_parked` table (`db.park_overlay_state()`); `restore_parked()` runs at the start of every non-remove run, finds the title's new id in the scan cache by TMDb id (`db.find_cached_key_by_tmdb()`; seasons through their show with `find_season_by_index()`), re-inserts the row and always re-sends it. Rows not back within 60 days are dropped; removing a server clears its parked rows. `remove_state()` still deletes.
+
 ## v1.8.77 (2026-11-14) — `dev-overlayonly` branch
 
 ### Bug Fixes

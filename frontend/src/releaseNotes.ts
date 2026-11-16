@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.78',
+    date: '2026-11-16',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          "Overlay Refresh no longer forgets a poster when its movie or show briefly leaves the library (for example when a placeholder file is replaced by the real one and Plex or Jellyfin gives it a new id). It's set aside, and once a scan finds the title again it's tracked again and its poster is re-sent with overlays. Titles that don't come back within 60 days are dropped. Posters it already forgot before this update need one send with overlays (Batch Edit) to be tracked again.",
+        ],
+      },
+    ],
+  },
+  {
     version: 'v1.8.77',
     date: '2026-11-14',
     sections: [

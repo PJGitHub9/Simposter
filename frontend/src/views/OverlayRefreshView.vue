@@ -498,7 +498,7 @@ onUnmounted(() => {
             Overlays removed from {{ status.removed || 0 }} poster(s), {{ status.failed || 0 }} failed.
           </template>
           <template v-else>
-            {{ status.updated || 0 }} updated, {{ status.failed || 0 }} failed, {{ status.unchanged || 0 }} unchanged<template v-if="status.gone">, {{ status.gone }} no longer in the library (no longer tracked)</template>.
+            {{ status.updated || 0 }} updated, {{ status.failed || 0 }} failed, {{ status.unchanged || 0 }} unchanged<template v-if="status.gone">, {{ status.gone }} no longer in the library (picked up again if they come back)</template>.
           </template>
         </div>
 

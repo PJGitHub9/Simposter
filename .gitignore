@@ -49,3 +49,4 @@ config/ui_settings.json
 .*/docker-compose.yml
 test_webhooks.py
 CLAUDE.md
+unraid/simposter.db

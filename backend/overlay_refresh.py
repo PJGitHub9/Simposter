@@ -598,8 +598,8 @@ def remove_state(state: Dict[str, Any], source: str = "overlay_refresh") -> Dict
     try:
         rating_key = _upload_tracked(client, server_id, state, payload, content_type)
     except ItemGone:
-        db.delete_overlay_state(server_id, state["rating_key"], state.get("season_index"))
-        return {"status": "gone", "detail": "no longer in the library; stopped tracking it"}
+        db.park_overlay_state(server_id, state["rating_key"], state.get("season_index"))
+        return {"status": "gone", "detail": GONE_DETAIL}
 
     try:
         save_or_cache_render(rating_key, payload, None)
@@ -726,6 +726,76 @@ def match_preset_states(template_id: str, preset_id: str,
         elif snap != new[kind]:
             found["different"].append(state)
     return found
+
+
+GONE_DETAIL = "no longer in the library; will pick it up again if it comes back"
+PARKED_KEEP_DAYS = 60
+
+
+def _relocate_parked(row: Dict[str, Any]) -> Optional[str]:
+    """New item id for a parked poster, from the scan cache (movie or show by
+    TMDb id; a season through its show's new id). None when it isn't back."""
+    server_id = row["server_id"]
+    tmdb_id = row.get("tmdb_id")
+    if not tmdb_id or row.get("is_collection"):
+        return None
+    media_type = row.get("media_type") or "movie"
+    key = db.find_cached_key_by_tmdb(server_id, row.get("library_id"), media_type, tmdb_id)
+    if not key:
+        return None
+    season_index = row.get("season_index")
+    if season_index is None:
+        return key if key != str(row["rating_key"]) else None
+    # A season: its show is back (key); resolve the season under it.
+    from .media_server import get_client
+    client = get_client(server_id)
+    if client is None:
+        return None
+    try:
+        season_key = client.find_season_by_index(key, int(season_index))
+    except Exception as e:
+        logger.debug("[OVERLAY_REFRESH] season lookup for %s failed: %s", row.get("title"), e)
+        return None
+    if not season_key or str(season_key) == str(row["rating_key"]):
+        return None
+    row["meta_rating_key"] = key
+    return str(season_key)
+
+
+def restore_parked(pairs: List[tuple]) -> Dict[str, str]:
+    """Re-attach parked posters (item was gone) whose title is back in the
+    library under a new id. Returns {state_key: reason} for the restored rows,
+    which the run then always re-sends. Rows parked longer than
+    PARKED_KEEP_DAYS are dropped."""
+    restored: Dict[str, str] = {}
+    for row in db.get_parked_overlay_states(pairs):
+        server_id, old_key, season_index = row["server_id"], str(row["rating_key"]), row.get("season_index")
+        try:
+            new_key = _relocate_parked(row)
+        except Exception as e:
+            logger.debug("[OVERLAY_REFRESH] relocating %s failed: %s", row.get("title"), e)
+            new_key = None
+        if not new_key:
+            try:
+                parked = datetime.fromisoformat(str(row.get("parked_at")))
+                if (datetime.utcnow() - parked).days > PARKED_KEEP_DAYS:
+                    db.delete_parked_overlay_state(server_id, old_key, season_index)
+            except Exception:
+                pass
+            continue
+        db.delete_parked_overlay_state(server_id, old_key, season_index)
+        if db.get_overlay_state(server_id, new_key, season_index):
+            continue  # already tracked again by a newer send
+        if str(row.get("meta_rating_key") or "") == old_key:
+            row["meta_rating_key"] = new_key
+        row["rating_key"] = new_key
+        row.pop("parked_at", None)
+        db.upsert_overlay_state(row)
+        st = {"server_id": server_id, "rating_key": new_key, "season_index": season_index}
+        restored[state_key(st)] = "came back under a new id; re-sending its poster with overlays"
+        logger.info("[OVERLAY_REFRESH] %s is back on its server (%s is now %s); tracking it again",
+                    row.get("title") or old_key, old_key, new_key)
+    return restored
 
 
 def state_key(state: Dict[str, Any]) -> str:
@@ -900,6 +970,7 @@ def run_group(group_id: str, apply: bool, only_keys: Optional[List[str]] = None,
         if not group:
             raise ValueError("Library group not found")
         prune_without_overlays(group_pairs(group))
+        restored = {} if remove else restore_parked(group_pairs(group))
         states = db.get_overlay_states(group_pairs(group))
         if only_keys is not None:
             wanted = set(only_keys)
@@ -953,6 +1024,11 @@ def run_group(group_id: str, apply: bool, only_keys: Optional[List[str]] = None,
                     _update_status(group_id, {**counts, "items": items[-500:]})
                     continue
                 checked = check_state(state)
+                if state_key(state) in restored:
+                    # Back under a new id: whatever poster it has now wasn't
+                    # rendered by this record, so always send ours.
+                    checked["changed"] = True
+                    checked["reason"] = restored[state_key(state)]
                 if not checked["changed"] and not force:
                     counts["unchanged"] += 1
                     # Posters tracked before the checked values were recorded:
@@ -993,14 +1069,14 @@ def run_group(group_id: str, apply: bool, only_keys: Optional[List[str]] = None,
                 else:
                     entry["status"] = "changed"
             except ItemGone:
-                # Removed from the library: stop tracking it instead of failing
-                # on every run.
-                db.delete_overlay_state(state["server_id"], state["rating_key"], state.get("season_index"))
+                # Removed from the library: park it instead of failing on every
+                # run; restore_parked() re-attaches it if the title comes back.
+                db.park_overlay_state(state["server_id"], state["rating_key"], state.get("season_index"))
                 counts["gone"] += 1
                 entry["status"] = "gone"
-                entry["reason"] = "no longer in the library; stopped tracking it"
+                entry["reason"] = GONE_DETAIL
                 from .media_server import get_server_label
-                logger.info("[OVERLAY_REFRESH] %s is no longer on %s; stopped tracking it", title, get_server_label(state["server_id"]))
+                logger.info("[OVERLAY_REFRESH] %s is no longer on %s; parked until it comes back", title, get_server_label(state["server_id"]))
             except Exception as e:
                 counts["failed"] += 1
                 entry["status"] = "failed"
