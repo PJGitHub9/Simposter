@@ -374,7 +374,11 @@ watch(paged, (list) => {
   fetchLabels(list)
 })
 
+// Only the newest fetchTvShows() call may apply its result (see MoviesView's
+// fetchMovies: a bare /tv-shows load racing the ?library= load).
+let tvShowsFetchSeq = 0
 const fetchTvShows = async () => {
+  const seq = ++tvShowsFetchSeq
   loading.value = true
   error.value = null
   try {
@@ -385,6 +389,7 @@ const fetchTvShows = async () => {
     const res = await fetch(`${apiBase}/api/tv-shows${tvShowsParams.toString() ? '?' + tvShowsParams.toString() : ''}`)
     if (!res.ok) throw new Error(`API error ${res.status}`)
     const data = (await res.json()) as (TvShow & { labels?: string[] })[]
+    if (seq !== tvShowsFetchSeq) return
     // Seed caches from server data when available
     data.forEach((s) => {
       if (s.poster && !(s.key in posterCacheStore.value)) {
@@ -411,9 +416,9 @@ const fetchTvShows = async () => {
     saveTvShowsCache()
     tvShows.value = tvShowsCache.value
   } catch (err: unknown) {
-    error.value = err instanceof Error ? err.message : 'Failed to load TV shows'
+    if (seq === tvShowsFetchSeq) error.value = err instanceof Error ? err.message : 'Failed to load TV shows'
   } finally {
-    loading.value = false
+    if (seq === tvShowsFetchSeq) loading.value = false
   }
 }
 

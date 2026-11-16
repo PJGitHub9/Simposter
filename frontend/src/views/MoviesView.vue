@@ -381,7 +381,13 @@ watch(paged, (list) => {
   fetchLabels(list)
 })
 
+// Only the newest fetchMovies() call may apply its result. Opening the app at a
+// bare /movies starts a load with no library (every library, unmerged), then
+// App.vue fills in ?library= and the currentLibrary watcher starts a second,
+// merged load; if the first finished last it overwrote the grid with duplicates.
+let moviesFetchSeq = 0
 const fetchMovies = async (forceRefresh = false) => {
+  const seq = ++moviesFetchSeq
   loading.value = true
   error.value = null
   try {
@@ -395,6 +401,7 @@ const fetchMovies = async (forceRefresh = false) => {
     const res = await fetch(url)
     if (!res.ok) throw new Error(`API error ${res.status}`)
     const data = (await res.json()) as (Movie & { labels?: string[] })[]
+    if (seq !== moviesFetchSeq) return
     // Seed caches from server data when available
     data.forEach((m) => {
       if (m.poster && !(m.key in posterCacheStore.value)) {
@@ -421,9 +428,9 @@ const fetchMovies = async (forceRefresh = false) => {
     saveMoviesCache()
     movies.value = moviesCache.value
   } catch (err: unknown) {
-    error.value = err instanceof Error ? err.message : 'Failed to load movies'
+    if (seq === moviesFetchSeq) error.value = err instanceof Error ? err.message : 'Failed to load movies'
   } finally {
-    loading.value = false
+    if (seq === moviesFetchSeq) loading.value = false
   }
 }
 
