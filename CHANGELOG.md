@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.8.82 (2026-11-17) — `dev-overlayonly` branch
+
+### Bug Fixes
+- **Batch logo uploads failed on DNS hiccups** — `batch.py` re-downloaded each logo with a bare `requests.get()` (no retry) after the render had already downloaded it. New `rendering.fetch_logo_for_upload()` goes through `_download_image()` (byte cache, SVG support, PNG output), used by all four batch logo sends (Plex upload and linked-server sync, movie and TV). `_download_image()` now also retries connection errors (DNS failures), not just timeouts. Found in a user log: 26 logos skipped during one 370-item batch at 8 concurrent renders.
+- **Jellyfin/Emby upload timeouts** — `JellyfinClient.upload_image()` used a 20 s timeout and no retry; now `(10, 60)` and one retry on a timeout or dropped connection (re-posting replaces the image).
+- **Overlay Refresh 404 on `/movie/<collection id>`** — a collection poster sent to Jellyfin/Emby from the editor was tracked as a movie with the collection's TMDb id, so the TMDb rating lookup asked `/movie/1241` (Harry Potter collection) every run. `record_send()`/`_record_editor_render()` now detect collections (`db.is_collection_key()`), store no TMDb id, and existing rows are fixed at startup. A TMDb 404 for a rating is also stored as "no score" (re-checked daily) instead of retried every render; `TMDBError` now carries `status_code`.
+
 ## v1.8.81 (2026-11-16) — `dev-overlayonly` branch
 
 ### Bug Fixes

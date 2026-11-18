@@ -50,7 +50,11 @@ def _fetch_tmdb_score(media_type: str, tmdb_id: Any) -> Optional[Dict[str, Any]]
     try:
         from .tmdb_client import get_movie_details, get_tv_show_details
         details = get_movie_details(int(tmdb_id)) if media_type == "movie" else get_tv_show_details(int(tmdb_id))
-    except Exception:
+    except Exception as e:
+        if getattr(e, "status_code", None) == 404:
+            # TMDb has no such item: store "no score" so it's asked again after
+            # a day (_TMDB_UNRATED_MAX_AGE), not on every render.
+            return {}
         return None
     if not details:
         return None

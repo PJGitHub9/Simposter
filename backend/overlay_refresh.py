@@ -156,9 +156,15 @@ def record_send(
         stored_opts["_designs"] = _drawn_designs(summary, designs)
         if clean_base:
             stored_opts["_source_kind"] = CLEAN_BASE
+        if not is_collection and (db.is_collection_key(rating_key) or db.is_collection_key(meta.get("rating_key"))):
+            is_collection = True
         try:
             tmdb_val = int(tmdb_id) if tmdb_id not in (None, "") else (int(meta["tmdb_id"]) if meta.get("tmdb_id") else None)
         except (TypeError, ValueError):
+            tmdb_val = None
+        if is_collection:
+            # A collection's TMDb id is a collection id, not a movie id;
+            # looking it up as a movie only ever 404s.
             tmdb_val = None
         try:
             year_val = int(year) if year not in (None, "") else None
@@ -216,10 +222,14 @@ def _fresh_options(state: Dict[str, Any]) -> Dict[str, Any]:
     opts.pop("_facts", None)
     opts.pop("_designs", None)
     opts["metadata"] = base_meta
+    meta_key = state.get("meta_rating_key") or state.get("rating_key")
+    tmdb_id = state.get("tmdb_id")
+    if state.get("is_collection") or db.is_collection_key(meta_key) or db.is_collection_key(state.get("rating_key")):
+        tmdb_id = None  # a collection id, not a movie id (rows tracked before v1.8.82)
     inject_plex_media_metadata(
         opts,
-        state.get("meta_rating_key") or state.get("rating_key"),
-        tmdb_id=state.get("tmdb_id"),
+        meta_key,
+        tmdb_id=tmdb_id,
         is_tv=state.get("media_type") == "tv",
         log_prefix="[OVERLAY_REFRESH] ",
     )
@@ -852,7 +862,7 @@ def prepare_data(states: List[Dict[str, Any]]) -> Dict[str, int]:
             from . import mdblist_client as mdb
             if mdb.has_key():
                 for kind, media in (("movie", "movie"), ("show", "tv")):
-                    ids = [s.get("tmdb_id") for s in states if s.get("media_type") == media and s.get("tmdb_id")]
+                    ids = [s.get("tmdb_id") for s in states if s.get("media_type") == media and s.get("tmdb_id") and not s.get("is_collection")]
                     if ids:
                         out["ratings"] += mdb.prefetch_ratings(kind, ids)
     except Exception as e:
@@ -914,7 +924,7 @@ def refresh_all_data() -> Dict[str, Any]:
         for kind, media in (("movie", "movie"), ("show", "tv")):
             ids = []
             for s in states:
-                if s.get("media_type") != media or not s.get("tmdb_id"):
+                if s.get("media_type") != media or not s.get("tmdb_id") or s.get("is_collection"):
                     continue
                 for cid in state_overlay_ids(s):
                     if cid not in by_config:

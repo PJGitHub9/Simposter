@@ -50,3 +50,5 @@ config/ui_settings.json
 test_webhooks.py
 CLAUDE.md
 unraid/simposter.db
+unraid/simposter.db-shm
+unraid/simposter.db-wal

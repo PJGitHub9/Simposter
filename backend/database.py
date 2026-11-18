@@ -1263,6 +1263,20 @@ def init_database():
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_overlay_refresh_log_group ON overlay_refresh_log(group_id, created_at)")
 
+        # A collection poster sent to Jellyfin/Emby from the editor used to be
+        # tracked as a movie with the collection's TMDb id, so every Overlay
+        # Refresh asked TMDb for /movie/<collection id> and got a 404. Mark
+        # such rows as collections and drop the id. Cheap; a no-op once fixed.
+        try:
+            cursor.execute("""
+                UPDATE overlay_state SET is_collection = 1, tmdb_id = NULL
+                WHERE (tmdb_id IS NOT NULL OR is_collection = 0)
+                  AND (rating_key IN (SELECT rating_key FROM collection_cache)
+                       OR meta_rating_key IN (SELECT rating_key FROM collection_cache))
+            """)
+        except Exception as e:
+            logger.debug("[DB] overlay_state collection fix-up skipped: %s", e)
+
         # Poster drift detection: a small fingerprint of the last poster
         # Simposter sent to each item, compared when a scan re-downloads a
         # poster that changed on the server (backend/poster_drift.py).
@@ -4574,6 +4588,18 @@ def get_collection_tmdb_id(rating_key: str) -> Optional[int]:
     if row is None or row["tmdb_collection_id"] is None:
         return None
     return int(row["tmdb_collection_id"])
+
+
+def is_collection_key(rating_key: Any) -> bool:
+    """True when `rating_key` is a cached collection (any server)."""
+    if rating_key in (None, ""):
+        return False
+    try:
+        with get_db() as conn:
+            row = conn.execute("SELECT 1 FROM collection_cache WHERE rating_key = ? LIMIT 1", (str(rating_key),)).fetchone()
+        return row is not None
+    except Exception:
+        return False
 
 
 def set_collection_tmdb_id(rating_key: str, tmdb_collection_id: Optional[int]) -> None:

@@ -474,14 +474,19 @@ def _record_editor_render(req: "MediaServerSendRequest", server_id: str, item_id
         meta_key = str(r.get("meta_rating_key") or req.rating_key)
         if current_key and meta_key == str(req.rating_key):
             meta_key = str(current_key)  # the item was re-imported under a new id
-        inject_plex_media_metadata(opts, meta_key, tmdb_id=r.get("tmdb_id"), is_tv=media_type == "tv")
+        from .. import database as _db
+        # A collection's TMDb id is a collection id; it must not be used as a movie id.
+        is_collection = r.get("media_type") == "collection" or _db.is_collection_key(meta_key) or _db.is_collection_key(req.rating_key)
+        render_tmdb_id = None if is_collection else r.get("tmdb_id")
+        inject_plex_media_metadata(opts, meta_key, tmdb_id=render_tmdb_id, is_tv=media_type == "tv")
         library_id = library_in_group(r.get("source_server_id") or server_id, r.get("library_id"), media_type, server_id)
         record_send(
             server_id, item_id, template_id=template_id, options=opts,
             background_url=r.get("background_url"), logo_url=r.get("logo_url"),
             media_type=media_type, library_id=library_id,
             season_index=req.season_index if req.season_index is not None else r.get("season_index"),
-            tmdb_id=r.get("tmdb_id"), title=r.get("title"), year=r.get("year"),
+            tmdb_id=render_tmdb_id, title=r.get("title"), year=r.get("year"),
+            is_collection=is_collection,
         )
     except Exception as e:
         logger.debug("[MEDIA_SERVER_SEND] overlay refresh record failed for %s: %s", item_id, e)

@@ -140,7 +140,10 @@ def _tmdb_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
         if hasattr(e, "response") and e.response is not None:
             text = str(e.response.text)[:200]
         logger.warning("[TMDB] Request failed url=%s status=%s err=%s body=%s", url, getattr(e, "response", None), e, text)
-        raise TMDBError(f"TMDb request failed: {redact_secrets(e)}") from e
+        err = TMDBError(f"TMDb request failed: {redact_secrets(e)}")
+        # Lets callers tell "TMDb has no such item" (404) from a failed request.
+        err.status_code = getattr(getattr(e, "response", None), "status_code", None)
+        raise err from e
 
 
 def get_tv_external_ids(tmdb_id: int) -> Dict[str, Any]:

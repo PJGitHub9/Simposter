@@ -410,7 +410,21 @@ class JellyfinClient(MediaServerClient):
         # as-is rather than "cleaned up", since API routing can be
         # case-sensitive.
         url = f"{self.url}/items/{item_id}/images/{jellyfin_image_type}/"
-        r = requests.post(url, headers=headers, data=payload, timeout=20)
+        # A poster upload is a multi-MB body that Jellyfin processes before
+        # answering, and a batch sends several at once, so allow 60s for the
+        # reply and try once more on a timeout or dropped connection. Posting
+        # the same image again just replaces it, so a retry is safe.
+        for attempt in (1, 2):
+            try:
+                r = requests.post(url, headers=headers, data=payload, timeout=(10, 60))
+                break
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                if attempt == 2:
+                    raise
+                logger.info("[JELLYFIN_CLIENT:%s] %s upload for item=%s didn't finish (%s); retrying in 3s",
+                            self.server_id, jellyfin_image_type, item_id, e)
+                import time
+                time.sleep(3)
         r.raise_for_status()
         # A 2xx here only proves Jellyfin ACCEPTED the request -- it's never
         # been confirmed (against a real server) that this also proves the

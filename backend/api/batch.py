@@ -5,7 +5,7 @@ from ..config import load_presets
 from .notifications import send_batch_notification, send_apprise_notification, start_batch_progress_notification, update_batch_progress_notification, complete_batch_progress_notification
 import time
 from ..tmdb_client import get_images_for_movie, get_movie_details, get_tv_show_details, get_tv_external_ids
-from ..rendering import render_poster_image, render_with_overlay_cache
+from ..rendering import render_poster_image, render_with_overlay_cache, fetch_logo_for_upload
 from io import BytesIO
 import requests
 from backend.assets.selection import map_logo_mode_to_preference
@@ -17,7 +17,7 @@ from ..tmdb_render import (
 from dataclasses import replace as _dc_replace
 from .movies import fetch_and_cache_poster
 from .tv_shows import plex_session, plex_headers, extract_tmdb_id_from_metadata, extract_tvdb_id_from_metadata
-from .save import embed_library_metadata, normalize_logo_for_plex
+from .save import embed_library_metadata
 from ..save_paths import SaveContext, resolve_save_path, resolve_library_label, save_or_cache_render, save_to_asset_folder_on_send_enabled
 from datetime import datetime, timezone
 from PIL import Image, PngImagePlugin
@@ -595,12 +595,9 @@ def _process_single_movie(
                 logo_ct_for_sync = None
                 if getattr(req, 'send_logos_to_plex', False) and logo_url:
                     try:
-                        _logo_r = requests.get(logo_url, timeout=10)
-                        if _logo_r.status_code == 200:
-                            _ct = _logo_r.headers.get("content-type", "image/png").split(";")[0].strip()
-                            logo_bytes_for_sync, logo_ct_for_sync = normalize_logo_for_plex(_logo_r.content, _ct)
+                        logo_bytes_for_sync, logo_ct_for_sync = fetch_logo_for_upload(logo_url)
                     except Exception as _logo_fetch_err:
-                        logger.debug("[BATCH] Logo fetch for multi-server sync failed for %s [%s]: %s", rating_key, title_hint, _logo_fetch_err)
+                        logger.warning("[BATCH] Logo fetch for multi-server sync failed for %s [%s]: %s", rating_key, title_hint, _logo_fetch_err)
                 from .media_server_send import sync_render_to_linked_servers
                 synced = sync_render_to_linked_servers(
                     tmdb_id=tmdb_id, media_type="movie", library_id=req.library_id,
@@ -730,10 +727,8 @@ def _process_single_movie(
                         getattr(req, 'send_logos_to_plex', False), bool(logo_url), rating_key, title_hint)
             if getattr(req, 'send_logos_to_plex', False) and logo_url:
                 try:
-                    logo_r = requests.get(logo_url, timeout=10)
-                    if logo_r.status_code == 200:
-                        ct = logo_r.headers.get("content-type", "image/png").split(";")[0].strip()
-                        logo_bytes, ct = normalize_logo_for_plex(logo_r.content, ct)
+                    logo_bytes, ct = fetch_logo_for_upload(logo_url)
+                    if logo_bytes:
                         plex_logo_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/clearLogos"
                         logo_hdrs = {"X-Plex-Token": settings.PLEX_TOKEN, "Content-Type": ct}
                         plex_session.post(plex_logo_url, headers=logo_hdrs, data=logo_bytes, timeout=20)
@@ -753,8 +748,6 @@ def _process_single_movie(
                         cached_logo_path = _save_logo_cache(rating_key, logo_bytes, ct)
                         if cached_logo_path:
                             logo_url_for_cache = _logo_cache_url(rating_key, cached_logo_path)
-                    else:
-                        logger.warning("[BATCH] Logo fetch returned %s for %s [%s] — skipping clearLogo upload", logo_r.status_code, rating_key, title_hint)
                 except Exception as logo_err:
                     logger.warning("[BATCH] Logo send to Plex failed for %s [%s]: %s", rating_key, title_hint, logo_err)
 
@@ -1890,12 +1883,9 @@ def _render_and_save_poster(
             logo_ct_for_sync = None
             if getattr(req, 'send_logos_to_plex', False) and logo_url:
                 try:
-                    _logo_r = requests.get(logo_url, timeout=10)
-                    if _logo_r.status_code == 200:
-                        _ct = _logo_r.headers.get("content-type", "image/png").split(";")[0].strip()
-                        logo_bytes_for_sync, logo_ct_for_sync = normalize_logo_for_plex(_logo_r.content, _ct)
+                    logo_bytes_for_sync, logo_ct_for_sync = fetch_logo_for_upload(logo_url)
                 except Exception as _logo_fetch_err:
-                    logger.debug("[BATCH] Logo fetch for multi-server sync failed for %s: %s", display_title, _logo_fetch_err)
+                    logger.warning("[BATCH] Logo fetch for multi-server sync failed for %s: %s", display_title, _logo_fetch_err)
             from .media_server_send import sync_render_to_linked_servers
             synced = sync_render_to_linked_servers(
                 tmdb_id=tmdb_id, media_type="tv", library_id=req.library_id,
@@ -1993,10 +1983,8 @@ def _render_and_save_poster(
                         getattr(req, 'send_logos_to_plex', False), bool(logo_url), rating_key, display_title)
             if getattr(req, 'send_logos_to_plex', False) and logo_url:
                 try:
-                    logo_r = requests.get(logo_url, timeout=10)
-                    if logo_r.status_code == 200:
-                        ct = logo_r.headers.get("content-type", "image/png").split(";")[0].strip()
-                        logo_bytes, ct = normalize_logo_for_plex(logo_r.content, ct)
+                    logo_bytes, ct = fetch_logo_for_upload(logo_url)
+                    if logo_bytes:
                         plex_logo_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/clearLogos"
                         logo_hdrs = {"X-Plex-Token": settings.PLEX_TOKEN, "Content-Type": ct}
                         plex_session.post(plex_logo_url, headers=logo_hdrs, data=logo_bytes, timeout=20)
@@ -2015,8 +2003,6 @@ def _render_and_save_poster(
                         cached_logo_path = _save_logo_cache(rating_key, logo_bytes, ct)
                         if cached_logo_path:
                             logo_url_for_cache = _logo_cache_url(rating_key, cached_logo_path)
-                    else:
-                        logger.warning("[BATCH] Logo fetch returned %s for %s [%s] — skipping clearLogo upload", logo_r.status_code, rating_key, display_title)
                 except Exception as logo_err:
                     logger.warning("[BATCH] Logo send to Plex failed for %s [%s]: %s", rating_key, display_title, logo_err)
 

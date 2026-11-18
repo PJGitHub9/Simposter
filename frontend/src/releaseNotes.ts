@@ -10,6 +10,20 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.82',
+    date: '2026-11-17',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          "Batch Edit could skip sending logos to Plex when the server's DNS had a hiccup (\"Temporary failure in name resolution\"). The logo the poster was just made with is now reused, and a failed download is retried.",
+          "Jellyfin/Emby uploads that timed out during a busy batch now wait longer for Jellyfin and try once more instead of failing.",
+          "Overlay Refresh asked TMDb for a collection (e.g. Harry Potter) as if it were a movie on every run, logging a 404 each time. Collection posters sent to Jellyfin/Emby are now tracked as collections.",
+        ],
+      },
+    ],
+  },
+  {
     version: 'v1.8.81',
     date: '2026-11-16',
     sections: [
