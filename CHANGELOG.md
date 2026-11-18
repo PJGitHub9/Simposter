@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.8.84 (2026-11-18) — merged into `webui-overhaul-dev`
+
+### Improvements
+- **Merging branches** — `dev-overlayonly` (v1.8.71–v1.8.83: poster modes, Radarr/Sonarr tag rules, setup wizard upgrades, sidebar Artwork/Tools) merged into `webui-overhaul-dev`. New `majorReleases.ts` milestone (v1.8.84) for users crossing it.
+
 ## v1.8.83 (2026-11-18) — `dev-overlayonly` branch
 
 ### Bug Fixes

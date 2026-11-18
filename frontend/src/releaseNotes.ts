@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.84',
+    date: '2026-11-18',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Merging branches: poster modes (Full / Overlay only / Leave alone) and Radarr/Sonarr tag rules are now on webui-overhaul-dev.',
+        ],
+      },
+    ],
+  },
+  {
     version: 'v1.8.83',
     date: '2026-11-18',
     sections: [

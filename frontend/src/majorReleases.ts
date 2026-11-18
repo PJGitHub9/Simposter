@@ -284,4 +284,51 @@ export const majorReleases: MajorRelease[] = [
       },
     ],
   },
+  {
+    version: 'v1.8.84',
+    title: 'Poster modes & Radarr/Sonarr tags',
+    intro: "You can now choose, per title, how much Simposter does to its poster, and let Radarr/Sonarr tags decide it for you. Here's the short version; the full changelog is one click away below.",
+    highlights: [
+      {
+        icon: '🎚️',
+        title: 'Three poster modes',
+        description: 'Each movie or show is Full (Simposter makes the whole poster, as before), Overlay only (keep the poster another app like Aura chose and add only your overlays), or Leave alone (Simposter never touches it).',
+      },
+      {
+        icon: '✏️',
+        title: 'Set it by hand',
+        description: 'Change a title’s mode from the editor, or for many titles at once in Batch Edit. Badges on the grid show which titles are Overlay only or Leave alone.',
+      },
+      {
+        icon: '🏷️',
+        title: 'Or let rules decide',
+        description: 'In Settings → Libraries, each library group can set a mode from a Plex label or a Radarr/Sonarr tag. A title set by hand keeps your choice.',
+      },
+      {
+        icon: '📡',
+        title: 'Radarr & Sonarr tags',
+        description: 'Add Radarr and Sonarr in Settings → Media Servers and link each to a library group. Their tags then work as rules, which is the way to do this for Jellyfin and Emby (they have no labels).',
+      },
+      {
+        icon: '🖌️',
+        title: 'Overlay only follows the other app',
+        description: 'When the other app changes the poster, the next scan picks it up and Simposter adds your overlays again. A poster that already has Simposter’s overlays is never drawn on twice.',
+      },
+      {
+        icon: '⚠️',
+        title: 'Webhook ignore labels became rules',
+        description: 'Your old "ignore labels" were turned into Leave alone rules on each library group. Those titles are now also skipped by Overlay Refresh, retries, Batch Edit and Media Mirror, not just webhooks.',
+      },
+      {
+        icon: '🔔',
+        title: 'A heads-up when a rule stops matching',
+        description: 'If a label or tag is removed, the title goes back to Full and is marked, so you can see why its mode changed and set it by hand if needed.',
+      },
+      {
+        icon: '🧙',
+        title: 'A setup wizard that finishes the job',
+        description: 'New installs pick a preset and starter overlays, build library groups, connect Radarr/Sonarr (Simposter adds its own webhook) and turn on Overlay Refresh, all in the wizard.',
+      },
+    ],
+  },
 ]
