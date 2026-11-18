@@ -761,6 +761,32 @@ def process_radarr_webhook_with_retry(
     )
 
 
+# A show the media server added this recently, with no series poster from
+# Simposter yet, still counts as new even if a scan cached it first.
+NEW_SHOW_WINDOW_SECONDS = 24 * 3600
+
+
+def _is_new_show(server_id: str, rating_key: str, library_id: Optional[str], log_tag: str) -> bool:
+    """Should a TV webhook also make the series poster?
+
+    Yes when the show isn't in the cache yet, and also when a scan cached it
+    first (both can run at the same moment) but the server added it in the
+    last 24 hours and Simposter has never sent it a poster. Series posters
+    are recorded in History under the show's own key; seasons use their own."""
+    try:
+        cached = db.get_cached_tv_show(rating_key)
+        if not cached or (library_id and str(cached.get("library_id") or library_id) != str(library_id)):
+            logger.info("%s Detected NEW show -- will generate series poster + season posters", log_tag)
+            return True
+        added = cached.get("addedAt")
+        if added and time.time() - int(added) < NEW_SHOW_WINDOW_SECONDS and not db.poster_already_sent(server_id, rating_key):
+            logger.info("%s Show was added in the last 24h and has no series poster yet -- treating it as new", log_tag)
+            return True
+    except Exception as e:
+        logger.warning("%s Could not check cache for new show detection: %s", log_tag, e)
+    return False
+
+
 def process_sonarr_webhook_with_retry(
     tvdb_id: int,
     title: str,
@@ -816,18 +842,8 @@ def process_sonarr_webhook_with_retry(
                            title=title, year=year):
         return
 
-    # Check if this is a NEW show (not in cache) - if so, generate series poster too
-    is_new_show = False
-    if library_id:
-        try:
-            cached_shows = db.get_cached_tv_shows(library_id=library_id)
-            # Check if this show exists in cache
-            show_in_cache = any(show.get("rating_key") == rating_key for show in cached_shows)
-            is_new_show = not show_in_cache
-            if is_new_show:
-                logger.info(f"[SONARR_WEBHOOK] Detected NEW show - will generate series poster + season posters")
-        except Exception as e:
-            logger.warning(f"[SONARR_WEBHOOK] Could not check cache for new show detection: {e}")
+    # Check if this is a NEW show - if so, generate series poster too
+    is_new_show = _is_new_show("plex-1", rating_key, library_id, "[SONARR_WEBHOOK]")
 
     # If it's a new show and include_seasons is True, generate series poster first
     if is_new_show and include_seasons:
@@ -939,16 +955,7 @@ def process_media_server_webhook_with_retry(
 
     # New-show detection must happen BEFORE the cache pre-seed below, or
     # every show would look "already cached" the instant it's seeded.
-    is_new_show = False
-    if media_type == "tv":
-        try:
-            cached_shows = db.get_cached_tv_shows(library_id=library_id)
-            show_in_cache = any(show.get("rating_key") == item_id for show in cached_shows)
-            is_new_show = not show_in_cache
-            if is_new_show:
-                logger.info("[MEDIA_SERVER_WEBHOOK:%s] Detected NEW show -- will generate series poster + season posters", server_id)
-        except Exception as e:
-            logger.warning("[MEDIA_SERVER_WEBHOOK:%s] Could not check cache for new show detection: %s", server_id, e)
+    is_new_show = media_type == "tv" and _is_new_show(server_id, item_id, library_id, f"[MEDIA_SERVER_WEBHOOK:{server_id}]")
 
     # Pre-seed a real cache row -- title/year/tmdb_id/tvdb_id are already
     # known from the webhook payload, so no extra metadata fetch is needed.

@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.83',
+    date: '2026-11-18',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          "A show that was new to your server could get only its season poster from a Sonarr webhook, no series poster, when a library scan ran at the same moment and saw the show first. A show the server added in the last 24 hours that hasn't had a series poster from Simposter yet is now treated as new.",
+        ],
+      },
+    ],
+  },
+  {
     version: 'v1.8.82',
     date: '2026-11-17',
     sections: [

@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.8.83 (2026-11-18) — `dev-overlayonly` branch
+
+### Bug Fixes
+- **New show got only a season poster** — the Sonarr webhook (and the Jellyfin/Emby webhook path) decided "new show, also make the series poster" by whether the show was in `tv_cache`. A scheduled scan running at the same time cached the show seconds before the webhook checked, so it was treated as an existing show getting a new season. New `_is_new_show()` (`webhooks.py`): not cached, or the server's `addedAt` is under 24 hours old and History has no poster sent to the show's own key. Found in a user log (Tom Clancy's Jack Ryan).
+
 ## v1.8.82 (2026-11-17) — `dev-overlayonly` branch
 
 ### Bug Fixes
