@@ -63,9 +63,14 @@ const showImportExport = ref(false)
 const previewUrl = ref('')
 const previewLoading = ref(false)
 const previewError = ref('')
-type PreviewItem = { key: string; title: string; year?: string; tmdbId?: number; tmdbType?: 'movie' | 'tv'; posterUrl?: string }
+// kind 'show'/'season' preview on a TV show (key = the show's own key); a season
+// also carries its index and renders with the preset's season settings.
+type PreviewItem = {
+  key: string; title: string; year?: string; tmdbId?: number; tmdbType?: 'movie' | 'tv'; posterUrl?: string
+  kind?: 'movie' | 'show' | 'season'; seasonIndex?: number
+}
 const previewMovie = ref<PreviewItem | null>(null)
-const previewTemplate = ref<{ templateId: string; presetName: string } | null>(null)
+const previewTemplate = ref<{ templateId: string; presetName: string; presetId?: string } | null>(null)
 const movies = ref<PreviewItem[]>([])
 // No library items to preview with (server-less, or nothing scanned yet): fall back to TMDb trending + search.
 const tmdbMode = ref(false)
@@ -539,10 +544,84 @@ watch(movieSearchTerm, (term) => {
   }, 300)
 })
 
+// TV shows for "Random show" / "Random season": the TV libraries, else TMDb's
+// trending shows (no media server). Seasons need a library show.
+const shows = ref<PreviewItem[]>([])
+const showsFromLibrary = ref(false)
+const pickingSeason = ref(false)
+const fetchShows = async () => {
+  try {
+    const res = await fetch(`${apiBase}/api/tv-shows`)
+    if (res.ok) {
+      const data = await res.json()
+      shows.value = Array.isArray(data)
+        ? data.map((m: { key: string; title: string; year?: string | number }) => ({ key: m.key, title: m.title, year: m.year ? String(m.year) : undefined, kind: 'show' as const }))
+        : []
+      showsFromLibrary.value = shows.value.length > 0
+    }
+  } catch { /* ignore */ }
+  if (!shows.value.length) {
+    const trending = await fetchTmdbTrending('tv')
+    shows.value = trending.map((t) => ({ ...t, kind: 'show' as const }))
+  }
+}
+
+const randomOf = <T,>(list: T[]): T | null => (list.length ? list[Math.floor(Math.random() * list.length)] ?? null : null)
+
+const setPreviewItem = (item: PreviewItem | null) => {
+  selectedPreviewMovie.value = item
+  previewMovie.value = item
+  previewUrl.value = ''
+  previewError.value = ''
+}
+
+const useRandomPreviewShow = () => {
+  const show = randomOf(shows.value)
+  if (show) setPreviewItem({ ...show, kind: 'show' })
+}
+
+// A random show's random season (Specials skipped). A few shows are tried in
+// case one has no regular seasons.
+const useRandomPreviewSeason = async () => {
+  if (!showsFromLibrary.value || pickingSeason.value) return
+  pickingSeason.value = true
+  try {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const show = randomOf(shows.value)
+      if (!show) break
+      const res = await fetch(`${apiBase}/api/tv-show/${encodeURIComponent(show.key)}/seasons`)
+      if (!res.ok) continue
+      const data = await res.json()
+      const seasons = (Array.isArray(data?.seasons) ? data.seasons : [])
+        .filter((x: { index?: number }) => typeof x.index === 'number' && x.index > 0)
+      const season = randomOf<{ index: number }>(seasons)
+      if (!season) continue
+      setPreviewItem({ ...show, kind: 'season', seasonIndex: season.index, title: `${show.title} - Season ${season.index}` })
+      return
+    }
+    previewError.value = 'No show with seasons found to preview'
+  } finally {
+    pickingSeason.value = false
+  }
+}
+
+// The "Random" under a preview picks another of the same kind and renders it with the same preset.
+const useRandomSameKind = async () => {
+  const kind = previewMovie.value?.kind
+  if (kind === 'season') await useRandomPreviewSeason()
+  else if (kind === 'show') useRandomPreviewShow()
+  else useRandomPreviewMovie()
+  const tpl = previewTemplate.value
+  const preset = tpl ? (presets.value[tpl.templateId]?.presets || []).find((x) => x.id === tpl.presetId) : null
+  if (tpl && preset && previewMovie.value) await previewPreset(tpl.templateId, preset)
+}
+
 const pickRandomMovie = () =>
   movies.value.length ? movies.value[Math.floor(Math.random() * movies.value.length)] || null : null
 
 const resolvePreviewMovie = () => {
+  // A picked show/season stays until something else is picked.
+  if (selectedPreviewMovie.value?.kind === 'show' || selectedPreviewMovie.value?.kind === 'season') return selectedPreviewMovie.value
   // TMDb mode: a search pick isn't in the trending list, so don't look it up there.
   if (tmdbMode.value && selectedPreviewMovie.value?.tmdbId) return selectedPreviewMovie.value
   if (selectedPreviewMovie.value) {
@@ -562,11 +641,11 @@ const selectPreviewMovie = (movie: PreviewItem) => {
   movieSearchTerm.value = ''
 }
 
+// Like Random show/season: the picked movie is shown in the "Using" chip and
+// kept for the next ▶ until something else is picked.
 const useRandomPreviewMovie = () => {
-  selectedPreviewMovie.value = null
-  previewMovie.value = pickRandomMovie()
-  previewUrl.value = ''
-  previewError.value = ''
+  const movie = pickRandomMovie()
+  if (movie) setPreviewItem({ ...movie, kind: 'movie' })
 }
 
 const clearSelectedPreviewMovie = () => {
@@ -603,8 +682,12 @@ const previewPreset = async (templateId: string, preset: Preset) => {
     movie = resolvePreviewMovie()
     if (!movie) { previewError.value = 'No movies available to preview'; return }
   }
+  const isShow = !isKometa && (movie.kind === 'show' || movie.kind === 'season')
+  const seasonIndex = movie.kind === 'season' ? movie.seasonIndex : undefined
+  // The show's own name for {title}; a season's preview title adds " - Season N".
+  const showTitle = movie.kind === 'season' ? movie.title.replace(/ - Season \d+$/, '') : movie.title
   previewMovie.value = movie
-  previewTemplate.value = { templateId, presetName: preset.name || preset.id }
+  previewTemplate.value = { templateId, presetName: preset.name || preset.id, presetId: preset.id }
   previewUrl.value = ''
   previewLoading.value = true
   previewError.value = ''
@@ -612,7 +695,7 @@ const previewPreset = async (templateId: string, preset: Preset) => {
     ? (preset.options.kometa_logo_url.startsWith('/') ? `${apiBase}${preset.options.kometa_logo_url}` : preset.options.kometa_logo_url)
     : null
   try {
-    let backgroundUrl = isKometa ? '' : `${apiBase}/api/movie/${movie.key}/poster`
+    let backgroundUrl = isKometa ? '' : `${apiBase}/api/${isShow ? 'tv-show' : 'movie'}/${movie.key}/poster`
     let logoUrl: string | null = kometaLogo
     if (!isKometa && movie.tmdbId) {
       // TMDb-sourced item (no library): poster/logo come from TMDb, never a rating_key.
@@ -627,13 +710,18 @@ const previewPreset = async (templateId: string, preset: Preset) => {
         template_id: templateId,
         background_url: backgroundUrl,
         logo_url: logoUrl,
-        options: preset.options || {},
+        // A season renders with the preset's season settings (merged like the
+        // backend's resolve_season_options) plus its {season} text.
+        options: seasonIndex !== undefined
+          ? { ...(preset.options || {}), ...(preset.season_options || {}), season_text: `Season ${seasonIndex}`, season_number: String(seasonIndex) }
+          : preset.options || {},
+        season_index: seasonIndex,
         preset_id: preset.id,
-        movie_title: movie.title,
+        movie_title: showTitle,
         movie_year: movie.year || undefined,
         // TMDb-sourced item: its id and type, so overlays can look up ratings, lists, etc.
         tmdb_id: movie.tmdbId || undefined,
-        is_tv: movie.tmdbId ? movie.tmdbType === 'tv' : undefined,
+        is_tv: isShow || (movie.tmdbId ? movie.tmdbType === 'tv' : undefined),
         disableOverlayCache: !settings.performance.value.useOverlayCache,
         skip_fallback: true,
       })
@@ -656,6 +744,7 @@ onMounted(async () => {
   await fetchPresets()
   await fetchFallback()
   await fetchMovies()
+  await fetchShows()
 })
 </script>
 
@@ -912,7 +1001,12 @@ onMounted(async () => {
         <div class="preview-controls">
           <div class="actions">
             <button class="secondary tiny" @click="movieSearchTerm = ''; showMovieSearch = true" :disabled="movies.length === 0">Search movie</button>
-            <button class="secondary tiny" @click="useRandomPreviewMovie" :disabled="movies.length === 0">Random</button>
+            <button class="secondary tiny" @click="useRandomPreviewMovie" :disabled="movies.length === 0">Random movie</button>
+            <button class="secondary tiny" @click="useRandomPreviewShow" :disabled="shows.length === 0">Random show</button>
+            <button class="secondary tiny" @click="useRandomPreviewSeason" :disabled="!showsFromLibrary || pickingSeason"
+              :title="showsFromLibrary ? 'A random season of a random show, using the season settings of the preset' : 'Needs a TV library on a media server'">
+              {{ pickingSeason ? 'Picking…' : 'Random season' }}
+            </button>
           </div>
           <div v-if="selectedPreviewMovie" class="selected-movie-chip">
             <span class="chip-label">Using</span>
@@ -935,7 +1029,7 @@ onMounted(async () => {
                 </p>
                 <p class="preview-movie" v-if="previewMovie">{{ previewMovie.title }}</p>
               </div>
-              <button class="secondary tiny" @click="useRandomPreviewMovie">Random</button>
+              <button class="secondary tiny" @click="useRandomSameKind" :disabled="pickingSeason">Random {{ previewMovie?.kind === 'season' ? 'season' : previewMovie?.kind === 'show' ? 'show' : 'movie' }}</button>
             </div>
           </div>
           <div v-else class="placeholder-state">

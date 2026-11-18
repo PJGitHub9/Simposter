@@ -166,12 +166,24 @@ A **Text** layer can include values that are filled in per item. Use **+ Insert 
 | Item | `{title}`, `{year}`, `{edition}` (Plex only), `{studio}` |
 | Video | `{resolution}`, `{video_codec}` |
 | Audio | `{audio_codec}`, `{audio_channels}`, `{audio_language}` |
+| Dates | `{countdown}` ([Countdowns](#countdowns)) |
 | Maintainerr | `{leaving}`, `{leaving_date}`, `{leaving_day}`, `{leaving_days}` ([Maintainerr leaving dates](#maintainerr-leaving-dates)) |
 | Ratings | `{audience_rating}`, `{critic_rating}` (media server or MDBList); with MDBList also `{mdb_rating}`, `{mdb_imdb_rating}`, `{mdb_tomatoes_rating}`, `{mdb_tomatoesaudience_rating}`, `{mdb_metacritic_rating}`, `{mdb_metacriticuser_rating}`, `{mdb_tmdb_rating}`, `{mdb_trakt_rating}`, `{mdb_letterboxd_rating}`, `{mdb_myanimelist_rating}`, `{mdb_average_rating}` |
 
 If a value is missing for an item (no rating yet, no MDBList key), the layer isn't drawn at all rather than showing an empty or literal `{…}` text.
 
 Ratings can be formatted the way Kometa does by adding a character before the closing brace: `{critic_rating%}` is the rating × 10 as a whole number (7.6 → 76, so `{critic_rating%}%` shows "76%"), `{critic_rating#}` drops a trailing `.0` (9.0 → 9), and `{critic_rating/}` halves it (7.6 → 3.8, for 5-star scales).
+
+### Countdowns
+
+`{countdown}` is the number of days left until a date you pick on the layer itself. Once the text uses it, a **Countdown to** setting appears under the Text box: either a date every year (`Dec 25`) or a fixed date (`2026-12-25`).
+
+- On the day it shows `0`.
+- An every-year date starts again after it passes (the day after Dec 25 shows `364`).
+- A fixed date that has passed has no value, so the layer isn't drawn.
+- A layer using `{countdown}` without a date is never drawn; the layer shows a warning.
+
+Example: a text layer `{countdown} days to Christmas`, Countdown to Dec 25, with "Show when: Today is between Dec 1 and Dec 25". The number on a poster only changes when the poster is made again, so give the library groups using it a daily [Overlay Refresh](#overlay-refresh). In the preview, **Pretend today is** shows the countdown for any day.
 
 ---
 

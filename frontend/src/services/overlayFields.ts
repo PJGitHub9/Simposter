@@ -314,13 +314,14 @@ export const TEXT_VARIABLES: TextVariable[] = [
   { key: 'mdb_metacriticuser_rating', label: 'Metacritic user score', group: 'Ratings', example: '7.6', note: 'Needs an MDBList API key' },
   { key: 'mdb_myanimelist_rating', label: 'MyAnimeList score', group: 'Ratings', example: '8.7', note: 'Needs an MDBList API key' },
   { key: 'mdb_average_rating', label: 'MDBList average', group: 'Ratings', example: '79', note: 'Needs an MDBList API key' },
+  { key: 'countdown', label: 'Countdown (days)', group: 'Dates', example: '37', note: 'Set "Countdown to" on this layer' },
   { key: 'leaving', label: 'Leaving (today, tomorrow, Wednesday, Nov 12)', group: 'Maintainerr', example: 'tomorrow', note: 'Needs Maintainerr' },
   { key: 'leaving_date', label: 'Leaving date', group: 'Maintainerr', example: 'Nov 12', note: 'Needs Maintainerr' },
   { key: 'leaving_day', label: 'Leaving weekday', group: 'Maintainerr', example: 'Wednesday', note: 'Needs Maintainerr' },
   { key: 'leaving_days', label: 'Days until leaving', group: 'Maintainerr', example: '6', note: 'Needs Maintainerr' },
 ]
 
-export const TEXT_VARIABLE_GROUPS = ['Item', 'Video', 'Audio', 'Ratings', 'Maintainerr'] as const
+export const TEXT_VARIABLE_GROUPS = ['Item', 'Video', 'Audio', 'Ratings', 'Dates', 'Maintainerr'] as const
 
 /** Fields and {text} values that only have data with an MDBList API key. */
 export const needsMdblist = (item: { note?: string }): boolean => /MDBList/i.test(item.note || '')

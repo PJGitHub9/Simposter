@@ -44,6 +44,7 @@ export interface OverlayRuleFields {
   box_only?: boolean
   type?: string
   font_style?: string
+  countdown_to?: string | null
   addon_position?: string
   addon_offset?: number
   addon_align?: string
@@ -446,12 +447,56 @@ const formatValue = (v: unknown, fmt: string): string => {
   return typeof v === 'number' && !Number.isInteger(v) ? v.toFixed(1) : String(v)
 }
 
-export const fillText = (template: string, ctx: OverlayContext): string | null => {
+/** Whole days from `today` (UTC midnight, as parseDate gives) to the {countdown}
+ * date: YYYY-MM-DD (fixed; null once passed) or MM-DD (yearly; counts to next
+ * year's after the day). 0 on the day. A yearly 02-29 means 03-01 in other years.
+ * Same rules as overlay_engine.countdown_days(). */
+export const countdownDays = (target: unknown, today: Date): number | null => {
+  const text = String(target ?? '').trim()
+  const days = (when: Date) => Math.round((when.getTime() - today.getTime()) / 86400000)
+  if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(text)) {
+    const [y, m, d] = text.split('-').map(Number) as [number, number, number]
+    const when = parseDate(`${y}-${pad2(m)}-${pad2(d)}`)
+    if (!when || when.getTime() < today.getTime()) return null
+    return days(when)
+  }
+  const md = text.match(/^(\d{1,2})-(\d{1,2})$/)
+  if (!md) return null
+  const [mo, dd] = [Number(md[1]), Number(md[2])]
+  if (mo < 1 || mo > 12 || dd < 1 || dd > 31) return null
+  const inYear = (year: number): Date | null =>
+    parseDate(`${year}-${pad2(mo)}-${pad2(dd)}`) ?? (mo === 2 && dd === 29 ? parseDate(`${year}-03-01`) : null)
+  let when = inYear(today.getUTCFullYear())
+  if (!when) return null
+  if (when.getTime() < today.getTime()) when = inYear(today.getUTCFullYear() + 1)
+  return when ? days(when) : null
+}
+
+/** Does this text use {countdown} (with or without a format character)? */
+export const usesCountdown = (text: unknown): boolean => /\{countdown[%#/]?\}/.test(String(text ?? ''))
+
+/** Why a layer using {countdown} would never be drawn (no date, a date that
+ * can't be read, or a fixed date already past `today`), else null. */
+export const countdownWarning = (text: unknown, countdownTo: unknown, today: string): string | null => {
+  if (!usesCountdown(text)) return null
+  const target = String(countdownTo ?? '').trim()
+  if (!target) return 'Uses {countdown} but no "Countdown to" date is set, so it never appears.'
+  const now = parseDate(today)
+  if (now && countdownDays(target, now) === null) {
+    return /^\d{4}-/.test(target)
+      ? `The "Countdown to" date has passed, so {countdown} has no value and this layer isn't drawn.`
+      : `The "Countdown to" date isn't a real date (e.g. Feb 30), so this layer is never drawn.`
+  }
+  return null
+}
+
+export const fillText = (template: string, ctx: OverlayContext, el?: { countdown_to?: string | null } | null): string | null => {
   let missing = false
   const out = (template || '').replace(/\{([A-Za-z0-9_.]+)([%#/]?)\}/g, (_m, key: string, fmt: string) => {
     let v: unknown
     if (key === 'title' || key === 'movie_title') v = ctx.movie_title ?? ctx.title
     else if (key === 'year' || key === 'movie_year') v = ctx.movie_year ?? ctx.year
+    else if (key === 'countdown') v = el ? countdownDays(el.countdown_to, parseDate(ctx.today) ?? (parseDate(localToday()) as Date)) : null
     else v = ctx[key]
     if (v === null || v === undefined || String(v).trim() === '') { missing = true; return '' }
     return formatValue(v, fmt)

@@ -528,8 +528,14 @@ def api_preview(req: PreviewRequest):
                         poster = pick_poster(posters, poster_filter)
                         poster_fallback_action_used = None
 
-                        # Poster fallback handling
-                        if not poster:
+                        # Poster fallback handling (skip_fallback, sent by the manual
+                        # editors and Template Manager, never switches presets --
+                        # same as the movie branch above)
+                        if not poster and req.skip_fallback:
+                            logger.info("[PREVIEW] skip_fallback=True — bypassing poster fallback, using first available poster")
+                            poster = posters[0] if posters else None
+                            poster_fallback_action_used = "continue"
+                        elif not poster:
                             fallback_action = render_options.get("fallbackPosterAction") or "continue"
                             poster_fallback_action_used = fallback_action
                             fallback_poster_template = render_options.get("fallbackPosterTemplate")

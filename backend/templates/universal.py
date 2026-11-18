@@ -1690,7 +1690,7 @@ def apply_overlay_config(
                 text = element.get("text")
                 if element.get("type") == "text_label" and isinstance(text, str) and "{" in text:
                     # Fill {variables} like Kometa-placed text does; a missing value skips the layer.
-                    filled = overlay_engine.fill_text(text, ctx)
+                    filled = overlay_engine.fill_text(text, ctx, element)
                     if filled is None:
                         continue
                     element = {**element, "text": filled}
@@ -1732,7 +1732,7 @@ def _element_value(element: Dict[str, Any], meta: Dict[str, Any], ctx: Dict[str,
         return ",".join(sorted(str(l) for l in (meta.get("labels") or [])))
     text = element.get("text")
     if isinstance(text, str) and "{" in text:
-        return overlay_engine.fill_text(text, ctx) or ""
+        return overlay_engine.fill_text(text, ctx, element) or ""
     return ""
 
 

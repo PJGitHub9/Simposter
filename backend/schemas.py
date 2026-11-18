@@ -693,6 +693,7 @@ class OverlayElement(BaseModel):
     stroke_width: Optional[float] = None
     stroke_color: Optional[str] = None
     box_only: Optional[bool] = None  # Kometa "backdrop": draw only the back box
+    countdown_to: Optional[str] = None  # {countdown} target: YYYY-MM-DD (fixed) or MM-DD (yearly)
     font_style: Optional[str] = None  # Named style of a variable font (Kometa font_style)
     # Image drawn next to a text layer (Kometa text addon); the image is asset_id/url
     addon_position: Optional[str] = None  # left | right | top | bottom

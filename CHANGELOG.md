@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.8.85 (2026-11-18) — `webui-overhaul-dev` branch
+
+### New Features
+- **`{countdown}` overlay text value** — new layer field `countdown_to` (`YYYY-MM-DD` fixed or `MM-DD` yearly, on `OverlayElement`). `overlay_engine.countdown_days()` / `overlayEngine.ts` `countdownDays()` (same rules: 0 on the day, yearly rolls to next year, a passed fixed date gives no value, yearly 02-29 → 03-01 in other years); `fill_text()`/`fillText()` take the layer to resolve it, passed by every text caller (plain text, Kometa-placed text, the Overlay Refresh summary, both preview paths). Overlay Manager: a "Countdown to" picker under the Text box once the text uses `{countdown}`, a layer warning when no date is set, the date can't be read (e.g. Feb 30) or a fixed date has passed (`countdownWarning()`; `usesCountdown()` also matches `{countdown#}`-style text), "Insert value" → Dates → Countdown, and the "Pretend today is" preview box now also shows for countdown layers. docs/OVERLAYS.md "Countdowns".
+- **Template Manager: Random show / Random season** — the preview panel's "Random" became "Random movie", "Random show" (`/api/tv-shows`, else TMDb trending TV) and "Random season" (a random library show's random non-Specials season from `/api/tv-show/{key}/seasons`; greyed out without a TV library). A season preview sends the preset's base + season options with `season_text`/`season_number` and `season_index`, and `/api/tv-show/{key}/poster` as the background. A picked show/season stays for the next ▶; the "Random" under a preview picks another of the same kind and re-renders with the same preset.
+
+### Bug Fixes
+- **TV previews ignored `skip_fallback`** — `/api/preview`'s TV/season branch applied the preset's poster fallback (switching presets) even with `skip_fallback=True`, which the manual editors and Template Manager always send; the movie branch already honoured it (Quirk #7). Now it uses the first available poster, then the season → series poster fallback as before.
+
 ## v1.8.84 (2026-11-18) — merged into `webui-overhaul-dev`
 
 ### Improvements

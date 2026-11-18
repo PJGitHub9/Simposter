@@ -10,6 +10,25 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.85',
+    date: '2026-11-18',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Countdown text for overlays: put {countdown} in a text layer and pick a "Countdown to" date (every year, like Dec 25, or a fixed date). It shows the days left, 0 on the day, and an every-year date starts again afterwards. Pair it with a "Today is between" rule and a daily Overlay Refresh.',
+          "Template Manager can preview a preset on a random show or a random season (with the preset's season settings), next to the random movie. Random season needs a TV library on a media server.",
+        ],
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Season and show previews in the editors and Template Manager could switch to the fallback preset when TMDb had no matching poster. Previews now keep the preset you picked, as movie previews already did.',
+        ],
+      },
+    ],
+  },
+  {
     version: 'v1.8.84',
     date: '2026-11-18',
     sections: [

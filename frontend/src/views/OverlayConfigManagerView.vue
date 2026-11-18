@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, watch, nextTick, toRaw, shallowRef, type Ref } from 'vue'
 import { getApiBase } from '@/services/apiBase'
 import OverlayRulesEditor from '@/components/overlay/OverlayRulesEditor.vue'
+import DateRangeInput from '@/components/overlay/DateRangeInput.vue'
 import KometaPlacementEditor from '@/components/overlay/KometaPlacementEditor.vue'
 import KometaImportModal from '@/components/overlay/KometaImportModal.vue'
 import StarterOverlaysModal from '@/components/overlay/StarterOverlaysModal.vue'
@@ -22,6 +23,7 @@ import {
   buildContext, selectElementIndices, fillText, placeBox, offsetsFromBox, cssColor, blurAmount, queuePlacements,
   KOMETA_W, KOMETA_H, referencedLists, checkCondition, type OverlayRuleFields, type OverlayCondition,
   REGIONAL_FIELDS, conditionRegion, regionalKey,
+  usesCountdown as usesCountdownText, countdownWarning, localToday,
 } from '@/services/overlayEngine'
 
 const apiBase = getApiBase()
@@ -830,8 +832,12 @@ const BADGE_DEFAULT_FIELD: Record<string, string> = {
 }
 
 /** Problems that make a layer show nothing (or not what was meant). Shown as a warning on its card. */
+const usesCountdown = (el: OverlayElement): boolean => usesCountdownText(el.text)
+
 const layerWarnings = (el: OverlayElement): string[] => {
   const out: string[] = []
+  const cdWarn = countdownWarning(el.text, el.countdown_to, previewToday.value || localToday())
+  if (cdWarn) out.push(cdWarn)
   if (BADGE_DEFAULT_FIELD[el.type]) {
     const keys = [...new Set([...Object.keys(el.badge_modes || {}), '__other__'])]
     const mode = (v: string) => getBadgeMode(el, v)
@@ -1734,7 +1740,7 @@ const renderKometaPreview = async (
     cw = 0
     ch = 0
   } else if (el.type === 'text_label') {
-    const filled = fillText(el.text || '', scene.ctx)
+    const filled = fillText(el.text || '', scene.ctx, el)
     const text = filled ?? (el.text || 'Text')
     const size = Math.max(4, (el.font_size || 40) * s)
     const stroke = (el.stroke_width || 0) * s
@@ -2004,7 +2010,7 @@ const renderPreviewElement = async (
   } else if (el.type === 'text_label') {
     // Same as the real render: {variables} filled in; a missing value skips the layer
     // (drawn faint with the raw text so it can still be found and moved).
-    const filled = fillText(el.text || '', scene.ctx)
+    const filled = fillText(el.text || '', scene.ctx, el)
     if (filled === null) {
       if (!scene.interactive) return
       ctx.globalAlpha *= 0.4
@@ -2245,7 +2251,8 @@ const showAllTestValues = ref(false)
 const usesToday = computed(() => [
   ...(selectedConfig.value?.elements || []).flatMap(el => el.conditions || []),
   ...(selectedConfig.value?.conditions || []),
-].some(c => String(c.field || '').toLowerCase() === 'today'))
+].some(c => String(c.field || '').toLowerCase() === 'today')
+  || (selectedConfig.value?.elements || []).some(el => usesCountdown(el)))
 const showTest = (field: string) => showAllTestValues.value || usedTestFields.value.has(field)
 
 // "A real movie" with nothing picked yet opens the picker, then switches over.
@@ -3343,6 +3350,12 @@ onMounted(() => {
                         </div>
                         <small class="text-var-hint">Values in {curly braces} are filled in per movie. If a value is missing for a movie, this layer is skipped on that poster.<template v-if="!hasMdblistKey"> Ratings appear in the list once you add an MDBList API key in Settings → Ratings & Lists.</template></small>
                       </label>
+                      <div v-if="usesCountdown(element)" class="field-full countdown-row">
+                        <span>Countdown to</span>
+                        <DateRangeInput :model-value="element.countdown_to || ''" :range="false" :allow-yearly="true" :yearly-default="true"
+                          @update:model-value="(v: unknown) => { element.countdown_to = (typeof v === 'string' && v) ? v : null }" />
+                        <small class="text-var-hint">{countdown} shows the days left until this date (0 on the day). An every-year date starts again after it passes; a fixed date stops showing once it has passed. The number on a poster only changes when the poster is made again, so set a daily Overlay Refresh for the groups using it.</small>
+                      </div>
                       </div></div>
                       <div class="look-sec"><div class="look-sec-title">Font</div><div class="look-sec-grid">
                       <label>
@@ -3981,6 +3994,8 @@ onMounted(() => {
 .element-fields label { display: flex; flex-direction: column; gap: 0.2rem; }
 .element-fields label.field-full { grid-column: 1 / -1; }
 .element-fields label span { color: var(--text-secondary, #888); font-size: 0.72rem; font-weight: 500; }
+.countdown-row { display: flex; flex-direction: column; gap: 4px; }
+.countdown-row > span { color: var(--text-secondary, #888); font-size: 0.72rem; font-weight: 500; }
 .element-fields input, .element-fields select { padding: 0.35rem 0.45rem; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border, #2a2f3e); border-radius: 5px; color: var(--text-primary, #fff); font-size: 0.8rem; }
 .element-fields input:focus, .element-fields select:focus { outline: none; border-color: var(--accent, #3dd6b7); }
 

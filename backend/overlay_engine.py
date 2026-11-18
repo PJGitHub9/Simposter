@@ -552,6 +552,35 @@ def _month_day(value: Any) -> Optional[Tuple[int, int]]:
     return month, day
 
 
+def countdown_days(target: Any, today: _date) -> Optional[int]:
+    """Whole days from `today` to the {countdown} date: YYYY-MM-DD (fixed; None
+    once it has passed) or MM-DD (yearly; after the day it counts to next
+    year's). 0 on the day. A yearly 02-29 means 03-01 in other years."""
+    text = str(target or "").strip()
+    if re.fullmatch(r"\d{4}-\d{1,2}-\d{1,2}", text):
+        y, mo, dd = (int(x) for x in text.split("-"))
+        when = _parse_date(f"{y:04d}-{mo:02d}-{dd:02d}")
+        if not when or when < today:
+            return None
+        return (when - today).days
+    md = _month_day(text)
+    if not md:
+        return None
+
+    def in_year(year: int) -> Optional[_date]:
+        try:
+            return _date(year, md[0], md[1])
+        except ValueError:
+            return _date(year, 3, 1) if md == (2, 29) else None
+
+    when = in_year(today.year)
+    if when is None:
+        return None
+    if when < today:
+        when = in_year(today.year + 1)
+    return (when - today).days if when else None
+
+
 def _range_bounds(target: Any) -> Optional[Tuple[str, str]]:
     """A 'between' value: [start, end], or 'start..end' / 'start~end'."""
     if isinstance(target, (list, tuple)):
@@ -821,10 +850,11 @@ def _format_value(value: Any, fmt: str = "") -> str:
     return str(value)
 
 
-def fill_text(template: str, ctx: Dict[str, Any]) -> Optional[str]:
+def fill_text(template: str, ctx: Dict[str, Any], element: Optional[Dict[str, Any]] = None) -> Optional[str]:
     """Replace {variable} placeholders. Returns None when a referenced variable
     is missing or blank, so the element is skipped rather than drawing an empty
-    pill (Kometa's ignore_blank_results)."""
+    pill (Kometa's ignore_blank_results). {countdown} comes from the layer's own
+    `countdown_to` date, so it needs `element`."""
     missing = False
 
     def repl(match: "re.Match[str]") -> str:
@@ -834,6 +864,10 @@ def fill_text(template: str, ctx: Dict[str, Any]) -> Optional[str]:
             value = ctx.get("movie_title") or ctx.get("title")
         elif key in ("year", "movie_year"):
             value = ctx.get("movie_year") or ctx.get("year")
+        elif key == "countdown":
+            value = None
+            if element is not None:
+                value = countdown_days(element.get("countdown_to"), _parse_date(ctx.get("today")) or _date.today())
         else:
             value = ctx.get(key)
         if value is None or str(value).strip() == "":
@@ -966,7 +1000,7 @@ def _render_content(element: Dict[str, Any], ctx: Dict[str, Any], s: float) -> O
     """The element's content as a transparent RGBA image, sized for the canvas."""
     text_template = element.get("text")
     if text_template:
-        text = fill_text(str(text_template), ctx)
+        text = fill_text(str(text_template), ctx, element)
         if not text:
             return None
         size = max(1, int(round((_as_number(element.get("font_size")) or 40) * s)))
