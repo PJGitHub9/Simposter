@@ -57,6 +57,8 @@ Works with Plex, Jellyfin and Emby. Labels and editions come from Plex only; see
 
 ## How overlays fit in
 
+![Overlays page](images/overlays.png)
+
 - An **overlay** is a named set of **layers**. You build overlays in **📐 Overlays** (sidebar).
 - An overlay does nothing until it's turned on in a **preset** (Template Manager) or in the poster editor (**Extras → Overlays**). A preset can use several overlays.
 - Each overlay sits **above** the logo and text by default; tick **Place below logo & text** next to it in the editor's Extras → Overlays to draw it underneath.
@@ -70,6 +72,8 @@ Simposter renders the poster from the original artwork with the overlay baked in
 ## Building an overlay
 
 Open **📐 Overlays** and create an overlay. The editor has a preview on the right and three tabs on the left:
+
+![The overlay editor](images/overlay-editor.png)
 
 1. **Layers**: the layers, top of the list = drawn on top. Drag on the preview to move a layer; use the ↑ ↓ buttons to change its order.
 2. **Badge sets**: groups of layers where only one is shown (see [below](#badge-sets-and-hide-rules)).
@@ -202,12 +206,17 @@ Rename a layer with the pencil icon or by double-clicking its name. Hide rules f
 
 - **MediaInfo - jmxd**: resolution, HDR/Dolby Vision, audio codec and edition badges (needs TRaSH-style file names).
 - **Audience Rating - jmxd**: a green/yellow/red audience score badge, using your media server's audience rating (or MDBList, see [Ratings](#ratings)).
+- **Maintainerr - Leaving Soon**: a red border and "Leaving &lt;day&gt;" text on titles a Maintainerr collection will remove (needs [Maintainerr](#maintainerr-leaving-dates)).
 
-Both were made by [jmxd](https://github.com/jmxd/Kometa). Adding one downloads its images (and the font it uses) from his repository into **Your images**; nothing of his is bundled with Simposter. After adding, tick it in a preset to use it, as with any overlay. **Replace** (on one you've already added) overwrites it with the version that ships with Simposter, including any updates since you added it; your own changes to it are lost, and presets using it stay linked.
+![Starter overlays](images/starter-overlays.png)
+
+The first two were made by [jmxd](https://github.com/jmxd/Kometa); the Leaving Soon border image is by [netplexflix](https://github.com/netplexflix/Overlays). Adding one downloads its images (and any font it uses) from the creator's repository into **Your images**; none of their files are bundled with Simposter. After adding, tick it in a preset to use it, as with any overlay. **Replace** (on one you've already added) overwrites it with the version that ships with Simposter, including any updates since you added it; your own changes to it are lost, and presets using it stay linked.
 
 ## Importing Kometa overlays
 
 **📐 Overlays → Import Kometa** turns Kometa overlay files into Simposter overlays (one overlay per file).
+
+![Import Kometa](images/kometa-import.png)
 
 > **Beta.** Kometa import and live Kometa files work, but Kometa files vary a lot and some may still import slightly differently than Kometa draws them. Please report anything that looks off.
 
@@ -253,6 +262,8 @@ Overlay files from [UMTK](https://github.com/netplexflix/Upcoming-Movies-TV-Show
 ## Ratings
 
 `audience_rating` and `critic_rating` (0–10) work without any extra service. Pick where they come from in **Settings → Ratings & Lists → Audience rating comes from / Critic rating comes from**:
+
+![Settings → Ratings & Lists](images/settings-ratings.png)
 
 - **Your media server** (the default): the first enabled server in Settings → Media Servers, in the order they're listed, that has a rating for the item. With only Plex or only Jellyfin, that's simply your server. If no server has an audience rating for the item, TMDb's user score is used.
 - **Plex**: the audience and critic rating Plex shows for the item. Which site those come from (Rotten Tomatoes, IMDb, TMDb) is set per library in Plex (Edit library → Advanced → Ratings source). This is what Kometa's `audience_rating` uses.
@@ -321,6 +332,8 @@ The section also lists every library group's **Overlay Refresh** schedule (below
 ## Overlay Refresh
 
 A poster's overlay can change after it's been sent: a better rating, a new list membership, a 4K upgrade, an edited overlay. **Overlay Refresh** (each library's **Tools** page in the sidebar) finds posters whose overlay would now come out differently and re-renders them.
+
+![Overlay Refresh](images/overlay-refresh.png)
 
 - **Check for changes** lists the posters that would change, with the reason: what changed in the item's data, then the layers, e.g. "now on list Trending: added Trending frame" or "Audience rating 8.4 → 8.7: added High score". Only data that crossed one of the overlay's rules is named, so a rating moving from 8.4 to 8.5 without crossing a threshold isn't a change. It doesn't send anything.
 - **Refresh changed posters** re-renders and sends those posters. **Re-send all** re-sends every tracked poster.

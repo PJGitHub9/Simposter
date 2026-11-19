@@ -2460,7 +2460,7 @@ onMounted(() => {
   <div class="overlay-manager">
     <div class="page-header">
       <div>
-        <h1>&#x1F9EA; Overlays <span style="font-size: 0.55em; opacity: 0.6; vertical-align: middle; font-weight: 400;">(experimental)</span></h1>
+        <h1>&#x1F4D0; Overlays</h1>
         <p class="page-subtitle">Badges, images and text drawn on top of a poster, kept up to date when ratings, lists or labels change.</p>
       </div>
     </div>

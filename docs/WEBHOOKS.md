@@ -10,6 +10,8 @@ All three URLs are also generated for you in **Settings → Automation** — you
 
 **Webhook secret** (optional, recommended if Simposter is reachable from outside your LAN): set one in **Settings → Automation → Webhook Secret**. Once set, every webhook call must include it, either as a query param (`?secret=yoursecret`, works with all three below) or an `X-Webhook-Secret` header (if the sending app supports custom headers). Leaving it unset preserves the old trusted-network behavior — no secret required.
 
+![Settings → Automation](images/settings-automation.png)
+
 **Leave alone and Overlay only** *(poster modes)*: a title set to **Leave alone** is skipped by all three webhooks; a title set to **Overlay only** gets only the preset's overlays drawn on its current poster instead of a full render. Set the mode per title (Batch Edit or the editor) or with rules under each library group in **Settings → Libraries** (a Plex label such as `Custom` can mean Leave alone). The old "Webhook Ignore Labels" setting became Leave alone rules on upgrade, and those titles are now also skipped by Overlay Refresh, retries, Batch Edit and Media Mirror. See [OVERLAYS.md](OVERLAYS.md#posters-from-another-app).
 
 **Existing content mode** (**Settings → Automation**): controls what happens when a webhook fires for something that already has a poster.

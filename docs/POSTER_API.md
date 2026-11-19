@@ -8,6 +8,8 @@ It also works with no media server at all, but **we strongly recommend connectin
 
 Turn it on in **Settings → Media Servers → Poster API**. The **🔌 Poster API** page then appears in the sidebar; open it for the rest:
 
+![The Poster API page](images/poster-api.png)
+
 1. Click **Generate** next to the key field, copy the key and **Save**. The key is shown in full only once; after that the page shows a masked value.
 2. Pick a **default movie preset** and **default TV preset** (Uniform Logo presets only). Left on "simposter-main (default)", Simposter uses the `simposter-main` starter preset (or the first Uniform Logo preset if that one was deleted).
 3. With more than one library group of a type (for example "Movies" and "4K Movies"), pick the **movie / TV library group** a request uses when it names none. "Any library" uses whichever library has the title, Plex first.

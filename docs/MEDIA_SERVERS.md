@@ -10,6 +10,8 @@ Simposter works with **Plex, Jellyfin and Emby**, in any combination: Plex only,
 
 **Settings → Media Servers** has a section for each server type. Click **+ Add a … Server**, enter its URL and credentials, and use **Test Connection** before saving:
 
+![Settings → Media Servers](images/settings-media-servers.png)
+
 - **Plex**: the server URL and an X-Plex-Token.
 - **Jellyfin / Emby**: the server URL and an API key (in Jellyfin: Dashboard → API Keys).
 
@@ -31,6 +33,8 @@ Simposter only reads tags from them, and only for [poster mode rules](OVERLAYS.m
 
 A **library group** says "these libraries hold the same content". For example, Plex "Movies" plus Jellyfin "Movies", or Plex "4K Movies" plus Jellyfin "4k-Movies". Manage them in **Settings → Libraries**: each card is one group, with a row for each server type. Pick a library from a row's dropdown to add it, and use ✕ to remove it. Changes are kept when you click **Save Changes**.
 
+![Settings → Libraries](images/settings-libraries.png)
+
 A group can contain any mix of servers, including just a single Jellyfin library. Each group appears as its own entry in the sidebar.
 
 Each group also holds its **automatic poster generation** settings (on/off, plus the template and preset to use).
@@ -38,6 +42,8 @@ Each group also holds its **automatic poster generation** settings (on/off, plus
 ### Merged browsing
 
 When the same title exists on more than one server in a group (matched by TMDb/TVDB ID), it shows as **one card** in Movies, TV Shows, Logos, Backdrops and Batch Edit. Small icons on the card show which servers have it.
+
+![A library group opened with Edit](images/settings-group-card.png)
 
 - **Show posters from** (top of the grid): picks which server's poster is shown for those merged cards.
 - **Merge items** (on the group's card in Settings → Libraries): turn it off to show each server's copy as its own card. "Show posters from" then becomes a filter ("All", or one server).
@@ -63,6 +69,8 @@ Webhooks (Radarr/Sonarr) can target a whole library group. See [WEBHOOKS.md](WEB
 
 **Media Mirror** copies artwork from one server to the others in a group, so they stay in sync. Open it from the group's **Tools** page in the sidebar (Media Mirror tab). The tab only appears once the group has more than one server.
 
+![Media Mirror](images/media-mirror.png)
+
 - Choose the **source** server, the **target** servers, and which artwork to copy: posters, logos, backdrops and/or square art (square art is Plex-only).
 - **Also mirror Collections** copies collection artwork too, with its own artwork choices.
 - The mapping tables show which item on each target server matches each source item, with search and pages, and tabs for Movies/TV and Collections. Use the per-row **Send** button to copy a single item.
@@ -85,6 +93,8 @@ Changes save immediately and apply everywhere collections are matched: the merge
 ## Server maintenance
 
 **Settings → Cleanup → Media Server Maintenance** has a section for each server:
+
+![Settings → Cleanup](images/settings-cleanup.png)
 
 - **Plex**: Empty Trash, Clean Bundles, Optimize Database.
 - **Jellyfin / Emby**: the server's own cleanup tasks, namely Optimize database and Clean Cache/Transcode/Log Directory, plus Clean Activity Log. Each shows when it last ran and the result, and shows progress while running.
