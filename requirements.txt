@@ -1,13 +1,13 @@
-fastapi==0.162.0
+fastapi==0.162.3
 uvicorn[standard]==0.54.0
 requests==2.34.2
 python-dotenv==1.2.4
-pydantic-settings==2.16.1
-python-multipart==0.0.32
+pydantic-settings==2.16.2
+python-multipart==0.0.33
 pillow==13.0.0; python_version >= "3.11"
 pillow==12.3.0; python_version < "3.11"
 numpy==2.5.4
 cairosvg==2.9.1
 apscheduler==3.11.3
-apprise==2.1.0
+apprise==2.2.0
 PyYAML==6.0.3

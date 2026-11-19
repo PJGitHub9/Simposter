@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.87',
+    date: '2026-11-19',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Dependency updates: FastAPI 0.162.3, Apprise 2.2.0, pydantic-settings 2.16.2 and python-multipart 0.0.33.',
+        ],
+      },
+    ],
+  },
+  {
     version: 'v1.8.86',
     date: '2026-11-19',
     sections: [

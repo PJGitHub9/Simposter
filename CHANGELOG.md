@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.8.87 (2026-11-19) — `webui-overhaul-dev` branch
+
+### Improvements
+- **Dependencies** — fastapi 0.162.0 → 0.162.3, apprise 2.1.0 → 2.2.0, pydantic-settings 2.16.1 → 2.16.2, python-multipart 0.0.32 → 0.0.33 (the open Dependabot PRs that weren't already covered). Checked on Python 3.12 (the Docker image's version): settings load/save, upload, presets, request validation, and `apprise.notify()` still returning a falsy `AppriseResult` on failure. The other Dependabot PRs were already superseded (eslint, postcss, @types/node, apprise 2.1.0) or no longer apply (js-yaml isn't installed under ESLint 10). TypeScript 7 is skipped (a major upgrade to plan separately), and `.github/dependabot.yml` now ignores TypeScript major updates.
+
 ## v1.8.86 (2026-11-19) — `webui-overhaul-dev` branch
 
 ### Improvements
