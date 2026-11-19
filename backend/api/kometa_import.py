@@ -303,28 +303,36 @@ async def api_kometa_import(
     for path, text in sorted(yaml_texts.items()):
         stem = PurePosixPath(path).stem
         item: Dict[str, Any] = {"path": path, "kind": "overlays", "messages": []}
-        try:
-            data = ki._load_yaml(text)
-        except ki.ImportError_ as e:
-            item.update(kind="error", error=str(e))
-            results.append(item)
-            continue
-        if not data.get("overlays"):
-            item.update(kind="templates" if data.get("templates") else "other")
-            results.append(item)
-            continue
+        # A Kometa config.yml snippet ("- default: ratings" + template_variables)
+        # instead of an overlay file: each entry is expanded with its own variables.
+        config_entries = ki.config_overlay_entries(text)
+        if config_entries is None:
+            try:
+                data = ki._load_yaml(text)
+            except ki.ImportError_ as e:
+                item.update(kind="error", error=str(e))
+                logger.warning("[KOMETA IMPORT] %s couldn't be read: %s", path, str(e).splitlines()[0] if str(e) else e)
+                results.append(item)
+                continue
+            if not data.get("overlays"):
+                item.update(kind="templates" if data.get("templates") else "other")
+                results.append(item)
+                continue
         if selected_list is not None and path not in selected_list:
             item.update(kind="excluded")
             results.append(item)
             continue
 
         try:
-            if library_type == "both":
+            if config_entries is not None:
+                elements, report, file_messages = ki.expand_config_entries(config_entries, library_type, yaml_texts)
+            elif library_type == "both":
                 elements, report, file_messages = ki.expand_file_both(text, yaml_texts)
             else:
                 elements, report, file_messages = ki.expand_file(text, library_type, yaml_texts)
         except ki.ImportError_ as e:
             item.update(kind="error", error=str(e))
+            logger.warning("[KOMETA IMPORT] %s couldn't be imported: %s", path, str(e).splitlines()[0] if str(e) else e)
             results.append(item)
             continue
         item["messages"].extend(file_messages)
@@ -354,6 +362,16 @@ async def api_kometa_import(
         if not dry_run and final_elements:
             db.save_overlay_config(config_id, config_name, final_elements)
             logger.info("[KOMETA IMPORT] Saved %s (%d elements) as %s", path, len(final_elements), config_id)
+        if not dry_run:
+            # What didn't come through, so a failed or partial import shows in the log too.
+            skipped = [r["name"] for r in report if r.get("status") == "skipped"]
+            hidden = [r["name"] for r in report if r.get("status") == "hidden"]
+            if not final_elements:
+                logger.warning("[KOMETA IMPORT] %s produced no layers, nothing saved%s", path,
+                               f" ({'; '.join(item['messages'][:3])})" if item.get("messages") else "")
+            elif skipped or hidden:
+                logger.info("[KOMETA IMPORT] %s: %d skipped, %d hidden (%s)", path, len(skipped), len(hidden),
+                            ", ".join((skipped + hidden)[:8]) + (" ..." if len(skipped) + len(hidden) > 8 else ""))
         results.append(item)
 
     return {

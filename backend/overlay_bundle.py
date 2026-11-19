@@ -110,6 +110,7 @@ def build_bundle(config_ids: Optional[Iterable[str]] = None, all_assets: bool = 
                 "elements": c.get("elements") or [],
                 "streaming_region": c.get("streaming_region") or "US",
                 "conditions": c.get("conditions") or [],
+                "notes": c.get("notes") or "",
             }
             for c in configs
         ],
@@ -210,7 +211,8 @@ def restore_bundle(bundle: Optional[Dict[str, Any]], replace: bool = False) -> D
                 new_id = f"overlay-{uuid.uuid4().hex[:12]}"
                 remap[cid] = new_id
         db.save_overlay_config(new_id, c.get("name") or new_id, elements, c.get("streaming_region") or "US",
-                               conditions=c.get("conditions") if isinstance(c.get("conditions"), list) else [])
+                               conditions=c.get("conditions") if isinstance(c.get("conditions"), list) else [],
+                               notes=c.get("notes") if isinstance(c.get("notes"), str) else None)
 
     logger.info(
         "[OVERLAY_BUNDLE] Restored %d overlay config(s), %d asset(s)%s",

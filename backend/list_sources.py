@@ -183,7 +183,7 @@ def missing_setup(key: str) -> Optional[str]:
     provider = provider_of(key)
     if provider == "mdblist":
         from .mdblist_client import has_key
-        return None if has_key() else "no MDBList API key in Settings > General"
+        return None if has_key() else "no MDBList API key in Settings > Ratings & Lists"
     module = _providers().get(provider or "")
     if not module:
         return "not a list link Simposter recognizes"

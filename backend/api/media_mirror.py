@@ -479,7 +479,23 @@ def _run_mirror(server_id: str, library_id: str, media_type: str, force: bool = 
                     "processed": processed_offset + idx - 1,
                     "current": f"{title_display} (collection)" if is_collection else title_display,
                 })
-                status = _sync_one_item(source_client, target_clients, entry, pass_asset_types, source_label, target_labels,
+                item_types = pass_asset_types
+                if not is_collection and "poster" in item_types:
+                    # Poster modes: a Leave alone title's poster is not ours to copy.
+                    try:
+                        from .. import poster_mode
+                        # library None: resolved from the source item's own key (the run's
+                        # library may belong to another group member, not the source server).
+                        _mode = poster_mode.gate(source_server_id, str(entry.get("source_rating_key")),
+                                                 None, media_type == "tv")
+                    except Exception:
+                        _mode = "full"
+                    if _mode == "leave_alone":
+                        item_types = [a for a in item_types if a != "poster"]
+                        if not item_types:
+                            skp += 1
+                            continue
+                status = _sync_one_item(source_client, target_clients, entry, item_types, source_label, target_labels,
                                         is_collection=is_collection, source_server_id=source_server_id, force=force,
                                         asset_counts=counts)
                 if status == "unmapped":

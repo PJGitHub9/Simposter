@@ -1,5 +1,6 @@
 import { ref, computed } from 'vue'
 import { getApiBase } from '../services/apiBase'
+import { SECRET_MASK, sameOrigin } from '../services/serverOrigin'
 
 const apiBase = getApiBase()
 
@@ -57,6 +58,22 @@ export type OverlayRefreshConfig = {
   lastRunStats?: Record<string, number> | null
 }
 
+// A Radarr or Sonarr connection. Simposter only reads its tags, for poster mode rules.
+export type ArrInstance = {
+  id: string
+  type: 'radarr' | 'sonarr'
+  name?: string
+  url: string
+  apiKey?: string
+  enabled?: boolean
+}
+
+export type PosterModeRule = {
+  source: 'plex_label' | 'arr_tag'  // arr_tag: a tag in the group's linked Radarr/Sonarr
+  value: string
+  mode: 'overlay_only' | 'leave_alone'
+}
+
 export type LibraryGroup = {
   id: string
   name: string
@@ -66,6 +83,8 @@ export type LibraryGroup = {
   autoGeneratePresetId?: string | null
   autoGenerateTemplateId?: string | null
   labelsToRemove?: string[]
+  posterModeRules?: PosterModeRule[]  // Poster modes: label/tag rules giving matching titles Overlay only / Leave alone
+  arrInstanceId?: string | null       // The Radarr (movies) / Sonarr (TV) whose tags "arr_tag" rules read
   preferredServerId?: string | null  // Which member's row wins when this group's merged
                                       // grid finds the same title on more than one server
                                       // (backend's _dedupe_by_tmdb_id()) -- replaces the
@@ -113,11 +132,23 @@ export type MDBListSettings = {
   cacheDays: number
 }
 
+export type PosterApiSettings = {
+  enabled: boolean
+  key: string // masked (SECRET_MASK) when set; the server keeps the real value
+  defaultMoviePreset: string
+  defaultTvPreset: string
+  waitSeconds: number
+  retentionDays: number
+  movieGroup?: string // library group id used when a request names none; '' = any library
+  tvGroup?: string
+}
+
 // List sources for overlay "On a list" rules (backend/list_sources.py).
 // Sign-in tokens are stored server-side, never here.
 export type WeTrakrSettings = { clientId: string }
 export type SimklSettings = { clientId: string }
 export type FloppySettings = { url: string; token: string }
+export type MaintainerrSettings = { url: string; apiKey: string }
 
 export type FanartSettings = {
   apiKey: string
@@ -173,6 +204,7 @@ export type NotificationSettings = {
   discordNotifyWebhook: boolean
   discordNotifyAutoGenerate: boolean
   discordNotifyMediaMirror?: boolean
+  discordNotifyAppUpdates?: boolean
   discordNotifyOverlayRefresh?: boolean
   appriseEnabled: boolean
   appriseUrls: string[]
@@ -182,6 +214,7 @@ export type NotificationSettings = {
   appriseNotifyWebhook: boolean
   appriseNotifyAutoGenerate: boolean
   appriseNotifyMediaMirror?: boolean
+  appriseNotifyAppUpdates?: boolean
   appriseNotifyOverlayRefresh?: boolean
 }
 
@@ -205,9 +238,11 @@ export type UISettings = {
   tvdb?: TVDBSettings
   fanart?: FanartSettings
   mdblist?: Partial<MDBListSettings>
+  posterApi?: Partial<PosterApiSettings>
   wetrakr?: Partial<WeTrakrSettings>
   simkl?: Partial<SimklSettings>
   floppy?: Partial<FloppySettings>
+  maintainerr?: Partial<MaintainerrSettings>
   imageQuality?: ImageQualitySettings
   performance?: PerformanceSettings
   apiOrder?: string[]
@@ -217,6 +252,7 @@ export type UISettings = {
   onboarding_completed?: boolean
   mediaServers?: MediaServerEntry[]
   libraryGroups?: LibraryGroup[]
+  arrInstances?: ArrInstance[]
 }
 
 const onboardingCompleted = ref(false)
@@ -239,6 +275,43 @@ const saveBatchInSubfolder = ref<boolean>(false)
 const saveToAssetFolderOnSend = ref<boolean>(false)
 const plex = ref<PlexSettings>({ url: '', token: '', movieLibraryName: '', movieLibraryNames: [], libraryMappings: [], tvShowLibraryName: '', tvShowLibraryNames: [], tvShowLibraryMappings: [] })
 const mediaServers = ref<MediaServerEntry[]>([])
+// The address each saved key belongs to ('plex', 'ms:<id>', 'arr:<id>'), as of
+// the last load or save. The backend only reuses a saved (masked) key for that
+// same address; the Settings page uses this to say when one must be retyped.
+const savedServerUrls = ref<Record<string, string>>({})
+// Media servers and library groups as of the last load or save. The Settings
+// page edits mediaServers/libraryGroups in place, so anything shown outside it
+// (top bar status pills, sidebar library tabs) reads these instead, and only
+// changes once Save succeeds.
+const savedMediaServers = ref<MediaServerEntry[]>([])
+const savedLibraryGroups = ref<LibraryGroup[]>([])
+
+function recordSavedServerUrls() {
+  const out: Record<string, string> = { plex: plex.value.url || '' }
+  for (const s of mediaServers.value) out[`ms:${s.id}`] = s.url || ''
+  for (const i of arrInstances.value) out[`arr:${i.id}`] = i.url || ''
+  savedServerUrls.value = out
+  savedMediaServers.value = JSON.parse(JSON.stringify(mediaServers.value || []))
+  savedLibraryGroups.value = JSON.parse(JSON.stringify(libraryGroups.value || []))
+}
+
+// After a save, a masked key whose address changed was dropped by the backend
+// (it never moves a saved key to another address); show it as empty here too.
+function clearKeysWithChangedAddress() {
+  const saved = savedServerUrls.value
+  if (plex.value.token === SECRET_MASK && !sameOrigin(plex.value.url, saved.plex)) {
+    plex.value = { ...plex.value, token: '' }
+  }
+  mediaServers.value = mediaServers.value.map(s => {
+    if (sameOrigin(s.url, saved[`ms:${s.id}`])) return s
+    const next = { ...s }
+    if (next.token === SECRET_MASK) next.token = ''
+    if (next.apiKey === SECRET_MASK) next.apiKey = ''
+    return next
+  })
+  arrInstances.value = arrInstances.value.map(i =>
+    i.apiKey === SECRET_MASK && !sameOrigin(i.url, saved[`arr:${i.id}`]) ? { ...i, apiKey: '' } : i)
+}
 // Plex is in use when it has a URL + token and its main server ('plex-1') isn't
 // switched off with the Enabled checkbox in Settings -> Media Servers -- the
 // same rule as Jellyfin/Emby, whose entries are skipped when disabled.
@@ -247,13 +320,19 @@ const plexActive = computed(() =>
   mediaServers.value.find(s => s.id === 'plex-1')?.enabled !== false
 )
 const libraryGroups = ref<LibraryGroup[]>([])
+const arrInstances = ref<ArrInstance[]>([])
 const tmdb = ref<TMDBSettings>({ apiKey: '' })
 const tvdb = ref<TVDBSettings>({ apiKey: '', comingSoon: false })
 const fanart = ref<FanartSettings>({ apiKey: '' })
-const mdblist = ref<MDBListSettings>({ apiKey: '', audienceRatingSource: 'imdb', criticRatingSource: 'tomatoes', cacheDays: 7 })
+const mdblist = ref<MDBListSettings>({ apiKey: '', audienceRatingSource: 'server', criticRatingSource: 'server', cacheDays: 7 })
+const posterApi = ref<PosterApiSettings>({ enabled: false, key: '', defaultMoviePreset: '', defaultTvPreset: '', waitSeconds: 10, retentionDays: 90 })
+// Whether the Poster API is on as last saved/loaded. The sidebar reads this, not
+// posterApi.enabled, so unticking the Settings checkbox doesn't hide the page until Save.
+const posterApiEnabledSaved = ref(false)
 const wetrakr = ref<WeTrakrSettings>({ clientId: '' })
 const simkl = ref<SimklSettings>({ clientId: '' })
 const floppy = ref<FloppySettings>({ url: '', token: '' })
+const maintainerr = ref<MaintainerrSettings>({ url: '', apiKey: '' })
 const imageQuality = ref<ImageQualitySettings>({ outputFormat: 'jpg', jpgQuality: 95, pngCompression: 6, webpQuality: 90 })
 const performance = ref<PerformanceSettings>({ concurrentRenders: 2, tmdbRateLimit: 40, tvdbRateLimit: 20, memoryLimit: 2048, useOverlayCache: true })
 const apiOrder = ref<string[]>(['tmdb', 'fanart', 'tvdb'])
@@ -275,6 +354,7 @@ const notifications = ref<NotificationSettings>({
   discordNotifyWebhook: true,
   discordNotifyAutoGenerate: true,
   discordNotifyMediaMirror: true,
+  discordNotifyAppUpdates: true,
   discordNotifyOverlayRefresh: true,
   appriseEnabled: false,
   appriseUrls: [],
@@ -284,14 +364,42 @@ const notifications = ref<NotificationSettings>({
   appriseNotifyWebhook: true,
   appriseNotifyAutoGenerate: true,
   appriseNotifyMediaMirror: true,
+  appriseNotifyAppUpdates: true,
   appriseNotifyOverlayRefresh: true
 })
 
-async function loadSettings() {
+// Calls made while a load is already running share it (a page load used to
+// start three at once: router guard, App.vue and the view), and a refused or
+// failed request is retried a few times. A failed load must never look like a
+// fresh install: App.vue only opens the setup wizard once `loaded` is true.
+let loadInFlight: Promise<void> | null = null
+
+function loadSettings(): Promise<void> {
+  if (!loadInFlight) {
+    loadInFlight = doLoadSettings().finally(() => { loadInFlight = null })
+  }
+  return loadInFlight
+}
+
+async function fetchSettingsWithRetry(): Promise<Response> {
+  const delays = [1000, 2000, 4000, 8000]
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const res = await fetch(`${apiBase}/api/ui-settings`)
+      const retryable = res.status === 429 || res.status >= 500
+      if (res.ok || !retryable || attempt >= delays.length) return res
+    } catch (e) {
+      if (attempt >= delays.length) throw e
+    }
+    await new Promise((r) => setTimeout(r, delays[attempt]))
+  }
+}
+
+async function doLoadSettings() {
   loading.value = true
   error.value = null
   try {
-    const res = await fetch(`${apiBase}/api/ui-settings`)
+    const res = await fetchSettingsWithRetry()
     if (!res.ok) throw new Error(`API error ${res.status}`)
     const data = (await res.json()) as UISettings
     theme.value = data.theme || 'neon'
@@ -335,18 +443,32 @@ async function loadSettings() {
     }
     mediaServers.value = data.mediaServers ?? []
     libraryGroups.value = data.libraryGroups ?? []
+    arrInstances.value = data.arrInstances ?? []
+    recordSavedServerUrls()
     tmdb.value = { apiKey: data.tmdb?.apiKey ?? '' }
     tvdb.value = { apiKey: data.tvdb?.apiKey ?? '', comingSoon: data.tvdb?.comingSoon ?? true }
     fanart.value = { apiKey: data.fanart?.apiKey ?? '' }
     mdblist.value = {
       apiKey: data.mdblist?.apiKey ?? '',
-      audienceRatingSource: data.mdblist?.audienceRatingSource ?? 'imdb',
-      criticRatingSource: data.mdblist?.criticRatingSource ?? 'tomatoes',
+      audienceRatingSource: data.mdblist?.audienceRatingSource ?? 'server',
+      criticRatingSource: data.mdblist?.criticRatingSource ?? 'server',
       cacheDays: data.mdblist?.cacheDays ?? 7
     }
+    posterApi.value = {
+      enabled: data.posterApi?.enabled ?? false,
+      key: data.posterApi?.key ?? '',
+      defaultMoviePreset: data.posterApi?.defaultMoviePreset ?? '',
+      defaultTvPreset: data.posterApi?.defaultTvPreset ?? '',
+      waitSeconds: data.posterApi?.waitSeconds ?? 10,
+      retentionDays: data.posterApi?.retentionDays ?? 90,
+      movieGroup: data.posterApi?.movieGroup ?? '',
+      tvGroup: data.posterApi?.tvGroup ?? ''
+    }
+    posterApiEnabledSaved.value = posterApi.value.enabled
     wetrakr.value = { clientId: data.wetrakr?.clientId ?? '' }
     simkl.value = { clientId: data.simkl?.clientId ?? '' }
     floppy.value = { url: data.floppy?.url ?? '', token: data.floppy?.token ?? '' }
+    maintainerr.value = { url: data.maintainerr?.url ?? '', apiKey: data.maintainerr?.apiKey ?? '' }
     imageQuality.value = {
       outputFormat: data.imageQuality?.outputFormat ?? 'jpg',
       jpgQuality: data.imageQuality?.jpgQuality ?? 95,
@@ -394,6 +516,7 @@ async function loadSettings() {
       discordNotifyWebhook: data.notifications?.discordNotifyWebhook ?? true,
       discordNotifyAutoGenerate: data.notifications?.discordNotifyAutoGenerate ?? true,
       discordNotifyMediaMirror: data.notifications?.discordNotifyMediaMirror ?? true,
+      discordNotifyAppUpdates: data.notifications?.discordNotifyAppUpdates ?? true,
       discordNotifyOverlayRefresh: data.notifications?.discordNotifyOverlayRefresh ?? true,
       appriseEnabled: data.notifications?.appriseEnabled ?? false,
       appriseUrls: data.notifications?.appriseUrls ?? [],
@@ -403,6 +526,7 @@ async function loadSettings() {
       appriseNotifyWebhook: data.notifications?.appriseNotifyWebhook ?? true,
       appriseNotifyAutoGenerate: data.notifications?.appriseNotifyAutoGenerate ?? true,
       appriseNotifyMediaMirror: data.notifications?.appriseNotifyMediaMirror ?? true,
+      appriseNotifyAppUpdates: data.notifications?.appriseNotifyAppUpdates ?? true,
       appriseNotifyOverlayRefresh: data.notifications?.appriseNotifyOverlayRefresh ?? true
     }
 
@@ -418,6 +542,14 @@ async function loadSettings() {
 // server(s) this save. The backend otherwise refuses an empty mediaServers
 // list when entries are already saved (a guard against accidental wipes).
 async function saveSettings(opts: { allowEmptyMediaServers?: boolean } = {}) {
+  // Never save before a successful load: every field would still hold its
+  // in-memory default, and saving those would overwrite the real settings
+  // (blank API keys, default automation, ...). Refuse and reload instead.
+  if (!loaded.value) {
+    await loadSettings()
+    error.value = 'Settings had not loaded yet, so nothing was saved. Check the values and save again.'
+    return
+  }
   loading.value = true
   error.value = null
   try {
@@ -439,13 +571,16 @@ async function saveSettings(opts: { allowEmptyMediaServers?: boolean } = {}) {
       plex: { ...plex.value },
       mediaServers: mediaServers.value.map(s => ({ ...s })),
       libraryGroups: libraryGroups.value.map(g => ({ ...g, members: g.members.map(m => ({ ...m })) })),
+      arrInstances: arrInstances.value.map(i => ({ ...i })),
       tmdb: { ...tmdb.value },
       tvdb: { ...tvdb.value },
       fanart: { ...fanart.value },
       mdblist: { ...mdblist.value },
+      posterApi: { ...posterApi.value },
       wetrakr: { ...wetrakr.value },
       simkl: { ...simkl.value },
       floppy: { ...floppy.value },
+      maintainerr: { ...maintainerr.value },
       imageQuality: { ...imageQuality.value },
       performance: { ...performance.value },
       apiOrder: apiOrder.value,
@@ -461,6 +596,9 @@ async function saveSettings(opts: { allowEmptyMediaServers?: boolean } = {}) {
       body: JSON.stringify(payload)
     })
     if (!res.ok) throw new Error(`API error ${res.status}`)
+    posterApiEnabledSaved.value = !!payload.posterApi?.enabled
+    clearKeysWithChangedAddress()
+    recordSavedServerUrls()
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : 'Failed to save settings'
     error.value = message
@@ -485,14 +623,21 @@ export function useSettingsStore() {
     plex,
     plexActive,
     mediaServers,
+    savedServerUrls,
+    savedMediaServers,
+    savedLibraryGroups,
     libraryGroups,
+    arrInstances,
     tmdb,
     tvdb,
     fanart,
     mdblist,
+    posterApi,
+    posterApiEnabledSaved,
     wetrakr,
     simkl,
     floppy,
+    maintainerr,
     imageQuality,
     performance,
     apiOrder,

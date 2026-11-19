@@ -6,6 +6,7 @@ import re
 import sqlite3
 import os
 import shutil
+import threading
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
@@ -45,6 +46,20 @@ def _configure_conn(conn: sqlite3.Connection):
     conn.execute("PRAGMA synchronous=NORMAL;")
     conn.execute("PRAGMA busy_timeout=30000;")  # 30s wait if locked
     conn.row_factory = sqlite3.Row
+
+
+def get_performance_int(key: str, default: int) -> int:
+    """A positive int from the saved performance settings (e.g. tmdbRateLimit).
+
+    Reads the settings table only. The API clients call this before every request;
+    `_read_settings()` would also re-apply runtime settings, which re-resolves the
+    Plex library names with a request to Plex each time.
+    """
+    try:
+        value = int(((get_ui_settings() or {}).get("performance") or {}).get(key, default))
+        return value if value > 0 else default
+    except Exception:
+        return default
 
 
 def get_db_version() -> Optional[str]:
@@ -207,6 +222,93 @@ def check_and_update_version() -> None:
         set_db_version(current_app_version)
     else:
         logger.debug(f"[DB] Database version {db_version} matches app version")
+
+
+def _migrate_ignore_labels_to_modes(cursor) -> List[str]:
+    """Move webhookIgnoreLabels from each Plex library mapping into Leave alone
+    rules on its LibraryGroup. Returns the ids of the groups that changed."""
+    def _load(key, default):
+        row = cursor.execute("SELECT value FROM settings WHERE key = ? LIMIT 1", (key,)).fetchone()
+        if not row or not row[0]:
+            return default
+        try:
+            val = json.loads(row[0])
+        except (json.JSONDecodeError, TypeError):
+            return default
+        return val if isinstance(val, type(default)) else default
+
+    groups = _load("libraryGroups", [])
+    touched: List[str] = []
+    changed_keys: Dict[str, list] = {}
+    groups_changed = False
+
+    for setting_key, media_type in (("plex.libraryMappings", "movie"), ("plex.tvShowLibraryMappings", "tv")):
+        mappings = _load(setting_key, [])
+        mappings_changed = False
+        for m in mappings:
+            if not isinstance(m, dict) or not m.get("id"):
+                continue
+            labels = [str(l).strip() for l in (m.get("webhookIgnoreLabels") or []) if str(l).strip()]
+            if not labels:
+                continue
+            lib_id = str(m["id"])
+            group = next((g for g in groups if isinstance(g, dict) and g.get("mediaType") == media_type and any(
+                isinstance(mem, dict) and mem.get("serverId") == "plex-1" and str(mem.get("libraryId")) == lib_id
+                for mem in (g.get("members") or []))), None)
+            if group is None:
+                name = m.get("displayName") or m.get("title") or lib_id
+                group = {
+                    "id": f"group-{media_type}-{lib_id}",
+                    "name": name,
+                    "mediaType": media_type,
+                    "members": [{"serverId": "plex-1", "libraryId": lib_id, "libraryName": name}],
+                    "autoGenerateEnabled": bool(m.get("autoGenerateEnabled", False)),
+                    "autoGeneratePresetId": m.get("autoGeneratePresetId"),
+                    "autoGenerateTemplateId": m.get("autoGenerateTemplateId"),
+                    "labelsToRemove": [],
+                }
+                groups.append(group)
+            rules = group.get("posterModeRules")
+            if not isinstance(rules, list):
+                rules = []
+            for label in labels:
+                if not any(isinstance(r, dict) and r.get("source") == "plex_label"
+                           and str(r.get("value", "")).lower() == label.lower() for r in rules):
+                    rules.append({"source": "plex_label", "value": label, "mode": "leave_alone"})
+            group["posterModeRules"] = rules
+            groups_changed = True
+            if group["id"] not in touched:
+                touched.append(group["id"])
+            m["webhookIgnoreLabels"] = []
+            mappings_changed = True
+        if mappings_changed:
+            changed_keys[setting_key] = mappings
+
+    if groups_changed:
+        cursor.execute("""
+            INSERT INTO settings (key, value, category) VALUES ('libraryGroups', ?, NULL)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """, (json.dumps(groups),))
+    for key, mappings in changed_keys.items():
+        cursor.execute("UPDATE settings SET value = ? WHERE key = ?", (json.dumps(mappings), key))
+    if touched:
+        logger.info("[DB] Moved Plex ignore labels into poster-mode rules for %d group(s)", len(touched))
+    return touched
+
+
+def _evaluate_groups_async(group_ids: List[str]) -> None:
+    """Evaluate poster-mode rules for these groups in a background thread."""
+    def _run():
+        try:
+            from . import poster_mode  # lazy: poster_mode imports this module
+            for gid in group_ids:
+                try:
+                    poster_mode.evaluate_group(gid)
+                except Exception as e:
+                    logger.warning("[DB] Poster-mode evaluation failed for %s: %s", gid, e)
+        except Exception as e:
+            logger.warning("[DB] Poster-mode evaluation could not start: %s", e)
+    threading.Thread(target=_run, daemon=True, name="poster-mode-migration").start()
 
 
 def init_database():
@@ -420,6 +522,17 @@ def init_database():
                     logger.warning("[DB] %s failed for preset %s: %s", mig_name, row["id"], mig_err)
             cursor.execute("INSERT INTO applied_migrations (name) VALUES (?)", (mig_name,))
             logger.info("[DB] Migration %s updated %d preset(s)", mig_name, migrated)
+
+        # Overlay rating sources default to the media server now (Quirk #210).
+        # The old defaults (MDBList's IMDb / Rotten Tomatoes) were saved on every
+        # Settings save, so they can't be told apart from a real choice; switch
+        # them only where there's no MDBList key, where MDBList was never used.
+        if not cursor.execute("SELECT 1 FROM applied_migrations WHERE name = 'rating_source_server'").fetchone():
+            key_row = cursor.execute("SELECT value FROM settings WHERE key = 'mdblist.apiKey'").fetchone()
+            if not (key_row and str(key_row[0] or "").strip()):
+                for skey, old in (("mdblist.audienceRatingSource", "imdb"), ("mdblist.criticRatingSource", "tomatoes")):
+                    cursor.execute("UPDATE settings SET value = 'server' WHERE key = ? AND value = ?", (skey, old))
+            cursor.execute("INSERT INTO applied_migrations (name) VALUES ('rating_source_server')")
 
         # Create indexes for better query performance
         cursor.execute("""
@@ -918,6 +1031,10 @@ def init_database():
         if "conditions_json" not in overlay_cols:
             cursor.execute("ALTER TABLE overlay_configs ADD COLUMN conditions_json TEXT")
             logger.info("[DB] Added 'conditions_json' column to overlay_configs table")
+        # Free-text notes / credits for the overlay (e.g. who made the original).
+        if "notes" not in overlay_cols:
+            cursor.execute("ALTER TABLE overlay_configs ADD COLUMN notes TEXT")
+            logger.info("[DB] Added 'notes' column to overlay_configs table")
 
         # Live Kometa files: overlay YAMLs on disk that are re-imported when they change.
         cursor.execute("""
@@ -1024,6 +1141,49 @@ def init_database():
             )
         """)
 
+        # Poster API cache index (backend/poster_api_store.py owns the files in
+        # config/cache/poster_api/). source: rendered | pinned | library. season_index
+        # is -1 for "no season" (NOT NULL so the composite PK upserts correctly).
+        # Timestamps are CURRENT_TIMESTAMP (UTC), like the other tables.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS poster_api_cache (
+                media_type TEXT NOT NULL,
+                tmdb_id INTEGER NOT NULL,
+                season_index INTEGER NOT NULL DEFAULT -1,
+                preset_key TEXT NOT NULL DEFAULT '',
+                source TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                title TEXT,
+                preset_hash TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_served_at TIMESTAMP,
+                hits INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (media_type, tmdb_id, season_index, preset_key, source)
+            )
+        """)
+        # Served-from-library requests used to get a row here; they now only go
+        # into poster_api_requests (the file belongs to the library, not the API).
+        cursor.execute("DELETE FROM poster_api_cache WHERE source = 'library'")
+
+        # Poster API request history (Poster API page -> Recent requests). result:
+        # library | pinned | rendered (cached render) | generated (rendered for this
+        # request) | redirect (sent to the TMDb poster) | not_found | bad_key.
+        # Trimmed to the newest POSTER_API_REQUESTS_KEEP rows on insert.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS poster_api_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                media_type TEXT,
+                tmdb_id INTEGER,
+                season_index INTEGER,
+                preset TEXT,
+                group_id TEXT,
+                result TEXT NOT NULL,
+                title TEXT,
+                duration_ms INTEGER
+            )
+        """)
+
         # Media Mirror change detection: a sha256 of the RAW source image bytes
         # last successfully copied to each target item, per asset type. A run
         # compares the freshly-downloaded source bytes' hash against this and
@@ -1072,6 +1232,21 @@ def init_database():
             )
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_overlay_state_library ON overlay_state(server_id, library_id)")
+        # A tracked poster whose item disappeared (404) is parked here instead
+        # of being forgotten, so it can be re-attached when the title comes
+        # back under a new id (Plex rating key / Jellyfin item id). See
+        # overlay_refresh.restore_parked().
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS overlay_state_parked (
+                server_id TEXT NOT NULL,
+                rating_key TEXT NOT NULL,
+                season_index INTEGER NOT NULL DEFAULT -1,
+                library_id TEXT,
+                row_json TEXT NOT NULL,
+                parked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (server_id, rating_key, season_index)
+            )
+        """)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS overlay_refresh_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1087,6 +1262,20 @@ def init_database():
             )
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_overlay_refresh_log_group ON overlay_refresh_log(group_id, created_at)")
+
+        # A collection poster sent to Jellyfin/Emby from the editor used to be
+        # tracked as a movie with the collection's TMDb id, so every Overlay
+        # Refresh asked TMDb for /movie/<collection id> and got a 404. Mark
+        # such rows as collections and drop the id. Cheap; a no-op once fixed.
+        try:
+            cursor.execute("""
+                UPDATE overlay_state SET is_collection = 1, tmdb_id = NULL
+                WHERE (tmdb_id IS NOT NULL OR is_collection = 0)
+                  AND (rating_key IN (SELECT rating_key FROM collection_cache)
+                       OR meta_rating_key IN (SELECT rating_key FROM collection_cache))
+            """)
+        except Exception as e:
+            logger.debug("[DB] overlay_state collection fix-up skipped: %s", e)
 
         # Poster drift detection: a small fingerprint of the last poster
         # Simposter sent to each item, compared when a scan re-downloads a
@@ -1151,6 +1340,54 @@ def init_database():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Poster modes (backend/poster_mode.py): per library group + title, whether
+        # Simposter makes the poster (full), only adds overlays to a clean copy
+        # (overlay_only) or leaves it alone (leave_alone). manual_mode is set by
+        # the user, rule_mode/rule_reason by rules; manual wins.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS poster_modes (
+                group_id TEXT NOT NULL,
+                media_type TEXT NOT NULL,
+                id_type TEXT NOT NULL,
+                item_id TEXT NOT NULL,
+                manual_mode TEXT,
+                rule_mode TEXT,
+                rule_reason TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (group_id, media_type, id_type, item_id)
+            )
+        """)
+        # "Lost its rule" heads-up (poster_mode.warning_text()).
+        cursor.execute("PRAGMA table_info(poster_modes)")
+        _pm_cols = {r[1] for r in cursor.fetchall()}
+        for _col in ("lost_mode", "lost_reason", "lost_at", "tag_mode", "tag_reason"):
+            if _col not in _pm_cols:
+                cursor.execute(f"ALTER TABLE poster_modes ADD COLUMN {_col} TEXT")
+        # Radarr/Sonarr tags (backend/arr_client.py), read for poster mode rules.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS arr_tags (
+                instance_id TEXT NOT NULL,
+                id_type TEXT NOT NULL,
+                item_id TEXT NOT NULL,
+                tags_json TEXT NOT NULL,
+                PRIMARY KEY (instance_id, id_type, item_id)
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS arr_tag_sync (
+                instance_id TEXT PRIMARY KEY,
+                synced_at REAL,
+                attempted_at REAL,
+                error TEXT
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS arr_id_map (
+                tmdb_id TEXT PRIMARY KEY,
+                tvdb_id TEXT,
+                checked_at REAL
+            )
+        """)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS media_server_item_etags (
                 server_id TEXT NOT NULL,
@@ -1159,6 +1396,22 @@ def init_database():
                 PRIMARY KEY (server_id, rating_key)
             )
         """)
+        # Ratings the media servers have (Plex audienceRating/rating, Jellyfin
+        # CommunityRating/CriticRating), 0-10, filled by scans (server_ratings.py).
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS server_ratings (
+                server_id TEXT NOT NULL,
+                rating_key TEXT NOT NULL,
+                server_type TEXT NOT NULL,
+                media_type TEXT NOT NULL,
+                tmdb_id INTEGER,
+                audience_rating REAL,
+                critic_rating REAL,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (server_id, rating_key)
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_server_ratings_tmdb ON server_ratings(media_type, tmdb_id)")
 
         # MDBList caches (overlay ratings and list membership). item_ratings is
         # keyed by "movie:tmdb:603"-style keys; data_json holds the normalized
@@ -1180,6 +1433,37 @@ def init_database():
                 fetched_at REAL NOT NULL
             )
         """)
+
+        # Maintainerr snapshot (backend/maintainerr_data.py): one row per item per
+        # collection, replaced as a whole on every successful sync.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS maintainerr_items (
+                media_type TEXT NOT NULL,
+                media_server_id TEXT NOT NULL,
+                tmdb_id INTEGER,
+                tvdb_id INTEGER,
+                collection_id INTEGER,
+                collection_name TEXT,
+                arr_action INTEGER,
+                deletion_date TEXT NOT NULL,
+                media_server_type TEXT
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_maintainerr_items_key ON maintainerr_items(media_server_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_maintainerr_items_tmdb ON maintainerr_items(tmdb_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_maintainerr_items_tvdb ON maintainerr_items(tvdb_id)")
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS maintainerr_sync (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                fetched_at REAL,
+                last_error TEXT,
+                last_attempt_at REAL
+            )
+        """)
+        for _tbl, _col, _type in (("maintainerr_items", "media_server_type", "TEXT"),
+                                  ("maintainerr_sync", "last_attempt_at", "REAL")):
+            if _col not in [r[1] for r in cursor.execute(f"PRAGMA table_info({_tbl})").fetchall()]:
+                cursor.execute(f"ALTER TABLE {_tbl} ADD COLUMN {_col} {_type}")
 
         # Sign-in tokens for list sources (WeTrakr, SIMKL). Kept out of the
         # settings table, which every Settings save rebuilds from the page's
@@ -1253,7 +1537,7 @@ def init_database():
                         ("scheduler.cleanupCronExpression", "0 3 * * 0"),
                         ("scheduler.cleanupCategories", json.dumps([
                             "poster_cache", "logo_cache", "backdrop_cache", "square_art_cache",
-                            "overlay_effect_cache", "uploaded_files", "overlay_assets", "poster_history",
+                            "overlay_effect_cache", "uploaded_files", "overlay_assets", "poster_history", "poster_api_renders", "clean_base",
                         ])),
                         ("scheduler.cleanupHistoryDays", "180"),
                     ):
@@ -1432,6 +1716,18 @@ def init_database():
                 logger.info(f"[DB] Seeded libraryGroups with {len(all_groups)} auto-migrated single-member group(s) from existing Plex library mappings")
         except Exception as library_groups_err:
             logger.warning(f"[DB] Could not seed libraryGroups: {library_groups_err}")
+
+        # Plex "webhook ignore labels" become Leave alone poster-mode rules on
+        # the library's group (created here for an ungrouped Plex library).
+        try:
+            if not cursor.execute("SELECT 1 FROM applied_migrations WHERE name = 'ignore_labels_to_modes'").fetchone():
+                touched = _migrate_ignore_labels_to_modes(cursor)
+                cursor.execute("INSERT INTO applied_migrations (name) VALUES ('ignore_labels_to_modes')")
+                conn.commit()
+                if touched:
+                    _evaluate_groups_async(touched)
+        except Exception as ignore_mig_err:
+            logger.warning(f"[DB] ignore_labels_to_modes migration failed: {ignore_mig_err}")
     except Exception as e:
         logger.error(f"[DB] Initialization/migration failed: {e}")
         conn.rollback()
@@ -1523,7 +1819,14 @@ _STRING_ONLY_SETTINGS_KEYS = {
     "simkl.clientId",
     "floppy.url",
     "floppy.token",
+    "maintainerr.url",
+    "maintainerr.apiKey",
     "automation.webhookSecret",
+    "posterApi.key",
+    "posterApi.defaultMoviePreset",
+    "posterApi.defaultTvPreset",
+    "posterApi.movieGroup",
+    "posterApi.tvGroup",
     "automation.webhookAutoLabels",
     "automation.labelToAdd",
     "notifications.discordWebhookUrl",
@@ -1984,7 +2287,7 @@ def get_all_overlay_configs() -> List[Dict[str, Any]]:
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT id, name, elements_json, streaming_region, conditions_json, created_at, updated_at
+            SELECT id, name, elements_json, streaming_region, conditions_json, notes, created_at, updated_at
             FROM overlay_configs
             ORDER BY created_at DESC
         """)
@@ -1997,6 +2300,7 @@ def get_all_overlay_configs() -> List[Dict[str, Any]]:
             "elements": json.loads(row["elements_json"]),
             "streaming_region": row["streaming_region"] or "US",
             "conditions": _overlay_conditions(row["conditions_json"]),
+            "notes": row["notes"] or "",
             "created_at": row["created_at"],
             "updated_at": row["updated_at"]
         }
@@ -2009,7 +2313,7 @@ def get_overlay_config(config_id: str) -> Optional[Dict[str, Any]]:
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT id, name, elements_json, streaming_region, conditions_json, created_at, updated_at
+            SELECT id, name, elements_json, streaming_region, conditions_json, notes, created_at, updated_at
             FROM overlay_configs
             WHERE id = ?
         """, (config_id,))
@@ -2022,6 +2326,7 @@ def get_overlay_config(config_id: str) -> Optional[Dict[str, Any]]:
             "elements": json.loads(row["elements_json"]),
             "streaming_region": row["streaming_region"] or "US",
             "conditions": _overlay_conditions(row["conditions_json"]),
+            "notes": row["notes"] or "",
             "created_at": row["created_at"],
             "updated_at": row["updated_at"]
         }
@@ -2029,22 +2334,25 @@ def get_overlay_config(config_id: str) -> Optional[Dict[str, Any]]:
 
 
 def save_overlay_config(config_id: str, name: str, elements: List[Dict[str, Any]], streaming_region: str = "US",
-                        conditions: Optional[List[Dict[str, Any]]] = None) -> None:
-    """Save or update an overlay configuration. conditions=None keeps the stored
-    whole-overlay conditions (callers that don't know about them, e.g. a Kometa re-import)."""
+                        conditions: Optional[List[Dict[str, Any]]] = None, notes: Optional[str] = None) -> None:
+    """Save or update an overlay configuration. conditions=None / notes=None keep
+    the stored whole-overlay conditions / notes (callers that don't know about
+    them, e.g. a Kometa re-import or a live file sync)."""
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO overlay_configs (id, name, elements_json, streaming_region, conditions_json, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            INSERT INTO overlay_configs (id, name, elements_json, streaming_region, conditions_json, notes, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 elements_json = excluded.elements_json,
                 streaming_region = excluded.streaming_region,
                 conditions_json = COALESCE(excluded.conditions_json, overlay_configs.conditions_json),
+                notes = COALESCE(excluded.notes, overlay_configs.notes),
                 updated_at = CURRENT_TIMESTAMP
         """, (config_id, name, json.dumps(elements), streaming_region,
-              None if conditions is None else json.dumps(conditions)))
+              None if conditions is None else json.dumps(conditions),
+              None if notes is None else str(notes)[:4000]))
     logger.info(f"[DB] Saved overlay config {config_id} ({name})")
 
 
@@ -2193,18 +2501,6 @@ def delete_overlay_asset(asset_id: str) -> bool:
     if deleted:
         logger.info(f"[DB] Deleted overlay asset {asset_id}")
     return deleted
-
-
-def link_preset_to_overlay_config(template_id: str, preset_id: str, overlay_config_id: Optional[str]) -> None:
-    """Link a preset to an overlay configuration (or unlink if overlay_config_id is None)."""
-    with get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE presets
-            SET overlay_config_id = ?
-            WHERE template_id = ? AND id = ?
-        """, (overlay_config_id, template_id, preset_id))
-    logger.info(f"[DB] Linked preset {preset_id} to overlay config {overlay_config_id}")
 
 
 def replace_all_presets(preset_data: Dict[str, Dict[str, Any]]) -> None:
@@ -2489,6 +2785,40 @@ def upsert_overlay_state(row: Dict[str, Any]) -> None:
         ))
 
 
+def set_overlay_state_overlay_lists(server_id: str, rating_key: str, season_index: Optional[int],
+                                    ids: List[str], below: List[str]) -> None:
+    """Replace one tracked poster's overlay lists in its options snapshot,
+    leaving every other option and column as it is. Used when a preset's
+    overlays change and the poster should follow them on its next refresh."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT options_json FROM overlay_state WHERE server_id = ? AND rating_key = ? AND season_index = ?",
+            (server_id, str(rating_key), _season_db(season_index)),
+        ).fetchone()
+        if not row:
+            return
+        try:
+            options = json.loads(row["options_json"] or "{}")
+        except Exception:
+            options = {}
+        options["overlay_config_ids"] = list(ids)
+        options["overlay_config_ids_below"] = list(below)
+        conn.execute(
+            "UPDATE overlay_state SET options_json = ? WHERE server_id = ? AND rating_key = ? AND season_index = ?",
+            (json.dumps(options), server_id, str(rating_key), _season_db(season_index)),
+        )
+
+
+def get_overlay_state(server_id: str, rating_key: str, season_index: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    """One tracked poster's overlay record, or None."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM overlay_state WHERE server_id = ? AND rating_key = ? AND season_index = ?",
+            (server_id, str(rating_key), _season_db(season_index)),
+        ).fetchone()
+    return _overlay_state_row(row) if row else None
+
+
 def delete_overlay_state(server_id: str, rating_key: str, season_index: Optional[int] = None) -> None:
     with get_db() as conn:
         conn.execute(
@@ -2544,6 +2874,73 @@ def count_overlay_states(pairs: List[tuple]) -> int:
         params += [sid, str(lid)]
     with get_db() as conn:
         return conn.execute(f"SELECT COUNT(*) FROM overlay_state WHERE {clause}", params).fetchone()[0]
+
+
+def park_overlay_state(server_id: str, rating_key: str, season_index: Optional[int] = None) -> bool:
+    """Move a tracked poster whose item is gone into overlay_state_parked,
+    so it can be re-attached if the title comes back under a new id."""
+    row = get_overlay_state(server_id, rating_key, season_index)
+    if not row:
+        return False
+    with get_db() as conn:
+        conn.execute("""
+            INSERT OR REPLACE INTO overlay_state_parked (server_id, rating_key, season_index, library_id, row_json, parked_at)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        """, (server_id, str(rating_key), _season_db(season_index),
+              str(row["library_id"]) if row.get("library_id") is not None else None,
+              json.dumps(row, default=str)))
+        conn.execute(
+            "DELETE FROM overlay_state WHERE server_id = ? AND rating_key = ? AND season_index = ?",
+            (server_id, str(rating_key), _season_db(season_index)),
+        )
+    return True
+
+
+def get_parked_overlay_states(pairs: List[tuple]) -> List[Dict[str, Any]]:
+    """Parked tracked posters in the given (server_id, library_id) pairs.
+    Each dict is the original overlay_state row plus parked_at."""
+    if not pairs:
+        return []
+    clause = " OR ".join("(server_id = ? AND library_id = ?)" for _ in pairs)
+    params: List[Any] = []
+    for sid, lid in pairs:
+        params += [sid, str(lid)]
+    with get_db() as conn:
+        try:
+            rows = conn.execute(f"SELECT row_json, parked_at FROM overlay_state_parked WHERE {clause}", params).fetchall()
+        except sqlite3.OperationalError:
+            return []
+    out = []
+    for r in rows:
+        try:
+            d = json.loads(r["row_json"])
+        except Exception:
+            continue
+        d["parked_at"] = r["parked_at"]
+        out.append(d)
+    return out
+
+
+def delete_parked_overlay_state(server_id: str, rating_key: str, season_index: Optional[int] = None) -> None:
+    with get_db() as conn:
+        conn.execute(
+            "DELETE FROM overlay_state_parked WHERE server_id = ? AND rating_key = ? AND season_index = ?",
+            (server_id, str(rating_key), _season_db(season_index)),
+        )
+
+
+def find_cached_key_by_tmdb(server_id: str, library_id: Optional[str], media_type: str, tmdb_id: int) -> Optional[str]:
+    """The current cached item id for a TMDb id on one server/library (the
+    scan cache), or None."""
+    table = "tv_cache" if media_type == "tv" else "movie_cache"
+    sql = f"SELECT rating_key FROM {table} WHERE server_id = ? AND tmdb_id = ?"
+    params: List[Any] = [server_id, int(tmdb_id)]
+    if library_id is not None:
+        sql += " AND library_id = ?"
+        params.append(str(library_id))
+    with get_db() as conn:
+        row = conn.execute(sql + " LIMIT 1", params).fetchone()
+    return str(row["rating_key"]) if row else None
 
 
 def add_overlay_refresh_log(run_id: str, group_id: Optional[str], entries: List[Dict[str, Any]]) -> None:
@@ -4193,6 +4590,18 @@ def get_collection_tmdb_id(rating_key: str) -> Optional[int]:
     return int(row["tmdb_collection_id"])
 
 
+def is_collection_key(rating_key: Any) -> bool:
+    """True when `rating_key` is a cached collection (any server)."""
+    if rating_key in (None, ""):
+        return False
+    try:
+        with get_db() as conn:
+            row = conn.execute("SELECT 1 FROM collection_cache WHERE rating_key = ? LIMIT 1", (str(rating_key),)).fetchone()
+        return row is not None
+    except Exception:
+        return False
+
+
 def set_collection_tmdb_id(rating_key: str, tmdb_collection_id: Optional[int]) -> None:
     with get_db() as conn:
         cursor = conn.cursor()
@@ -4344,7 +4753,8 @@ def get_last_poster_send(server_id: str, rating_key: str) -> Optional[Dict[str, 
         row = conn.execute(
             "SELECT source, template_id, preset_id, created_at FROM poster_history "
             "WHERE server_id = ? AND rating_key = ? AND COALESCE(status, 'success') = 'success' "
-            "AND action IN ('sent_to_plex', 'resent_to_plex', 'sent_to_media_server', 'resent_to_media_server', 'overlay_refresh') "
+            "AND action IN ('sent_to_plex', 'resent_to_plex', 'sent_to_media_server', 'resent_to_media_server', 'overlay_refresh', "
+            "'overlay_only_sent') "
             "ORDER BY created_at DESC LIMIT 1",
             (server_id, str(rating_key)),
         ).fetchone()
@@ -4479,6 +4889,31 @@ def get_ids_for_rating_key(rating_key: str) -> tuple:
     return None, None
 
 
+def find_rating_key_by_tmdb_id(media_type: str, tmdb_id: int,
+                               members: Optional[List[Any]] = None) -> Optional[str]:
+    """A library rating_key for this TMDb id from movie_cache ("movie") or
+    tv_cache ("tv"/"tv-show"), or None if the title isn't in any scanned library.
+    Prefers the Plex copy when the same title exists on several servers (its
+    media info can be fetched live); otherwise the most recently updated row.
+    Used by the poster API to add library badges to a TMDb-id render.
+    ``members`` ((server_id, library_id) pairs) limits it to those libraries."""
+    if not tmdb_id:
+        return None
+    table = "tv_cache" if media_type in ("tv", "tv-show") else "movie_cache"
+    with get_db() as conn:
+        rows = conn.execute(
+            f"""SELECT rating_key, server_id, library_id FROM {table}
+                WHERE tmdb_id = ? AND rating_key IS NOT NULL
+                ORDER BY (server_id = 'plex-1') DESC, updated_at DESC""",
+            (int(tmdb_id),),
+        ).fetchall()
+    allowed = {(str(s), str(l)) for s, l in members} if members is not None else None
+    for row in rows:
+        if allowed is None or (str(row["server_id"]), str(row["library_id"])) in allowed:
+            return str(row["rating_key"])
+    return None
+
+
 def get_cached_item_identity(rating_key: str) -> Optional[Dict[str, Any]]:
     """What Simposter knows about a cached movie/show: which table, server,
     library and external ids. Used to find the item again on its server
@@ -4522,13 +4957,19 @@ def rekey_media_server_item(server_id: str, old_key: str, new_key: str) -> bool:
                 cursor.execute(f"UPDATE {table} SET rating_key = ?, updated_at = CURRENT_TIMESTAMP WHERE rating_key = ? AND server_id = ?",
                                (new_key, old_key, server_id))
             changed = True
-        for table in ("overlay_state", "poster_fingerprints", "media_server_item_etags"):
+        for table in ("overlay_state", "poster_fingerprints", "media_server_item_etags", "server_ratings"):
             try:
                 cursor.execute(f"UPDATE OR IGNORE {table} SET rating_key = ? WHERE server_id = ? AND rating_key = ?",
                                (new_key, server_id, old_key))
                 cursor.execute(f"DELETE FROM {table} WHERE server_id = ? AND rating_key = ?", (server_id, old_key))
             except sqlite3.Error as e:
                 logger.debug("[DB] rekey %s %s -> %s failed: %s", table, old_key, new_key, e)
+    try:
+        # Overlay-only clean copies (backend/overlay_only.py) are files keyed by the item id.
+        from . import overlay_only
+        overlay_only.rekey_clean_base(server_id, old_key, new_key)
+    except Exception as e:
+        logger.debug("[DB] rekey clean copy %s -> %s failed: %s", old_key, new_key, e)
     if changed:
         logger.info("[DB] '%s': item id %s is now %s (re-imported on the server)", server_id, old_key, new_key)
     return changed
@@ -4609,10 +5050,16 @@ def record_poster_history(
 
     # Remember what was sent, for poster drift detection (backend/poster_drift.py).
     if poster_data and status == 'success' and action in (
-        "sent_to_plex", "resent_to_plex", "sent_to_media_server", "resent_to_media_server", "overlay_refresh", "overlay_removed"
+        "sent_to_plex", "resent_to_plex", "sent_to_media_server", "resent_to_media_server", "overlay_refresh", "overlay_removed",
+        "overlay_only_sent",
     ):
         from . import poster_drift
         poster_drift.record_sent(server_id, rating_key, poster_data)
+
+    # A full poster went out: a "lost its rule" heads-up on the title is now moot.
+    if status == 'success' and action in ("sent_to_plex", "resent_to_plex", "sent_to_media_server", "resent_to_media_server"):
+        from . import poster_mode
+        poster_mode.clear_lost_for_item(server_id, rating_key)
 
     with get_db() as conn:
         cursor = conn.cursor()
@@ -4777,7 +5224,8 @@ def poster_already_sent(server_id: str, rating_key: str) -> bool:
             cursor.execute(
                 """SELECT 1 FROM poster_history
                    WHERE server_id = ? AND rating_key = ?
-                     AND action IN ('sent_to_plex', 'resent_to_plex', 'sent_to_media_server', 'resent_to_media_server', 'overlay_refresh')
+                     AND action IN ('sent_to_plex', 'resent_to_plex', 'sent_to_media_server', 'resent_to_media_server', 'overlay_refresh',
+                                    'overlay_only_sent')
                      AND COALESCE(status, 'success') = 'success'
                    LIMIT 1""",
                 (server_id, str(rating_key)),
@@ -4878,7 +5326,8 @@ def get_poster_status(
         # direct upload, Quirk #110 -- exactly the case that made "Fallout"/
         # "The Grand Tour" show "Not sent" despite a real, successful,
         # verified send moments earlier).
-        if action in ("sent_to_plex", "resent_to_plex", "sent_to_media_server", "resent_to_media_server") and result[rating_key]["sent"] is None:
+        if action in ("sent_to_plex", "resent_to_plex", "sent_to_media_server", "resent_to_media_server",
+                      "overlay_only_sent") and result[rating_key]["sent"] is None:
             result[rating_key]["sent"] = {
                 "template_id": template_id,
                 "preset_id": preset_id,
@@ -5013,7 +5462,7 @@ def purge_server_cache(server_id: str) -> Dict[str, Any]:
         own_keys = sorted(keys - shared)
 
         for table in ("movie_cache", "tv_cache", "collection_cache", "poster_retry_queue", "poster_fingerprints",
-                      "media_server_item_etags", "season_media_info"):
+                      "media_server_item_etags", "season_media_info", "server_ratings"):
             cursor.execute(f"DELETE FROM {table} WHERE server_id = ?", (server_id,))
             counts[table] = cursor.rowcount
 
@@ -5035,11 +5484,17 @@ def purge_server_cache(server_id: str) -> Dict[str, Any]:
 
         cursor.execute("DELETE FROM overlay_state WHERE server_id = ?", (server_id,))
         counts["overlay_state"] = cursor.rowcount
+        cursor.execute("DELETE FROM overlay_state_parked WHERE server_id = ?", (server_id,))
 
     logger.info("[MEDIA_SERVER] Purged DB cache for removed server %s: %s", server_id, counts)
     try:
         from . import poster_drift
         poster_drift.remove_sent_copies(server_id)
+    except Exception:
+        pass
+    try:
+        from . import overlay_only
+        counts["clean_base"] = overlay_only.remove_server_clean_bases(server_id)
     except Exception:
         pass
     return {"rating_keys": own_keys, "counts": counts}
@@ -5252,10 +5707,63 @@ def restore_poster_history_rows(rows: list) -> None:
     logger.info("[CLEANUP] Restored %d poster_history rows", len(rows))
 
 
+def _media_server_id(server_type: str, url: str) -> str:
+    """Same id as frontend/src/services/mediaServerId.ts (FNV-1a of the
+    normalized URL), so a server added from an env var and the same server
+    added in Settings get one id."""
+    text = url.strip().lower().rstrip("/")
+    h = 0x811C9DC5
+    units = text.encode("utf-16-le")  # JS charCodeAt works on UTF-16 code units
+    for i in range(0, len(units), 2):
+        h ^= units[i] | (units[i + 1] << 8)
+        h = (h * 0x01000193) & 0xFFFFFFFF
+    return f"{server_type}-{h:x}"
+
+
+def seed_jellyfin_from_env():
+    """JELLYFIN_URL + JELLYFIN_API_KEY (e.g. from an Unraid template) add a
+    Jellyfin server to Settings > Media Servers, once. After that the server
+    is the user's: edits and removal in the UI stick (a removed server isn't
+    added back on restart), and changing JELLYFIN_URL adds the new server."""
+    import os
+    url = (os.getenv("JELLYFIN_URL") or "").strip().rstrip("/")
+    api_key = (os.getenv("JELLYFIN_API_KEY") or "").strip()
+    if not url or not api_key:
+        return
+    server_id = _media_server_id("jellyfin", url)
+    marker = f"env_jellyfin:{server_id}"
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            if cursor.execute("SELECT 1 FROM applied_migrations WHERE name = ?", (marker,)).fetchone():
+                return
+            row = cursor.execute("SELECT value FROM settings WHERE key = 'mediaServers' LIMIT 1").fetchone()
+            try:
+                servers = json.loads(row["value"]) if row and row["value"] else []
+            except ValueError:
+                servers = []
+            if not isinstance(servers, list):
+                servers = []
+            if not any(isinstance(s, dict) and s.get("id") == server_id for s in servers):
+                servers.append({"id": server_id, "type": "jellyfin", "name": "Jellyfin", "url": url,
+                                "apiKey": api_key, "enabled": True})
+                cursor.execute(
+                    "INSERT INTO settings (key, value, category) VALUES ('mediaServers', ?, NULL) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (json.dumps(servers),),
+                )
+                logger.info("[DB] Added Jellyfin server from JELLYFIN_URL (%s)", server_id)
+            cursor.execute("INSERT OR IGNORE INTO applied_migrations (name) VALUES (?)", (marker,))
+            conn.commit()
+    except Exception as e:
+        logger.warning("[DB] Could not add Jellyfin server from env: %s", e)
+
+
 # Initialize database on module import
 init_database()
 # Copy environment variables to UI settings on startup
 copy_env_to_ui_settings()
+seed_jellyfin_from_env()
 
 
 # ---------------------------------------------------------------------------
@@ -5335,14 +5843,6 @@ def get_all_list_cache() -> List[Dict[str, Any]]:
     return out
 
 
-def clear_mdblist_cache() -> int:
-    with get_db() as conn:
-        n = conn.execute("DELETE FROM item_ratings").rowcount
-        n += conn.execute("DELETE FROM list_cache").rowcount
-        conn.commit()
-    return n
-
-
 # List-source sign-ins (backend/list_sources.py)
 
 def get_list_source_auth(provider: str) -> Dict[str, Any]:
@@ -5372,3 +5872,272 @@ def delete_list_source_auth(provider: str) -> None:
     with get_db() as conn:
         conn.execute("DELETE FROM list_source_auth WHERE provider = ?", (provider,))
         conn.commit()
+
+
+# ---------------------------------------------------------------- Poster API cache
+_PAC_COLS = ("rowid AS id, media_type, tmdb_id, season_index, preset_key, source, file_path, "
+             "title, preset_hash, created_at, last_served_at, hits")
+
+
+def poster_api_cache_get(media_type: str, tmdb_id: int, season_index: int, preset_key: str, source: str) -> Optional[Dict[str, Any]]:
+    with get_db() as conn:
+        row = conn.execute(
+            f"SELECT {_PAC_COLS} FROM poster_api_cache WHERE media_type=? AND tmdb_id=? "
+            "AND season_index=? AND preset_key=? AND source=?",
+            (media_type, tmdb_id, season_index, preset_key, source)).fetchone()
+    return dict(row) if row else None
+
+
+def poster_api_cache_put(media_type: str, tmdb_id: int, season_index: int, preset_key: str, source: str,
+                         file_path: str, title: Optional[str], preset_hash: Optional[str]) -> None:
+    """Upsert a row. Existing hits/last_served_at are kept; created_at is refreshed."""
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO poster_api_cache (media_type, tmdb_id, season_index, preset_key, source,
+                                          file_path, title, preset_hash, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(media_type, tmdb_id, season_index, preset_key, source) DO UPDATE SET
+                file_path = excluded.file_path, title = excluded.title,
+                preset_hash = excluded.preset_hash, created_at = CURRENT_TIMESTAMP
+        """, (media_type, tmdb_id, season_index, preset_key, source, file_path, title, preset_hash))
+
+
+def poster_api_cache_delete(media_type: str, tmdb_id: int, season_index: int, preset_key: str, source: str) -> int:
+    with get_db() as conn:
+        cur = conn.execute(
+            "DELETE FROM poster_api_cache WHERE media_type=? AND tmdb_id=? AND season_index=? "
+            "AND preset_key=? AND source=?", (media_type, tmdb_id, season_index, preset_key, source))
+        return cur.rowcount
+
+
+def poster_api_cache_touch(media_type: str, tmdb_id: int, season_index: int, preset_key: str, source: str) -> None:
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE poster_api_cache SET last_served_at=CURRENT_TIMESTAMP, hits=hits+1 "
+            "WHERE media_type=? AND tmdb_id=? AND season_index=? AND preset_key=? AND source=?",
+            (media_type, tmdb_id, season_index, preset_key, source))
+
+
+def poster_api_cache_rows_for_key(media_type: str, tmdb_id: int, season_index: int, preset_key: str,
+                                  source: Optional[str] = None) -> List[Dict[str, Any]]:
+    sql = (f"SELECT {_PAC_COLS} FROM poster_api_cache WHERE media_type=? AND tmdb_id=? "
+           "AND season_index=? AND preset_key=?")
+    params: list = [media_type, tmdb_id, season_index, preset_key]
+    if source:
+        sql += " AND source=?"
+        params.append(source)
+    with get_db() as conn:
+        return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
+def poster_api_cache_list(search: str, media_type: Optional[str], source: Optional[str],
+                          offset: int, limit: int) -> Tuple[List[Dict[str, Any]], int]:
+    poster_api_flush_pending()
+    where, params = [], []
+    search = (search or "").strip()
+    if search:
+        if search.isdigit() and len(search) <= 18:  # longer won't fit SQLite's 64-bit ints
+            where.append("(title LIKE ? COLLATE NOCASE OR tmdb_id = ?)")
+            params += [f"%{search}%", int(search)]
+        else:
+            where.append("title LIKE ? COLLATE NOCASE")
+            params.append(f"%{search}%")
+    if media_type:
+        where.append("media_type = ?")
+        params.append(media_type)
+    if source:
+        where.append("source = ?")
+        params.append(source)
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+    with get_db() as conn:
+        total = conn.execute(f"SELECT COUNT(*) FROM poster_api_cache{clause}", params).fetchone()[0]
+        rows = conn.execute(
+            f"SELECT {_PAC_COLS} FROM poster_api_cache{clause} "
+            "ORDER BY last_served_at IS NULL, last_served_at DESC, created_at DESC, rowid DESC LIMIT ? OFFSET ?",
+            params + [limit, offset]).fetchall()
+    return [dict(r) for r in rows], total
+
+
+def poster_api_cache_stale_rendered(days: int) -> List[Dict[str, Any]]:
+    """Rendered rows whose last_served_at (or created_at, if never served) is older than `days`."""
+    with get_db() as conn:
+        rows = conn.execute(
+            f"SELECT {_PAC_COLS} FROM poster_api_cache WHERE source='rendered' "
+            "AND COALESCE(last_served_at, created_at) < datetime('now', ?)",
+            (f"-{int(days)} days",)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def poster_api_cache_restore_row(row: Dict[str, Any]) -> None:
+    """Re-insert a row exactly as exported (incl. hits and timestamps); replaces any row with the same key."""
+    with get_db() as conn:
+        conn.execute("""
+            INSERT OR REPLACE INTO poster_api_cache (media_type, tmdb_id, season_index, preset_key, source,
+                file_path, title, preset_hash, created_at, last_served_at, hits)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (row["media_type"], row["tmdb_id"], row["season_index"], row["preset_key"], row["source"],
+              row["file_path"], row.get("title"), row.get("preset_hash"), row.get("created_at"),
+              row.get("last_served_at"), row.get("hits") or 0))
+
+
+def poster_api_cache_get_by_id(row_id: int) -> Optional[Dict[str, Any]]:
+    with get_db() as conn:
+        row = conn.execute(f"SELECT {_PAC_COLS} FROM poster_api_cache WHERE rowid=?", (int(row_id),)).fetchone()
+    return dict(row) if row else None
+
+
+def poster_api_cache_counts() -> Dict[str, int]:
+    poster_api_flush_pending()
+    with get_db() as conn:
+        rows = conn.execute("SELECT source, COUNT(*) AS n FROM poster_api_cache GROUP BY source").fetchall()
+    return {r["source"]: r["n"] for r in rows}
+
+
+POSTER_API_REQUESTS_KEEP = 2000
+
+
+def poster_api_request_log(media_type: Optional[str], tmdb_id: Optional[int], season: Optional[int],
+                           preset: str, group_id: str, result: str, title: Optional[str],
+                           duration_ms: int) -> None:
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO poster_api_requests (media_type, tmdb_id, season_index, preset, group_id, result, title, duration_ms) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (media_type, tmdb_id, season, preset or "", group_id or "", result, title, int(duration_ms)))
+        conn.execute(
+            "DELETE FROM poster_api_requests WHERE id <= "
+            "(SELECT id FROM poster_api_requests ORDER BY id DESC LIMIT 1 OFFSET ?)",
+            (POSTER_API_REQUESTS_KEEP,))
+
+
+# Poster API bookkeeping (request history + hit counters) is queued and written by
+# one background thread, so serving a cached poster never waits for a commit.
+# Each commit costs ~100 ms on slow disks, and SQLite takes one writer at a time,
+# so writing in the request made concurrent cache hits queue behind each other.
+import threading as _pa_threading
+
+_PA_FLUSH_SECONDS = 1.0
+_pa_lock = _pa_threading.Lock()
+_pa_requests: List[tuple] = []
+_pa_touches: List[tuple] = []
+_pa_thread: Optional[_pa_threading.Thread] = None
+
+
+def _pa_start_writer() -> None:
+    global _pa_thread
+    if _pa_thread is not None and _pa_thread.is_alive():
+        return
+    _pa_thread = _pa_threading.Thread(target=_pa_writer_loop, name="poster-api-writer", daemon=True)
+    _pa_thread.start()
+
+
+def _pa_writer_loop() -> None:
+    while True:
+        time.sleep(_PA_FLUSH_SECONDS)
+        try:
+            poster_api_flush_pending()
+        except Exception:
+            logger.debug("[POSTER API] Could not write request history", exc_info=True)
+
+
+def poster_api_queue_request(media_type: Optional[str], tmdb_id: Optional[int], season: Optional[int],
+                             preset: str, group_id: str, result: str, title: Optional[str],
+                             duration_ms: int) -> None:
+    """Queue a request-history row; written within about a second."""
+    with _pa_lock:
+        _pa_requests.append((media_type, tmdb_id, season, preset or "", group_id or "", result, title,
+                             int(duration_ms)))
+        _pa_start_writer()
+
+
+def poster_api_queue_touch(media_type: str, tmdb_id: int, season_index: int, preset_key: str,
+                           source: str) -> None:
+    """Queue a hit (last_served_at + hits) on a poster_api_cache row."""
+    with _pa_lock:
+        _pa_touches.append((media_type, tmdb_id, season_index, preset_key, source))
+        _pa_start_writer()
+
+
+def poster_api_flush_pending() -> None:
+    """Write everything queued so far in one transaction. Readers of the history and
+    the tiles call this first so the page never shows a stale count."""
+    with _pa_lock:
+        reqs, touches = list(_pa_requests), list(_pa_touches)
+        _pa_requests.clear()
+        _pa_touches.clear()
+    if not reqs and not touches:
+        return
+    try:
+        with get_db() as conn:
+            if reqs:
+                conn.executemany(
+                    "INSERT INTO poster_api_requests (media_type, tmdb_id, season_index, preset, group_id, "
+                    "result, title, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", reqs)
+                conn.execute(
+                    "DELETE FROM poster_api_requests WHERE id <= "
+                    "(SELECT id FROM poster_api_requests ORDER BY id DESC LIMIT 1 OFFSET ?)",
+                    (POSTER_API_REQUESTS_KEEP,))
+            if touches:
+                conn.executemany(
+                    "UPDATE poster_api_cache SET last_served_at=CURRENT_TIMESTAMP, hits=hits+1 "
+                    "WHERE media_type=? AND tmdb_id=? AND season_index=? AND preset_key=? AND source=?",
+                    touches)
+    except Exception:
+        # put them back so the next flush retries (bounded, so a broken DB can't grow it forever)
+        with _pa_lock:
+            _pa_requests[:0] = reqs[-POSTER_API_REQUESTS_KEEP:]
+            _pa_touches[:0] = touches[-5000:]
+        raise
+
+
+def _pa_flush_at_exit() -> None:
+    try:
+        poster_api_flush_pending()
+    except Exception:
+        pass
+
+
+import atexit as _pa_atexit
+_pa_atexit.register(_pa_flush_at_exit)
+
+
+def poster_api_requests_list(result: Optional[str], search: str, offset: int,
+                             limit: int) -> Tuple[List[Dict[str, Any]], int, Dict[str, int]]:
+    """Newest first. Also returns the count per result over the whole history."""
+    poster_api_flush_pending()
+    where, params = [], []
+    if result:
+        where.append("result = ?")
+        params.append(result)
+    search = (search or "").strip()
+    if search:
+        if search.isdigit() and len(search) <= 18:  # longer won't fit SQLite's 64-bit ints
+            where.append("(title LIKE ? COLLATE NOCASE OR tmdb_id = ?)")
+            params += [f"%{search}%", int(search)]
+        else:
+            where.append("title LIKE ? COLLATE NOCASE")
+            params.append(f"%{search}%")
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+    with get_db() as conn:
+        total = conn.execute(f"SELECT COUNT(*) FROM poster_api_requests{clause}", params).fetchone()[0]
+        rows = conn.execute(f"SELECT * FROM poster_api_requests{clause} ORDER BY id DESC LIMIT ? OFFSET ?",
+                            params + [limit, offset]).fetchall()
+        counts = {r["result"]: r["n"] for r in conn.execute(
+            "SELECT result, COUNT(*) AS n FROM poster_api_requests GROUP BY result").fetchall()}
+    return [dict(r) for r in rows], total, counts
+
+
+def poster_api_requests_clear() -> int:
+    poster_api_flush_pending()
+    with get_db() as conn:
+        return conn.execute("DELETE FROM poster_api_requests").rowcount
+
+
+def get_title_for_tmdb_id(media_type: str, tmdb_id: int) -> Optional[str]:
+    """Cached library title for a TMDb id (movie_cache / tv_cache), or None."""
+    table = "tv_cache" if media_type in ("tv", "tv-show") else "movie_cache"
+    with get_db() as conn:
+        row = conn.execute(
+            f"SELECT title FROM {table} WHERE tmdb_id = ? AND title IS NOT NULL ORDER BY updated_at DESC LIMIT 1",
+            (int(tmdb_id),)).fetchone()
+    return row["title"] if row else None

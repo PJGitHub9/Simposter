@@ -1,10 +1,12 @@
 # backend/api/presets.py
+import json
 from pathlib import Path
+from typing import Any
 from typing import Optional
 from fastapi import APIRouter, HTTPException, UploadFile, File, Body
 
-from ..config import load_presets, save_presets, USER_PRESETS_PATH, logger
-from ..schemas import PresetDeleteRequest, PresetSaveRequest
+from ..config import load_presets, save_presets, USER_PRESETS_PATH, logger, settings
+from ..schemas import PresetAddOverlaysRequest, PresetDeleteRequest, PresetSaveRequest
 from .. import database as db
 from .template_manager import _get_fallback_settings
 from ..middleware.validation import validate_preset_id
@@ -66,7 +68,7 @@ def api_presets():
 
                 # Backup JSON file
                 backup_path = presets_file.with_suffix(".json.migrated")
-                presets_file.rename(backup_path)
+                presets_file.replace(backup_path)  # rename() fails on Windows if an old backup exists
                 logger.info(f"[PRESETS] Backed up presets.json as {backup_path}")
 
                 # Return migrated data
@@ -123,7 +125,7 @@ _DEFAULT_PRESETS_TEMPLATE: dict = {
                     "border_color": "#ffffff",
                     "text_overlay_enabled": True,
                     "custom_text": "Collection Name",
-                    "font_family": "Comfortaa-Medium",
+                    "font_family": "Arimo",
                     "font_size": 195,
                     "text_color": "#ffffff",
                     "position_y": 0.7833333333333333,
@@ -164,7 +166,7 @@ _DEFAULT_PRESETS_TEMPLATE: dict = {
                     "border_color": "#ffffff",
                     "text_overlay_enabled": True,
                     "custom_text": "MOVIES LEAVING SOON",
-                    "font_family": "Comfortaa-Medium",
+                    "font_family": "Arimo",
                     "font_size": 250,
                     "text_color": "#ffffff",
                     "position_y": 0.7833333333333333,
@@ -249,7 +251,7 @@ _DEFAULT_PRESETS_TEMPLATE: dict = {
                     "logo_mode": "none",
                     "text_overlay_enabled": True,
                     "custom_text": "{season}",
-                    "font_family": "Comfortaa-Medium",
+                    "font_family": "Arimo",
                     "font_size": 150,
                     "letter_spacing": 0,
                     "position_y": 0.85,
@@ -284,7 +286,7 @@ _DEFAULT_PRESETS_TEMPLATE: dict = {
                     "logo_hex": "#ffffff",
                     "text_overlay_enabled": True,
                     "custom_text": "{title}",
-                    "font_family": "Comfortaa-Medium",
+                    "font_family": "Arimo",
                     "font_size": 128,
                     "font_weight": "700",
                     "text_color": "#ffffff",
@@ -601,31 +603,132 @@ def _prefetch_preset_fonts(payload: dict, extra_fonts, all_asset_fonts: bool = F
     threading.Thread(target=_run, name="preset-font-prefetch", daemon=True).start()
 
 
-@router.get("/presets/default-template")
-def api_presets_default_template():
-    """Return the built-in starter presets for new-user onboarding (never auto-applied to
-    an existing install — only fetched by OnboardingModal.vue's fire-and-forget import on
-    first run). IDs are generated from each preset's name here rather than hardcoded, so
-    the source-of-truth data above only needs a display name."""
-    result: dict = {}
-    # Fonts to download when these are imported (see api_presets_import).
+# Default presets live in the simposter-assets repo (presets/defaults.json), so
+# new or updated defaults ship without a release. Read at most every 10 minutes,
+# the last good copy kept in config/cache/default_presets.json, and the
+# presets above used when neither is available. A preset may set "min_version"
+# when it uses an option older versions don't have: an older install keeps
+# the bundled preset of the same name instead (or skips it).
+_DEFAULTS_URL = "https://raw.githubusercontent.com/PJGitHub9/simposter-assets/main/presets/defaults.json"
+_DEFAULTS_MAX_AGE = 600
+_DEFAULTS_MAX_BYTES = 2 * 1024 * 1024
+_defaults_lock = __import__("threading").Lock()
+_defaults_remote: Optional[dict] = None
+_defaults_checked = 0.0
+
+
+def _defaults_cache_file() -> Path:
+    d = Path(settings.CONFIG_DIR) / "cache"
+    d.mkdir(parents=True, exist_ok=True)
+    return d / "default_presets.json"
+
+
+def _valid_defaults(data: Any) -> bool:
+    templates = data.get("templates") if isinstance(data, dict) else None
+    return isinstance(templates, dict) and any(
+        isinstance(t, dict) and isinstance(t.get("presets"), list) and t["presets"] for t in templates.values()
+    )
+
+
+def _remote_defaults(refresh: bool = False) -> Optional[dict]:
+    """presets/defaults.json from simposter-assets, else the last good copy."""
+    import time
+    global _defaults_remote, _defaults_checked
+    with _defaults_lock:
+        if _defaults_remote is None:
+            try:
+                data = json.loads(_defaults_cache_file().read_text(encoding="utf-8"))
+                _defaults_remote = data if _valid_defaults(data) else None
+            except Exception:
+                _defaults_remote = None
+        now = time.time()
+        if refresh or now - _defaults_checked > _DEFAULTS_MAX_AGE:
+            _defaults_checked = now
+            try:
+                import requests
+                from ..config import EXTERNAL_IMAGE_FETCH_HEADERS
+                r = requests.get(_DEFAULTS_URL, headers=EXTERNAL_IMAGE_FETCH_HEADERS, timeout=10)
+                r.raise_for_status()
+                if len(r.content) > _DEFAULTS_MAX_BYTES:
+                    raise ValueError("defaults.json is larger than 2 MB")
+                data = r.json()
+                if not _valid_defaults(data):
+                    raise ValueError("defaults.json has no presets")
+                _defaults_cache_file().write_text(json.dumps(data), encoding="utf-8")
+                _defaults_remote = data
+            except Exception as e:
+                logger.debug("[PRESETS] Couldn't fetch default presets from simposter-assets: %s", e)
+        return _defaults_remote
+
+
+def _too_new(preset: dict) -> bool:
+    needed = str(preset.get("min_version") or "").strip()
+    if not needed:
+        return False
+    try:
+        from .version_info import parse_version
+        current = db.get_app_version()
+        return current != "unknown" and parse_version(needed) > parse_version(current)
+    except Exception:
+        return False
+
+
+def _default_preset_entry(preset: dict) -> dict:
+    entry = {
+        "id": preset.get("id") or _slugify_preset_name(preset["name"]),
+        "name": preset["name"],
+        "options": preset.get("options") or {},
+    }
+    if preset.get("season_options"):
+        entry["season_options"] = preset["season_options"]
+    from ..simposter_assets import asset_url
+    preview = asset_url(preset.get("preview"))
+    if preview:
+        entry["preview_url"] = preview  # shown by the setup wizard; ignored on import
+    return entry
+
+
+def build_default_presets(refresh: bool = False) -> dict:
+    """The default presets in import format, from simposter-assets when
+    available. Also used by onboarding and Template Manager's import."""
+    remote = _remote_defaults(refresh)
+    source = "simposter-assets" if remote else "built-in"
+    templates = (remote or {}).get("templates") or {}
+    result: dict = {"_source": source}
     from ..templates.universal import STARTER_FONTS
-    result["_fonts"] = list(STARTER_FONTS)
-    # ...and the rest of Simposter's font set (simposter-assets) after them.
-    result["_asset_fonts"] = True
-    for template_id, tdata in _DEFAULT_PRESETS_TEMPLATE.items():
-        presets = []
-        for preset in tdata["presets"]:
-            entry = {
-                "id": _slugify_preset_name(preset["name"]),
-                "name": preset["name"],
-                "options": preset["options"],
-            }
-            if preset.get("season_options"):
-                entry["season_options"] = preset["season_options"]
-            presets.append(entry)
-        result[template_id] = {"presets": presets}
+    fonts = list(STARTER_FONTS)
+    for name in (remote or {}).get("fonts") or []:
+        if isinstance(name, str) and name not in fonts:
+            fonts.append(name)
+    result["_fonts"] = fonts           # downloaded on import (api_presets_import)
+    result["_asset_fonts"] = True      # ...and the rest of simposter-assets' fonts
+    if remote and isinstance(remote.get("_overlays"), dict):
+        result["_overlays"] = remote["_overlays"]  # overlays the presets use (overlay_bundle)
+    for template_id in list(_DEFAULT_PRESETS_TEMPLATE) + [t for t in templates if t not in _DEFAULT_PRESETS_TEMPLATE]:
+        bundled = {p["name"]: p for p in (_DEFAULT_PRESETS_TEMPLATE.get(template_id) or {}).get("presets", [])}
+        chosen = []
+        source_presets = (templates.get(template_id) or {}).get("presets") if remote else None
+        if source_presets is None:
+            source_presets = list(bundled.values())
+        for preset in source_presets:
+            if not isinstance(preset, dict) or not preset.get("name"):
+                continue
+            if _too_new(preset):
+                if preset["name"] in bundled:
+                    chosen.append(_default_preset_entry(bundled[preset["name"]]))
+                continue
+            chosen.append(_default_preset_entry(preset))
+        if chosen:
+            result[template_id] = {"presets": chosen}
     return result
+
+
+@router.get("/presets/default-template")
+def api_presets_default_template(refresh: bool = False):
+    """The starter presets for onboarding and Template Manager's "Import
+    Simposter defaults" (never applied automatically). From simposter-assets
+    presets/defaults.json, the bundled ones as fallback."""
+    return build_default_presets(refresh)
 
 
 def _attach_overlays(export: dict, raw_entries: list) -> dict:
@@ -747,8 +850,40 @@ def api_presets_export_selected(req: dict = Body(...)):
         raise HTTPException(status_code=500, detail=f"Failed to export: {e}")
 
 
+def _generate_overlay_caches_async(payload: dict) -> None:
+    """Build the overlay effect cache for every imported preset with an id, in a
+    background thread."""
+    targets = []
+    for template_id, tpl_data in payload.items():
+        presets_list = tpl_data.get("presets", []) if isinstance(tpl_data, dict) else []
+        for preset in presets_list:
+            if isinstance(preset, dict) and preset.get("id"):
+                targets.append((template_id, preset["id"]))
+    if not targets:
+        return
+
+    def _run():
+        try:
+            from ..overlay_cache import refresh_preset
+            refreshed = 0
+            for template_id, preset_id in targets:
+                try:
+                    refreshed += 1 if refresh_preset(template_id, preset_id) else 0
+                except Exception as err:
+                    logger.warning(f"[PRESETS] Overlay cache for '{preset_id}' failed: {err}")
+            if refreshed:
+                logger.info(f"[PRESETS] Generated overlay cache for {refreshed} imported preset(s)")
+        except Exception as overlay_batch_err:
+            logger.warning(f"[PRESETS] Overlay cache generation for imported presets failed: {overlay_batch_err}")
+
+    import threading
+    threading.Thread(target=_run, name="preset-overlay-cache", daemon=True).start()
+
+
+# Plain def (not async): FastAPI runs it in a worker thread, so file writes in
+# restore_bundle()/merge_presets() never block other requests.
 @router.post("/presets/import")
-async def api_presets_import(payload: dict = Body(...)):
+def api_presets_import(payload: dict = Body(...)):
     """
     Import presets from JSON (merges with existing presets).
     Expected shape matches /presets: { template_id: { presets: [{id,name,options}, ...] } }
@@ -797,18 +932,12 @@ async def api_presets_import(payload: dict = Body(...)):
         # import always does, via _slugify_preset_name()) -- the id
         # merge_presets() assigns for an id-less "shared/compact" import isn't
         # returned from that call, so those still rely purely on self-heal.
-        try:
-            from ..overlay_cache import refresh_preset
-            refreshed = 0
-            for template_id, tpl_data in payload.items():
-                presets_list = tpl_data.get("presets", []) if isinstance(tpl_data, dict) else []
-                for preset in presets_list:
-                    if isinstance(preset, dict) and preset.get("id"):
-                        refreshed += 1 if refresh_preset(template_id, preset["id"]) else 0
-            if refreshed:
-                logger.info(f"[PRESETS] Generated overlay cache for {refreshed} imported preset(s)")
-        except Exception as overlay_batch_err:
-            logger.warning(f"[PRESETS] Overlay cache generation for imported presets failed: {overlay_batch_err}")
+        # Runs in a background thread: on a slow CPU each preset's effect layer
+        # can take over a minute, and doing it before replying made the request
+        # time out in the browser (onboarding showed "Failed to import preset"
+        # although the import had worked). A render before it finishes builds
+        # the missing layer itself.
+        _generate_overlay_caches_async(payload)
 
         return {"message": "Presets imported and merged", "overlay_configs": restored_overlays}
     except HTTPException:
@@ -852,6 +981,41 @@ def api_save_preset(req: PresetSaveRequest):
     except Exception as e:
         logger.error(f"[PRESETS] Error saving preset: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to save preset: {e}")
+
+
+@router.post("/presets/add-overlays")
+def api_add_overlays(req: PresetAddOverlaysRequest):
+    """Add overlays to a preset for movies and series only (setup wizard).
+
+    New ids go after the existing ones, without repeats. Season posters never
+    get them: a season config without its own overlay list would inherit the
+    series list (Quirk #198), so it is given empty lists instead. A season
+    config that already has its own list is left alone."""
+    template_id = req.template_id or "uniformlogo"
+    preset_id = validate_preset_id(req.preset_id)
+    ids = [str(i) for i in req.config_ids if str(i or "").strip()]
+    if not ids:
+        raise HTTPException(status_code=400, detail="config_ids is empty")
+    current = db.get_preset(template_id, preset_id)
+    if not current:
+        raise HTTPException(status_code=404, detail="Preset not found")
+    options = dict(current["options"] or {})
+    stored_season = current.get("season_options") or {}
+    merged = list(options.get("overlay_config_ids") or [])
+    for i in ids:
+        if i not in merged:
+            merged.append(i)
+    season_full = None
+    if "overlay_config_ids" not in stored_season:
+        season_full = db.resolve_season_options(options, stored_season)
+        season_full["overlay_config_ids"] = []
+        season_full["overlay_config_ids_below"] = []
+    options["overlay_config_ids"] = merged
+    db.save_preset(template_id, preset_id, current.get("name") or preset_id, options, season_full)
+    from ..overlay_cache import refresh_preset
+    refresh_preset(template_id, preset_id)
+    logger.info(f"[PRESETS] Added overlays {ids} to preset {preset_id} (movies and series only)")
+    return {"status": "ok", "overlay_config_ids": merged, "season_cleared": season_full is not None}
 
 
 @router.post("/presets/save-season-options")

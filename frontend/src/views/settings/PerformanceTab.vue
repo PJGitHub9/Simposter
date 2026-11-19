@@ -5,6 +5,8 @@ const props = defineProps<{
   concurrentRenders: number
   useOverlayCache: boolean
   unsavedChanges: boolean
+  // Per-section unsaved flags from SettingsView.vue (sectionsWithChanges)
+  changed?: Record<string, boolean>
   scanRunning: boolean
   tmdbRateLimit: number
   tvdbRateLimit: number
@@ -96,7 +98,7 @@ const localMemoryLimit = computed({
     </div>
 
     <!-- API Rate Limits -->
-    <div class="section">
+    <div :class="['section', { 'section-unsaved': changed?.rateLimits }]">
       <h3>API Rate Limits</h3>
       <p class="section-description">
         Control request rates to external APIs (per 10 seconds)
@@ -388,5 +390,11 @@ button.danger:hover:not(:disabled) {
 button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* Yellow highlight for a section with unsaved changes (flags from SettingsView.vue). */
+.section.section-unsaved {
+  background: rgba(255, 200, 0, 0.08);
+  border-color: rgba(255, 200, 0, 0.4);
 }
 </style>

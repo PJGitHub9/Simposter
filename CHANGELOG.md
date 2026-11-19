@@ -1,5 +1,366 @@
 # Changelog
 
+## v1.8.87 (2026-11-19) — `webui-overhaul-dev` branch
+
+### Improvements
+- **Dependencies** — fastapi 0.162.0 → 0.162.3, apprise 2.1.0 → 2.2.0, pydantic-settings 2.16.1 → 2.16.2, python-multipart 0.0.32 → 0.0.33 (the open Dependabot PRs that weren't already covered). Checked on Python 3.12 (the Docker image's version): settings load/save, upload, presets, request validation, and `apprise.notify()` still returning a falsy `AppriseResult` on failure. The other Dependabot PRs were already superseded (eslint, postcss, @types/node, apprise 2.1.0) or no longer apply (js-yaml isn't installed under ESLint 10). TypeScript 7 is skipped (a major upgrade to plan separately), and `.github/dependabot.yml` now ignores TypeScript major updates.
+
+## v1.8.86 (2026-11-19) — `webui-overhaul-dev` branch
+
+### Improvements
+- **What's New for `main` users** — new `majorReleases.ts` milestone at **v1.8.29** ("Overlays, ratings & new connections": starter overlays, server/TMDb ratings, the Ratings & Lists tab, Radarr/Sonarr connections, date rules and countdowns, TMDb content rating/network/streaming rules, Kometa `config.yml` import, Template Manager editing, mobile and update notices). Placed at v1.8.29 so only installs updating from `main` (v1.8.28) cross it. `UpdateAnnouncementModal.vue` now shows up to three milestones (was two), oldest first (was newest first), with a short heading when there are three.
+- **Docs** — new `docs/USER_GUIDE.md`; setup wizard section of `docs/GETTING_STARTED.md` rewritten for the 14-step wizard, plus an Unraid section; screenshots in `docs/images/` used across README and every doc.
+- **Overlays page** — "(experimental)" removed from the heading; its icon is now 📐, matching the sidebar.
+
+## v1.8.85 (2026-11-18) — `webui-overhaul-dev` branch
+
+### New Features
+- **`{countdown}` overlay text value** — new layer field `countdown_to` (`YYYY-MM-DD` fixed or `MM-DD` yearly, on `OverlayElement`). `overlay_engine.countdown_days()` / `overlayEngine.ts` `countdownDays()` (same rules: 0 on the day, yearly rolls to next year, a passed fixed date gives no value, yearly 02-29 → 03-01 in other years); `fill_text()`/`fillText()` take the layer to resolve it, passed by every text caller (plain text, Kometa-placed text, the Overlay Refresh summary, both preview paths). Overlay Manager: a "Countdown to" picker under the Text box once the text uses `{countdown}`, a layer warning when no date is set, the date can't be read (e.g. Feb 30) or a fixed date has passed (`countdownWarning()`; `usesCountdown()` also matches `{countdown#}`-style text), "Insert value" → Dates → Countdown, and the "Pretend today is" preview box now also shows for countdown layers. docs/OVERLAYS.md "Countdowns".
+- **Template Manager: Random show / Random season** — the preview panel's "Random" became "Random movie", "Random show" (`/api/tv-shows`, else TMDb trending TV) and "Random season" (a random library show's random non-Specials season from `/api/tv-show/{key}/seasons`; greyed out without a TV library). A season preview sends the preset's base + season options with `season_text`/`season_number` and `season_index`, and `/api/tv-show/{key}/poster` as the background. A picked show/season stays for the next ▶; the "Random" under a preview picks another of the same kind and re-renders with the same preset.
+
+### Bug Fixes
+- **TV previews ignored `skip_fallback`** — `/api/preview`'s TV/season branch applied the preset's poster fallback (switching presets) even with `skip_fallback=True`, which the manual editors and Template Manager always send; the movie branch already honoured it (Quirk #7). Now it uses the first available poster, then the season → series poster fallback as before.
+
+## v1.8.84 (2026-11-18) — merged into `webui-overhaul-dev`
+
+### Improvements
+- **Merging branches** — `dev-overlayonly` (v1.8.71–v1.8.83: poster modes, Radarr/Sonarr tag rules, setup wizard upgrades, sidebar Artwork/Tools) merged into `webui-overhaul-dev`. New `majorReleases.ts` milestone (v1.8.84) for users crossing it.
+
+## v1.8.83 (2026-11-18) — `dev-overlayonly` branch
+
+### Bug Fixes
+- **New show got only a season poster** — the Sonarr webhook (and the Jellyfin/Emby webhook path) decided "new show, also make the series poster" by whether the show was in `tv_cache`. A scheduled scan running at the same time cached the show seconds before the webhook checked, so it was treated as an existing show getting a new season. New `_is_new_show()` (`webhooks.py`): not cached, or the server's `addedAt` is under 24 hours old and History has no poster sent to the show's own key. Found in a user log (Tom Clancy's Jack Ryan).
+
+## v1.8.82 (2026-11-17) — `dev-overlayonly` branch
+
+### Bug Fixes
+- **Batch logo uploads failed on DNS hiccups** — `batch.py` re-downloaded each logo with a bare `requests.get()` (no retry) after the render had already downloaded it. New `rendering.fetch_logo_for_upload()` goes through `_download_image()` (byte cache, SVG support, PNG output), used by all four batch logo sends (Plex upload and linked-server sync, movie and TV). `_download_image()` now also retries connection errors (DNS failures), not just timeouts. Found in a user log: 26 logos skipped during one 370-item batch at 8 concurrent renders.
+- **Jellyfin/Emby upload timeouts** — `JellyfinClient.upload_image()` used a 20 s timeout and no retry; now `(10, 60)` and one retry on a timeout or dropped connection (re-posting replaces the image).
+- **Overlay Refresh 404 on `/movie/<collection id>`** — a collection poster sent to Jellyfin/Emby from the editor was tracked as a movie with the collection's TMDb id, so the TMDb rating lookup asked `/movie/1241` (Harry Potter collection) every run. `record_send()`/`_record_editor_render()` now detect collections (`db.is_collection_key()`), store no TMDb id, and existing rows are fixed at startup. A TMDb 404 for a rating is also stored as "no score" (re-checked daily) instead of retried every render; `TMDBError` now carries `status_code`.
+
+## v1.8.81 (2026-11-16) — `dev-overlayonly` branch
+
+### Bug Fixes
+- **Jellyfin lookups missed movies in a collection** — `JellyfinClient.find_item_by_external_id()` queried `/Items` without `CollapseBoxSetItems=false`, so with Jellyfin's "group movies into collections" on, a movie in a BoxSet came back only as the BoxSet and the TMDb match failed. Affected every send-time lookup by id: Batch Edit's linked-server sync, webhook cross-server sync, Media Mirror, stale-id recovery. The scan's `list_items()` already sent the flag, which is why the cache had these movies. Found from a user's batch run: all six titles that reached only Plex were in a Jellyfin collection, none of the 14 that reached Jellyfin were.
+
+## v1.8.80 (2026-11-16) — `dev-overlayonly` branch
+
+### New Features
+- **Wizard previews** — `simposter_assets.asset_url()` turns a repo-relative `preview` path (plain image path, no `..`/URL) into a raw.githubusercontent link; `/api/overlay-starters` items get `preview_url`, `/api/presets/default-template` preset entries too (ignored on import). `LookStep.vue` shows a thumbnail per preset/starter with a click-to-enlarge lightbox. The pictures live in simposter-assets `previews/`.
+- **Library groups step** (`groups`, after `libraries`) — `onboarding/groupProposals.ts` (`proposeGroups`, `moveMember`, `moveTargets`, `finalizeGroups`, `groupsChanged`; names match ignoring case, spaces, dashes, underscores; one library per server per group; ids `group-{type}-{plexId}` or `group-{type}-{server}-{library}`) and `onboarding/GroupsStep.vue`. Groups are saved on leaving the step; the Finish-time group creation is gone. On a re-run, existing groups can be renamed and receive newly picked libraries; their own libraries stay put. Groups this run saved stay editable after going Back.
+- **Group settings step** (`grouprules`, after `arr`) — `onboarding/GroupRulesStep.vue`: per group a Radarr/Sonarr select (starts from the arr step's choice) and `PosterModeRules.vue`; only changed groups are written, then `reevaluatePosterModes()` for groups whose rules changed. Replaces the Finish-time `applyArrLinks()`.
+- **Overlay Refresh on the Automation step** — switch, hour and Plex label; on Finish `POST /api/overlay-refresh/config` for every group (first run only when on; re-run only when changed).
+
+### Bug Fixes
+- **Wizard re-run lost the Jellyfin/Emby API key** — the connect step left the key blank on purpose (from before test-connection could resolve the mask). It now fills the masked key, sends the saved server's `server_id` with the test (backend uses the stored key, same origin only, Quirk #81) and keeps the saved id so the save restores the key; editing the address clears it (`keyNeedsReentry`). Test errors show the backend's message.
+- **Wizard dropped untested servers** — Next on the connect step set `wants*` false for any picked server that wasn't tested, so testing only Plex dropped Jellyfin (no libraries, not saved). Next now runs the test for every picked server that's filled in but untested (`untestedServers()`); a failure stays on the step with its error. Next is enabled when something is connected or ready to test. A picked server left empty is still skipped.
+
+## v1.8.79 (2026-11-16) — `dev-overlayonly` branch
+
+### New Features
+- **Setup wizard covers the rest of setup** — three new steps in `OnboardingModal.vue` (`components/onboarding/LookStep.vue`, `ArrStep.vue`, `ExtrasStep.vue`, shared `onboardingForm.css`). Look: default preset (defaults to `simposter-main`) and starter overlays (installed on Next). Radarr & Sonarr: add/test instances (saved on Test & add), a Simposter address, and "Set up webhook", which calls the new `POST /api/arr/{id}/webhook` (`arr_client.create_webhook()`: GET notification schema, POST a Webhook named "Simposter" with only On Import/On Upgrade on; leaves an existing Simposter webhook alone; reports when Radarr/Sonarr can't reach the address). Extras: Maintainerr, MDBList, WeTrakr/SIMKL client id, Floppy, each with Test. At Finish: auto-generate on with the chosen preset for every library group, groups linked to the chosen Radarr/Sonarr instance, ticked overlays added to the preset via new `POST /api/presets/add-overlays` (movie/show list only; a preset with no season overlay list gets an empty one so seasons don't inherit them). Finish screen notes that existing posters need a Batch Edit.
+- **Maintainerr starter overlay** — `backend/starter_overlays/maintainerr.json` ("Maintainerr - Leaving Soon", border image linked from netplexflix/Overlays at a fixed commit, "Leaving {leaving}" text; layers only draw when Maintainerr has a removal date).
+
+### Bug Fixes
+- **Wizard re-runs changed settings that weren't touched** — a re-run selected every Plex library, re-enabled webhook auto-send, forced retry-until-template-met and rewrote labels to remove. Now only on a first run; auto-generate and Radarr/Sonarr links only change on a re-run when the preset or instance is changed there.
+
+## v1.8.78 (2026-11-16) — `dev-overlayonly` branch
+
+### Bug Fixes
+- **Overlay Refresh kept nothing when an item was briefly gone** — on a 404 that `_find_moved_item()`/`refresh_stale_item_id()` couldn't resolve, `refresh_state()` and `run_group()` deleted the `overlay_state` row, so a title replaced by a new file (new Plex rating key / Jellyfin id) that came back later was never tracked again. The row now goes to a new `overlay_state_parked` table (`db.park_overlay_state()`); `restore_parked()` runs at the start of every non-remove run, finds the title's new id in the scan cache by TMDb id (`db.find_cached_key_by_tmdb()`; seasons through their show with `find_season_by_index()`), re-inserts the row and always re-sends it. Rows not back within 60 days are dropped; removing a server clears its parked rows. `remove_state()` still deletes.
+
+## v1.8.77 (2026-11-14) — `dev-overlayonly` branch
+
+### Bug Fixes
+- **Season overlays in the TV editor** — `restoreSettingsForCurrent()` called `applyPresetOptions(..., { keepOverlays: true })`, added in v1.8.22 when overlays weren't per-season, so a season shown for the first time kept the series' overlay ticks. Presets have had season overlay lists since v1.8.31, so the option was removed: each target gets the preset's own list (season override, else the series list). Ticks changed by hand stay in `settingsCache` (a deep copy of `options`) and come back via `applySettings()`. In Overlay only mode the preview and the send of the viewed season now use the season's list too.
+
+## v1.8.76 (2026-11-14) — `dev-overlayonly` branch
+
+### Improvements
+- **Overlay only uses Simposter's plain poster as the base** — `overlay_only.resolve_base()` used to wait ("waiting for the other app's poster") whenever the server's poster matched Simposter's own send. Now a match only holds back when Simposter knows that poster has overlays (`has_overlays()`: an Overlay Refresh `overlay_state` row exists, which `record_send()` keeps exactly for sends with overlays). A plain Simposter render is used and kept as the clean copy. With overlays and no clean copy or source art: automatic runs skip (`HAS_OVERLAYS`); editor previews draw on that poster anyway (`allow_overlaid`, `OVERLAID_BASE`). `WAITING` now only means the poster couldn't be downloaded.
+- **Remove overlays in the editor** — `/api/overlay-only/preview` returns `has_overlays` and `overlaid_base`; new `POST /api/overlay-only/remove-overlays` runs `overlay_refresh.remove_state()` (clean copy for an overlay-only poster, re-render from source art otherwise). Both editors show a notice with a Remove overlays button above the preview.
+
+## v1.8.75 (2026-11-14) — `dev-overlayonly` branch
+
+### Improvements
+- **Sidebar: Artwork and Tools** — each library's submenu is now Batch Edit, Collections (movies), Artwork and Tools instead of up to ten entries. New `components/layout/SectionTabs.vue`, rendered by `App.vue` (`sectionTabs`, `ARTWORK_ROUTES`/`TOOLS_ROUTES`) above the page for the Logos/Backdrops/Square Art/Thumb Art routes and the Overlay Refresh/Media Mirror/Local Assets/Backup routes. Square Art shows when the group has Plex, Thumb Art with Jellyfin/Emby, Media Mirror with two or more servers. Routes are unchanged; `activeSubmenu` maps each route to its Artwork/Tools entry. Jellyfin/Emby-only group tabs use the same entries.
+- **Settings → Libraries** — `LibraryGroupCard.vue` collapses to a summary (servers Plex-first, auto-generate preset, labels removed, poster mode rules, warnings) with Scan and Edit; Remove Group only while editing; a new empty group opens.
+- **Labels to remove per group** — the "Default Labels to Remove" section is gone; each group's Edit view lists its Plex library's labels (`toggle-label`/`refresh-labels` emits; `LibrariesTab.vue` `labelsForLibrary()`/`toggleLibraryLabel()` emit new objects and drop emptied lists). Kometa compatibility is a single checkbox on the page.
+- **Kometa compatibility** — now always adds "Overlay" wherever labels to remove are read (`webhooks._get_default_remove_labels()`, new `services/labelsToRemove.ts` used by both editors and both Batch Edit views; shown ticked and locked in the group checklist). The save-time step that ticked "Overlay" for newly added libraries was removed.
+- **Logos setting** moved from Libraries to Automation ("Send logos with posters by default").
+- **Settings → Media Servers** — `MediaServersTab.vue` is grouped into a "Media servers" area (Plex, Jellyfin, Emby, Silo placeholder), a "Radarr & Sonarr" area marked Optional (two-column, own explanation; `ArrInstancesSection.vue` hint shortened), then "Other" (Poster API). Both grids stack to one column under 900px.
+- **Template Manager** — presets first (`orderedTemplates`: uniformlogo "Movie & TV presets", then kometa "Collection presets (Kometa)"); Default Batch Settings collapsed below them.
+
+### Bug Fixes
+- **Overlay only preview message** — both editors showed "Tick an overlay to see it on the current poster" whenever there was no preview, even with overlays ticked; the backend's reason (e.g. `overlay_only.WAITING`, "waiting for the other app's poster", when the server's poster is Simposter's own and there's no clean copy or recorded source art) was a small side note. New `overlayOnlyEmptyText` puts the reason in the preview area, with a plain explanation for the waiting case; the side note was removed.
+- **Names shown before Save** — the top bar Plex pill and the sidebar's library-group tabs read `mediaServers`/`libraryGroups`, which the Settings page edits in place, so a rename showed up while typing. New store snapshots `savedMediaServers`/`savedLibraryGroups` (set with `recordSavedServerUrls()` on load and after a successful save) feed `TopNav.vue`'s pill labels (Jellyfin/Emby pills too, which otherwise kept the old name until the next 30s status poll) and `App.vue`'s `nonPlexGroupTabs()`/`resolveLibraryTarget()`. Plex library mappings were already staged until Save.
+- **TV labels to remove ignored by automation** — `_get_default_remove_labels()` only read `defaultLabelsToRemove`, so labels set for a TV library (`defaultTvLabelsToRemove`) were never removed by webhooks, auto-generate, scheduled scans or resend. It now reads both lists by library id. The TV editor read the movie lists for its pre-ticked labels; it now uses the show's library.
+
+## v1.8.74 (2026-11-14) — `dev-overlayonly` branch
+
+### Bug Fixes
+- **Setup wizard on a configured install** — `App.vue` opened the onboarding wizard whenever `onboardingCompleted` was false after `settings.load()`, including when the load failed (it stays at its default `false`). `GET /api/ui-settings` was limited to 30/min and each page load made three calls (router guard, App.vue, the view), so a few refreshes or two tabs got 429s and the wizard (and empty pages) over a live install. Now: the wizard only opens after a successful load; a failed load shows a "couldn't load its settings" banner with Try again. `stores/settings.ts` shares one in-flight load between concurrent callers and retries 429/5xx/network errors (1, 2, 4, 8 s). The limit is now 120/min.
+- **What's New behind the wizard** — `UpdateAnnouncementModal` is only mounted once settings loaded and onboarding is done; finishing the wizard marks the current version as seen.
+- **Batch Edit logos only with Plex ticked** — both Batch Edit views sent `send_logos_to_plex: sendToPlex && sendLogos`, so a Jellyfin/Emby-only batch never sent logos although `sync_render_to_linked_servers()` takes them. Now `hasAnySendTarget && sendLogos`.
+- **Unknown routes** — a catch-all route redirects to `/` instead of rendering an empty page.
+
+### Improvements
+- **Help texts** — `LibraryGroupCard.vue` (library picker, Merge items: both wait for Save Changes since v1.8.57) and `LibrariesTab.vue` Logo Defaults (Batch Edit's logo send isn't Plex-only, and the editors no longer have a per-send logo checkbox) corrected.
+
+## v1.8.73 (2026-11-13) — `dev-overlayonly` branch
+
+### Bug Fixes
+- **Saved keys only go to their own address** — new `config.url_origin()`/`same_origin()` (scheme, host, port with defaults, path ignored; `frontend/src/services/serverOrigin.ts` mirrors it). `GET /api/test-plex-connection` only falls back to the saved Plex token when `plex_url` is the saved Plex address (it's a GET, so any web page could trigger it); `POST /api/media-server/test-connection` only resolves a masked key for the stored address; `POST /api/ui-settings` drops a masked Plex token or media-server key whose address changed (`_restore_unchanged_secrets()`, `_restore_unchanged_media_server_secrets()`), like Radarr/Sonarr/Floppy/Maintainerr already did; a database restore no longer keeps this install's Plex/Floppy/Maintainerr key when the backup points that service at another address (`_HOST_BOUND_SECRETS`), and media-server keys use the same check.
+
+### Improvements
+- **"Enter the key again" hint** — Settings → Media Servers (Plex, Jellyfin/Emby, Radarr/Sonarr cards) shows a note when an address changed while the key is still the saved (masked) one; after saving, such a key shows as empty (`savedServerUrls` in the settings store). The test-connection result shows the reason.
+- **TMDb ratings follow the ratings interval** — with the audience source set to TMDb (or TMDb used as the fallback), `server_ratings.tmdb_audience_rating()` read TMDb live on every render (5-minute memory cache only), so each scheduled Overlay Refresh saw the latest score and re-sent posters of new titles whose score crossed a band. The score is now stored in `item_ratings` under `tmdbscore:<movie|tv>:<id>` and reused for "Re-check ratings every N days" (unrated titles: 1 day); a stale value is kept when TMDb can't be reached. "Refresh ratings & lists now" drops the stored TMDb scores of tracked posters (`forget_tmdb_scores()`), which are then read on each poster's next render.
+- **Rule match counts load with the page** — the "titles matched" count next to each poster mode rule was only set by the re-check after a Save, so titles a scan matched later (a Sonarr tag added after saving the rule) still showed "0 titles matched". New `GET /api/poster-modes/rule-counts` (`evaluate_group(..., tags_max_age=None, apply=False)`: cached library and the tags read last time, no Radarr/Sonarr call, no mode changes), loaded by `PosterModeRules.vue` when shown.
+- **Tested servers are added** — in Settings → Media Servers, a successful Test Connection in an add form (Radarr/Sonarr in `ArrInstancesSection.vue`, Plex/Jellyfin/Emby in `MediaServersTab.vue`) adds the server, as the Add button does. A tested form left open was dropped by the page Save (reported: two Radarr + one Sonarr tested, only one Radarr saved).
+
+## v1.8.72 (2026-11-12) — `dev-overlayonly` branch
+
+### New Features
+- **Radarr/Sonarr tags as poster mode rules** — new `arrInstances` setting (`{id, type, name, url, apiKey, enabled}`, key masked like media server keys, kept only for the saved address) edited in Settings → Media Servers (`ArrInstancesSection.vue`), `POST /api/arr/test`, `GET /api/arr/{id}/tags`. `LibraryGroup.arrInstanceId` links one Radarr (movie group) or Sonarr (TV group). `backend/arr_client.py` reads `/api/v3/tag` plus `/api/v3/movie` or `/api/v3/series` into `arr_tags`; read only. Rule source `arr_tag` in `poster_mode.py` (reason `radarr tag "X"` / `sonarr tag "X"`), matched by TMDb id (movies) or TVDB/TMDb id (shows; a TMDb-only show Sonarr doesn't list by TMDb id is looked up once through TMDb, `arr_id_map`).
+- **"Lost its rule" heads-up** — `poster_modes` gains `lost_mode`, `lost_reason`, `lost_at`. A title whose rule (label or tag) stops matching and has no hand-set mode drops to Full and keeps a warning (`poster_mode_warning` on list items, amber card icon, editor line with Dismiss, "Lost its rule" in the Poster mode filter, `POST /api/poster-modes/dismiss-warning`). Cleared when the rule matches again, a mode is set by hand, it is dismissed, or a full poster is sent.
+
+### Improvements
+- **Outage rule** — when the linked Radarr/Sonarr is missing, disabled, the wrong type or unreachable, tag rules are skipped and each title keeps what its tag rules decided last time (stored apart from the combined mode in `poster_modes.tag_mode`/`tag_reason`, so it also holds for a title a label rule was winning on); label rules still apply.
+- **Fresh tags for new arrivals** — webhooks and auto-generate call `poster_mode.gate(..., fresh_tags=True)`, which re-reads the instance at most once a minute and evaluates labels and tags together (`evaluate_item()`). The Settings re-check always reads fresh.
+- **Rule editor** — source select per rule, tag suggestions, a note on a rule that can't match (no Radarr/Sonarr linked, no Plex library).
+
+## v1.8.71 (2026-11-12) — `dev-overlayonly` branch
+
+### New Features
+- **Poster modes (Full / Overlay only / Leave alone)** — new table `poster_modes` (group id, media type, id type `tmdb`|`tvdb`, item id, `manual_mode`, `rule_mode`, `rule_reason`); effective mode is manual, else rule, else full. `backend/poster_mode.py` holds the lookup (`effective_for_item()`, `gate()`), Plex label rule evaluation (`LibraryGroup.posterModeRules`; Leave alone beats Overlay only, case-insensitive) and the cleanup done when a mode changes (retry-queue rows removed for both non-full modes; `overlay_state` rows removed for Leave alone; drift marks cleared for both). A title in a library with no group uses `group-{type}-{library}` (Plex) or `lib:{server}:{library}`. API: `GET /api/poster-modes`, `POST /api/poster-modes/set`, `POST /api/poster-modes/reevaluate`; `/api/movies` and `/api/tv-shows` return `poster_mode` and `poster_mode_reason`.
+- **Overlay-only pipeline** (`backend/overlay_only.py`) — `render_overlay_only()` resizes the clean copy to 2000x3000 and draws only the preset's overlays (below then above). Clean copies live in `config/cache/clean_base/{server}__{key}[__s{season}]`, are never Simposter's own output, and are refreshed from the server's poster whenever it isn't one Simposter sent (also for seasons, and a show poster served for a season counts as ours). After upload the drift fingerprint is recorded, History gets `overlay_only_sent` ("Overlays applied"), and the `overlay_state` row is marked `clean_base` so Overlay Refresh re-renders from the clean copy.
+- **UI** — mode icon on grid cards, a Poster mode filter on Movies/TV Shows and both Batch Edit views, Set mode and "Include Leave alone titles" in Batch Edit, a mode line in both editors, a rules editor under each library group.
+
+### Improvements
+- **Webhook ignore labels became Leave alone rules** — migration `ignore_labels_to_modes` turns each Plex library's `webhookIgnoreLabels` into Plex label → Leave alone rules on its library group (an ungrouped Plex library gets a one-member group), then empties the field. Titles with those labels are now also skipped by Overlay Refresh, the retry queue, Batch Edit (unless `include_leave_alone`) and Media Mirror (posters), not just webhooks and auto-generate.
+- **Gates** — every automatic poster path calls `poster_mode.gate()` first: the Radarr/Sonarr/Tautulli handlers and `process_webhook_poster_generation()`, Jellyfin/Emby webhook resolution, both Plex auto-generate loops, Jellyfin/Emby scan auto-generate, the cached-poster delivery and pending-sync queue, `_run_poster_retry()` and Retry Now, `overlay_refresh.run_group()`, drift detection (`check_after_download()` and put-back/resend), `_execute_batch()` per item, and Media Mirror's poster pass.
+- **Cleanup** — new `clean_base` category (also in the scheduled-cleanup lists); `purge_server_cache()` and the Jellyfin/Emby item re-key handle `clean_base/`.
+
+### Bug Fixes
+- **A failed Plex label fetch no longer wipes a rule mode** — a webhook whose label request failed used to read "no labels" and clear the mode; it now keeps the stored one.
+- **Resend** — a title whose last real send was an overlay-only one is no longer resent from the cache as if it were a full poster.
+
+## v1.8.61 (2026-11-10) — `webui-overhaul-dev` branch
+
+### New Features
+- **Maintainerr leaving dates for overlays** — Settings → Ratings & Lists → Maintainerr (address, optional API key sent as `X-Api-Key`, Test). Simposter reads `GET /api/collections/overlay-data` (Maintainerr 3.20+) for movies, shows and seasons and keeps a snapshot (`maintainerr_items`, refreshed after an hour in the background, and always before an Overlay Refresh run). An item's removal date is the earliest `addDate + deleteAfterDays` of its collections, matched by its own id, then TMDb/TVDB id (so Plex and Jellyfin copies agree). Text values `{leaving}` (today / tomorrow / weekday within 6 days / "Nov 12"), `{leaving_date}`, `{leaving_day}`, `{leaving_days}`; Show when fields Removal date, Days until removal, Maintainerr collection. An item in no collection has none of these, so its leaving layers aren't drawn. Overlay Refresh re-sends a poster when the text changes; the Overlay Refresh page and Overlays → Scheduler suggest a daily schedule when an overlay uses these values. Turn off Maintainerr's own overlays for the same items.
+
+### Bug Fixes
+- **Overlay preview listed every server's library separately** — "A real movie or show" in the Overlay Manager listed each Plex/Jellyfin/Emby library on its own. It now lists library groups by name (opened through the group's Plex member, else its first member, so items come back merged as on the library pages), with libraries not in any group still listed on their own.
+
+## v1.8.60 (2026-11-10) — `webui-overhaul-dev` branch
+
+### Improvements
+- **Merging branches** — `dev-noserver` (Poster API and server-less mode, v1.8.50–v1.8.57) merged into `webui-overhaul-dev`, together with v1.8.39 (overlays carried to fallback posters).
+
+## v1.8.57 (2026-11-10) — `dev-noserver` branch
+
+### Bug Fixes
+- **Settings that saved without Save** — the Poster API on/off checkbox (Settings → Media Servers) PUT `/api/poster-api/settings` on every click, and a library group's "Merge items" checkbox POSTed `/api/media-server/library-group/merge-items`. Both now only change the settings store; the page-wide Save sends them. `posterApiEnabled` is in both of SettingsView's snapshots, the watch list and a new `posterApi` section flag (yellow highlight); "Merge items" was already covered by the `libraryGroups` diff. The sidebar reads a new `posterApiEnabledSaved` (set on load, after a successful Settings save and after a Poster API page save), so it only changes after saving. Every other request from Settings is an explicit action (Test, Scan, sign-in, Cleanup, import).
+- **Poster API key changed without Save** — Generate and Clear on the Poster API page wrote the key at once. They now set the field only (`keyUnsaved` note); Save stores it.
+
+### Improvements
+- **Media server still recommended** — `docs/POSTER_API.md` has a "Why connect a media server" section (file details, server ratings, library posters, scans/Overlay Refresh/webhooks), linked from README and GETTING_STARTED. The v1.8.50 entry in `majorReleases.ts` (shown to `webui-overhaul-dev` users crossing v1.8.50 after the merge) says the Poster API is off by default, where to turn it on, and that it works best with a media server.
+
+## v1.8.56 (2026-11-09) — `dev-noserver` branch
+
+### Bug Fixes
+- **"Failed to import preset" at the end of the setup wizard** — `POST /api/presets/import` built every imported preset's overlay effect layer (`overlay_cache.refresh_preset()`) before replying. On a slow CPU that was ~80 s per preset (~7 minutes for the starter set), so the browser or proxy gave up and the wizard showed an error although the presets were saved. It was also an `async def`, so the whole server stopped answering for those minutes. The layers are now built in a background thread (`_generate_overlay_caches_async()`), the endpoint is a plain `def`, and `/presets/import-file` calls it through `run_in_threadpool`. A render before the layer is ready builds it itself.
+- **No ratings in TMDb-item previews** — `/api/preview` only gave overlays the item's ids through a library `rating_key`, so Template Manager's TMDb preview and the editor's Poster API mode (whose preview is what Pin stores) never had a TMDb id and drew no rating/list/studio/release-date layers. `PreviewRequest.tmdb_id` is new; used only without a `rating_key`. `TemplateManagerView.vue` sends it with `is_tv`, `render.ts` sends it for `apiMode` items.
+- **"Server" rating sources never used MDBList** — with the default "server" source and no media server, `audience_rating` fell back to TMDb and `critic_rating` was never filled, even with an MDBList key. A media-server source with no value now uses MDBList (`server_ratings.MDBLIST_FALLBACK`: IMDb audience, Rotten Tomatoes critic), then TMDb for audience (`fill_after_mdblist()`). An explicitly chosen MDBList source still never falls back to another service. `mdblist_fields_wanted()` counts server sources only when no server is enabled. Settings → General shows the source actually used in server-less mode.
+- **Clearer rating notes** — when MDBList returns ratings but not the ones an overlay uses, the render log says which (`_rating_source_name()` in `overlay_engine.py`) instead of "none found".
+
+## v1.8.55 (2026-11-09) — `dev-noserver` branch
+
+### Improvements
+- **TMDb/TVDB requests no longer call Plex** — `tmdb_client._apply_rate_limit()` (before every TMDb request) and `tvdb_client._apply_rate_limit()` read the rate limit through `_read_settings()`, which re-applies runtime settings and so runs `resolve_library_ids()`: a live `GET /library/sections` to Plex per request (a warning per request without Plex). Both now use the new `db.get_performance_int()`, which reads the settings table only. `resolve_library_id()` skips the request when no Plex URL is set.
+- **Poster API bookkeeping in the background** — the request-history row and hit counter were two commits per request (~130-160 ms each on a slow disk, one writer at a time), so concurrent cache hits queued. `db.poster_api_queue_request()`/`poster_api_queue_touch()` queue them; a daemon thread writes them every second in one transaction (also on exit), and the page's history/tile readers flush first.
+- **Measured** (100 movies, 8 at a time): cached 30 s → 3.6 s total (median 2.4 s → 0.25 s); fresh renders 97 s → 79 s; no Plex warnings.
+
+
+## v1.8.54 (2026-11-09) — `webui-overhaul-dev` branch
+
+### Security
+- **Poster API key in the log** — uvicorn's request lines (written to `simposter.log` at every level) showed `?key=` in full: `redact_secrets()`'s pattern didn't match a bare `key=` and `_known_secrets()` didn't include `posterApi.key`. Added `_KEY_PARAM_RE` (`?key=`/`&key=`) and the saved key to `_known_secrets()`.
+
+### Bug Fixes
+- **`/poster` ignored `group`** — the root alias in `main.py` didn't accept or pass it.
+- **Poster API search with a huge number** — an all-digit search over 18 digits overflowed SQLite's integer and returned a 500; it now only searches titles.
+
+### Improvements
+- **Unused API routes removed** — no frontend or backend caller, and not documented for users: the second `GET /tv-show/{id}/select-poster` in `tv_shows.py` (FastAPI only ever used the first; the second was the older Plex-only version), `POST /cache/refresh`, `GET /movies/tmdb`, `POST /presets/link-overlay`, `GET /retry-queue/count`, `POST /retry-queue/apply-settings`, `GET /scheduler/status`, `GET /mdblist/ratings`, `GET /mdblist/lists`, `POST /mdblist/lists/refresh`, `DELETE /mdblist/cache`. Kept `/ping` (uptime monitors) and `/webhook/test` (in docs/WEBHOOKS.md).
+- **One Poster API address shown** — `/poster-api/status` `url_templates` now has `movie`/`tv` (both `/poster?...`) instead of `query`/`path`/`root`; the Poster API page, the onboarding Poster API step and `docs/POSTER_API.md` show only `/poster`. `/api/poster` and `/api/poster/{type}/{id}` still work for existing links.
+
+## v1.8.53 (2026-11-09) — `webui-overhaul-dev` branch
+
+### Improvements
+- **Text and its image centered** — `_with_addon()` (overlay_engine.py) and the preview top-aligned a text layer's addon image; Kometa's `get_backdrop()` centers the smaller one on the other axis. Now centered by default, with a new `addon_align` (start/center/end, Overlay Manager "Align"). The Side dropdown now shows Left for a stored `left`.
+- **MDBList list without a key warned** — a Kometa import kept its MDBList list rules on an install with no key, and the rule editor showed the list name like a working list. The layer's ⚠ list (`layerWarnings()`) and the rule editor now say the list needs a key and the layer never shows until one is added.
+- **List-service error wording** — the rule editor's per-service list-loading error (e.g. an expired WeTrakr sign-in) says it only affects that service's lists in the menu.
+- **Kometa import logging** — `api_kometa_import()` logs a warning when a file can't be read or imported, or produces no layers (with the first messages), and an info line listing skipped/hidden overlays. Previously the reason was only in the HTTP response.
+
+### New Features
+- **Kometa config entries** — `kometa_import.config_overlay_entries()` recognizes a pasted/uploaded `config.yml` snippet (a bare `- default:`/`- file:` list, an `overlay_files:` block, or `libraries: X: overlay_files:`); `expand_config_entries()` expands each entry with its `template_variables` (as `config_vars`) into one overlay, renaming repeated layer names across entries. `default:` files come from `raw.githubusercontent.com/Kometa-Team/Kometa/master/defaults/overlays/<name>.yml` (`safe_get(strict=True)`, name `^[a-z0-9_]+$`), cached in `config/cache/kometa_defaults/` for 7 days with the cached copy as fallback. The import modal's paste check accepts these. A pasted fragment that isn't valid YAML on its own (first line flush left with its children still indented, or the whole block still indented) is retried re-indented/dedented (`_yaml_candidates()`/`_lenient_yaml()`, also used by `_load_yaml()`); only a version that parses is used.
+- **Content rating, network and streaming rules** — new condition fields in `overlay_engine.py`/`overlayEngine.ts`: `content_rating` and `streaming` are per country (the condition's `region`, US by default; context keys `content_rating@GB`, `streaming@US` via `regional_key()`), `network` is a list. Content ratings (every country) and networks come from TMDb (`/movie/{id}/release_dates`, `/tv/{id}/content_ratings`, `/tv/{id}` networks) via `_tmdb_facts()`, cached 30 days in new table `tmdb_item_facts`; a rating also matches Plex's `gb/12A` form. Streaming uses `get_watch_providers()` (flatrate, 7-day cache), matched by provider id or name. Importer: `content_rating`/`network` filters and `plex_search`, `tmdb_discover` `with_watch_providers` + `watch_region` → streaming rule; Kometa's per-country rating defaults get their country. Render log, Overlay Refresh reasons ("Content rating (GB) 15 → 12A"), rule editor (country box), preview example values and real-item preview handle them. Kometa's content_rating ×6, commonsense, network and streaming defaults went from all-hidden to working.
+- **Rating text formats** — `{x%}` (int(x*10)), `{x#}` (one decimal, trailing ".0" dropped), `{x/}` (x/2, one decimal), as in Kometa's `modules/overlays.py`; `_VAR_RE`/`_format_value()` in `overlay_engine.py` and `fillText()`/`formatValue()` in `overlayEngine.ts` (kept in step). `_kometa_text()` keeps these instead of dropping them, and maps Kometa's old bare `critic_rating%`/`0`/`#` names the way Kometa does.
+
+## v1.8.52 (2026-11-09) — `webui-overhaul-dev` branch
+
+### New Features
+- **Poster API request history** — new `poster_api_requests` table (newest 2000 kept), written by `handle_poster_request()` for every lookup and rejected key: `result` = library | pinned | rendered | generated (`Served.generated`, rendered during the request) | redirect | not_found | bad_key, with title, preset, group and duration. `GET`/`DELETE /api/poster-api/requests` (filter by result, search title/TMDb id, per-result counts). Poster API page → Recent requests.
+- **Poster API library groups** — `posterApi.movieGroup` / `tvGroup` (default group when a request names none; validated on PUT) and a `group=` query parameter (id or case-insensitive name) on `/api/poster`, `/api/poster/{type}/{id}` and `/poster`. The group limits the library lookup and the rating key used for badges (`find_rating_key_by_tmdb_id(..., members)`, `render_for_tmdb(..., members)`). `CacheKey.group`; stored as `preset_key = "preset@group"` (`store._dbkey()`/`split_dbkey()`), file names get `__g_<group>`. Pinned posters stay group-independent; pinning clears the default render of every group. Unknown group → 404.
+
+### Bug Fixes
+- **Poster API rendered titles already in the library** — the "library" step only checked `poster_renders_by_tmdb/`, so a title Simposter never sent (or an install restored without that folder) always rendered. `library_poster_path()` now also checks the resend cache (`poster_renders/{rating_key}.jpg`) and the scan's poster cache (`posters/{rating_key}.*`, `tv_` for shows) of every library copy, Plex first. Movies and whole shows only (no season number in the cache tables).
+
+### Improvements
+- **No library tiles** — `touch_served()` no longer records served-from-library posters in `poster_api_cache` (startup deletes existing `source='library'` rows); the Library source filter is gone. They appear in the request history.
+- **Poster API toggle** — the sidebar entry only shows when `posterApi.enabled` (or in server-less mode); the switch moved to Settings → Media Servers (saved immediately via `PUT /api/poster-api/settings`), the Poster API page links to it.
+
+## v1.8.51 (2026-11-09) — `webui-overhaul-dev` branch
+
+### Bug Fixes
+- **Settings edits that never enabled Save** — about 30 staged fields (General: theme, posterDensity, timezone, deduplicateMovies, defaultSort; Output: every save location and tvShowSaveMode; several Automation, Apprise and Libraries fields) were missing from `SettingsView.vue`'s `watch([...], checkForChanges)` list, so the Save button stayed "No Changes". Inline `hasUnsavedChanges = true` flags could be cleared by the next watched change, and `sendLogosToPlex` was in neither snapshot. Every staged field is now watched and in both snapshots.
+- **Wizard Skip overwrote settings** — `skip()` ran the wizard's full `saveSettings()` with untouched defaults (and an empty Plex library list, since Plex is ticked by default). `markOnboardingDone(false)` now only marks onboarding complete.
+- **Save before load** — the settings store's `saveSettings()` refuses to save (and reloads) when settings never loaded, instead of sending in-memory defaults.
+
+### Improvements
+- **Per-section unsaved highlight** — `checkForChanges()` computes every section flag from the saved snapshot (new `libraryDisplay`, `ratings`, `logoDefaults`, `labels`, `discord`, `apprise`, `cleanupSchedule`, `rateLimits`; `scheduler` is scan-only). Tabs receive them as a `changed` prop and use `section-unsaved`.
+- **Wizard re-run** — prefilled from current settings (timezone, performance, image quality, automation, labels, scan schedule, Apprise); keeps the scan library selection; Plex connection, library mappings and labels-to-remove only written when Plex was connected this run, keeping existing per-library settings (`withExistingMapping()`).
+
+## v1.8.50 (2026-11-08) — `dev-noserver` branch
+
+### New Features
+- **Poster API** — `GET /api/poster?tmdb_id=&type=&season=&preset=&key=`, `GET /api/poster/{type}/{tmdb_id}` and a root alias `GET /poster` (`backend/api/poster_api.py`, registered before the SPA catch-all in `main.py`). `backend/poster_api.py` `serve()` looks up pinned, then library (the file Simposter already sent), then rendered (`poster_api_cache` table, files in `config/cache/poster_api/`); a cold request renders on a thread pool, waits `waitSeconds` (2-30) and otherwise 302s to `image.tmdb.org/t/p/w780`. Concurrent requests for one key share one render; genuine "no art" results are negatively cached for 10 minutes. Settings live under `posterApi` (`enabled`, `key`, `defaultMoviePreset`, `defaultTvPreset`, `waitSeconds`, `retentionDays`); the key is masked in `/api/ui-settings`. Admin routes `/api/poster-api/*` (status, items, thumb, regenerate, clear, pin, settings, generate-key) and `/api/tmdb/search|trending|tv/{id}/seasons`. New `docs/POSTER_API.md`.
+- **Server-less mode** — the setup wizard's "No media server" path (new Poster API step), a reduced nav, route guard and gated library/status calls when onboarding is done and no server is configured (`useServerless.ts`: `serverless = onboardingCompleted && !anyServerConfigured`).
+- **Editor API mode** — `EditorPane.vue`/`TvShowEditorPane.vue` open a TMDb title with `apiMode` (`?apiEdit=<type>:<id>`), hide send/save, and add a Pin button that stores the preview as a pinned poster.
+
+### Improvements
+- **`backend/tmdb_render.py`** — poster/logo selection and fallback logic extracted from `batch.py` (`load_preset_context`, `select_movie_assets`/`select_tv_series_assets`/`select_tv_season_assets`, `fetch_tv_series_images`) and shared with the Poster API's `render_for_tmdb`. Verified with a before/after golden comparison of the chosen poster/logo/fallback flags.
+- **Cleanup** — new `poster_api_renders` category (rendered files not served in `retentionDays`, trash/restore like the others); database export/import carries pinned posters (`poster_api_pinned`).
+- **Template Manager / Overlay Manager** previews fall back to TMDb trending and search when there is no library.
+- **TMDb rating source** — `server_ratings.TMDB_SOURCE = "tmdb"` fills `audience_rating` from TMDb's `vote_average` (needs only the TMDb key; `vote_count` 0 = no rating); it is also the fallback after the media servers for the `server` source and for an MDBList source with no key. TMDb has no critic score. `tmdb_client` details now include `vote_average`/`vote_count`. In Settings → Ratings & Lists the `tmdb` choice moved out of the MDBList group.
+- **Server-less polish** — Backup / Restore (per-library server artwork) removed from the server-less nav and redirected; Settings hides Libraries, Output and Automation; `QuickStartGuide.vue` has a server-less card set; Overlay Manager tags video/audio/edition badges "needs a media server"; Settings → Ratings & Lists hides the media-server rating choices.
+- **Poster API bulk actions** — `POST /api/poster-api/bulk` `{action: regenerate|clear, items: [...]}` (max 500; regenerate only touches rendered rows, clear uses each tile's own source, invalid items are skipped and counted). The Poster API page has per-tile checkboxes, Select page / Select all, and bulk Regenerate / Clear.
+- **Pin removes the default render** — `POST /api/poster-api/pin` deletes the default-slot rendered row/file/thumbnail for the same title (and season), which is never served while a pin exists; renders for an explicit `preset=` stay.
+- **Poster API defaults** — `FALLBACK_PRESET_ID = "simposter-main"` when no default preset is set; `/api/poster-api/status` adds `url_templates_with_key` so Copy gives a working URL; the wizard shows a spinner while importing starter presets.
+
+### Bug Fixes
+- `POST /api/ui-settings` with a section missing from the body reset that section to defaults; guarded with `model_fields_set` (found for `posterApi`).
+- `db.save_ui_settings()` deletes every settings row; partial saves use `db.set_setting()`.
+- Digit-only secrets/preset ids were read back as integers; `posterApi.key`, `defaultMoviePreset`, `defaultTvPreset` added to `_STRING_ONLY_SETTINGS_KEYS`.
+- Rate limiting skipped every non-`/api` path, so `/poster` would have been unlimited; `/api/poster` and `/poster` now have their own limit (3000/60 s) and `/api/tmdb` went from 40 to 300.
+- Saving a default preset on the Poster API compared against the wrong structure and rejected every non-empty value.
+- Poster API serve resolved the default preset before checking pinned/library (404 with no Uniform Logo presets); library PNG files were sent as `image/jpeg`; per-tile Clear could delete a pinned poster; switching from server-less to configured mid-session never started the library loaders.
+
+## v1.8.39 (2026-11-08) — `webui-overhaul-dev` branch
+
+### New Features
+- **"Use current overlays on fallback poster"** — new preset option `fallbackKeepOverlays` (default on), Template Manager → Fallback tab, shown when either fallback action is "template". Read from the original preset. On: the fallback poster keeps the original preset's `overlay_config_ids`/`overlay_config_ids_below`. Off: only the fallback preset's own lists (empty if none). `presetFields.ts` `toDisplay()` now honours `default: 'true'` on bool fields.
+
+### Bug Fixes
+- **Fallback renders inherited overlays by accident** — every fallback merge was `{**original, **fallback}`, so the original's overlay lists survived when the fallback preset had never stored one and were replaced when it had. All eight merges (`batch.py` movie poster/logo, `/api/batch` TV, TV series, TV season; `preview.py` ×3) now go through `backend/preset_fallback.py` `merge_fallback_options()`. With the default on, the only change is a fallback preset that has its own overlays, which now gets the original's.
+
+
+## v1.8.38 (2026-11-06) — `webui-overhaul-dev` branch
+
+### Improvements
+- **Rating source defaults to the media server** — new source value `server` (the default for `mdblist.audienceRatingSource`/`criticRatingSource`): `server_ratings.server_order()` lists "plex"/"jellyfin" in the order the enabled servers appear in `mediaServers` (Emby counts as jellyfin), and `fill()` takes the first one with a rating for the item. One-time migration `rating_source_server`: on installs with no MDBList key, stored `imdb`/`tomatoes` (the old defaults, saved by every Settings save so indistinguishable from a choice) become `server`; anything else, and every install with a key, is left alone.
+- **Ratings & Lists tab** — Settings' General tab was split: `GeneralTab.vue` takes `part="general" | "ratings"` (one component, so the key tests and sign-in flows aren't duplicated) and SettingsView renders it twice. The audience/critic rating dropdowns moved out of the MDBList section into an "Overlay ratings" section at the top of the new tab. In-app hints, log messages and docs say "Settings → Ratings & Lists".
+- **Group status on Settings → Libraries** — new `GET /api/media-server/library-groups/status` (Media Mirror on/off, source → targets, schedule/next run, last run; Overlay Refresh schedule/next run, last run; read fresh from the DB since both pages save there directly). Each saved group card shows it read-only with an Open link to the page (same library/server pair the sidebar uses).
+- **Default presets from simposter-assets** — `GET /api/presets/default-template` (`build_default_presets()` in `backend/api/presets.py`) reads `presets/defaults.json` from simposter-assets (at most every 10 minutes; `?refresh=true`, sent by onboarding and Template Manager's "Import Simposter defaults", fetches now), keeps the last good copy in `config/cache/default_presets.json`, and falls back to the bundled `_DEFAULT_PRESETS_TEMPLATE`. A preset with a `min_version` newer than the install uses the bundled preset of the same name, or is skipped. Optional `fonts` (added to `_fonts`) and `_overlays` (an overlay bundle, as in preset exports) pass through to the import. A remote file with no presets is ignored.
+
+### Bug Fixes
+- **Setup wizard scanned only one library** — on leaving the Libraries step it fired every selected library's scan at once (`/api/scan-library` and each `/api/media-server/{id}/scan`); the backend runs one scan at a time and answers `409` to the rest, which the wizard ignored, so on a fresh Jellyfin install three of four libraries never scanned. New `runInitialScans()` (`OnboardingModal.vue`) awaits them one after another (each request returns when its scan is done), retries a `409` every 5 s for up to 5 minutes, and runs once per wizard.
+- **Presets JSON migration error on Windows** — `presets_file.rename()` to `presets.json.migrated` fails on Windows when an older backup is already there (`WinError 183`, logged as "Error loading presets" on a fresh database); now `replace()`.
+
+
+## v1.8.37 (2026-11-06) — `webui-overhaul-dev` branch
+
+### New Features
+- **Ratings from the media server** — new `backend/server_ratings.py` and table `server_ratings` (server_id, rating_key, server_type, media_type, tmdb_id, audience/critic 0-10). Plex scans store `audienceRating`/`rating` from the metadata they already fetch (movies in `_fetch_label_for_movie`, shows in `_fetch_tv_show_data`); Jellyfin/Emby scans store `CommunityRating` and `CriticRating`/10 from `list_items()`. `audienceRatingSource`/`criticRatingSource` accept `plex` and `jellyfin` (Jellyfin or Emby); `build_context()` fills the two fields from the chosen server (matched by TMDb id, else rating key), or from any server when an MDBList source is chosen but there's no key, and only calls MDBList for fields still missing. The render log says "(from Plex)". Batch prefetch skips MDBList when every rating used comes from a server. The Kometa importer no longer warns that `audience_rating`/`critic_rating` need MDBList. Purged and re-keyed with the server's other cache rows.
+
+## v1.8.36 (2026-11-05) — `webui-overhaul-dev` branch
+
+### New Features
+- **Logs → Problems** — new `GET /api/logs/problems?date=` (`backend/log_problems.py`) reads the whole log file (the page itself only loads the last 500 lines), groups WARNING/ERROR lines by known kind (TMDb image downloads, Plex/Jellyfin/Emby unreachable or upload failed, Discord/Apprise, TMDb/MDBList/list services, no poster found, Overlay Refresh, webhooks, database locked) with an explanation, and groups anything else by its message with numbers, ids and URLs blanked. `date` must be YYYYMMDD. Panel at the top of `LogsView.vue`, refreshed with the log.
+
+### Improvements
+- **Status polling out of the log** — `/api/plex-status` and `/api/media-server/status` added to `_NOISY_POLL_PATHS`; on the user's server they were 4,282 of 8,419 lines in a day at DEBUG.
+- **Kometa preview warning** — "Could not find TMDB ID ... trying Plex poster" is DEBUG for the `kometa` template / collections (32 a day on the user's server).
+
+### Bug Fixes
+- **Fanart never used for TV batch renders** — `batch.py` called `fanart_client.get_images_for_tv_show()` (twice) but only imports it as `get_fanart_tv_images`, so every TV batch/webhook/auto-generate render logged `Fanart series fetch failed: name 'fanart_client' is not defined` and got no Fanart logos. Found by the new Problems summary on the user's log.
+
+## v1.8.35 (2026-11-05) — `webui-overhaul-dev` branch
+
+### Bug Fixes
+- **Retry queue emptied itself** — the "Reuse cached poster for (days)" shortcut (Quirk #41) is meant only for webhooks and auto-generate, but the retry job calls `process_single_movie_poster()`/`process_single_tv_show_poster()` with `source="auto_generate"`, so it took the shortcut too: it re-sent the TMDb-keyed render (the fallback poster the item was queued for) and returned a result with no `needs_retry`, which the retry job read as resolved. Both reuse checks in `batch.py` now skip when `send_only_if_ideal` is set (retry job and Retry Now). Seen on the user's server: 14 items resolved this way on 2026-11-04/05 after the setting was set to 10 days.
+
+## v1.8.34 (2026-11-04) — `webui-overhaul-dev` branch
+
+### New Features
+- **Starter overlays** — `backend/starter_overlays/*.json` (first: `jmxd.json`, the user's "MediaInfo - jmxd" and "Audience Rating - jmxd" from their own setup, 81 + 6 layers, with the user's per-layer tweaks and no whole-overlay rules). Image layers carry `url`s to jmxd/Kometa pinned at commit `36e9852`, not `asset_id`s; `POST /api/overlay-starters/{id}/install` (`backend/api/overlay_starters.py`) downloads them with the Kometa importer's `download_remote_image()` + `_AssetSaver` (reuses identical files), fetches listed fonts into `config/fonts`, and saves the overlay under the starter's id with a credit note (409 if added; `replace=true` overwrites it with the shipped version in place, so presets using it stay linked). `GET /api/overlay-starters` reads `starter_overlays/index.json` + its files from simposter-assets (at most every 10 minutes, `?refresh=true` for Check for new), keeps the last good copy in `config/cache/starter_overlays/`, and falls back to the bundled files; a remote starter replaces a bundled one with the same id. Optional `min_version` per starter (listed but not addable on older installs). `StarterOverlaysModal.vue` next to Import Kometa.
+
+## v1.8.33 (2026-11-03) — `webui-overhaul-dev` branch
+
+### Improvements
+- **Changed Outside Simposter grouped** — `list_drifted()` adds each item's `library_id` (`db.get_library_id_for_rating_key()`, seasons via their show); `HistoryView.vue`'s `driftGroups` groups by library group (else the library, else "Other"), then Posters / Logos / Backdrops, as collapsible `<details>` sections with counts.
+
+### Bug Fixes
+- **Every logo marked as changed** — `poster_drift.fingerprint()` used `convert("RGB")`, which keeps the hidden colour under transparent pixels; the cache shrink (or any resize/re-save) changes it, so a re-downloaded logo scored ~200 against what was sent. Now `_flatten()` draws transparent images on black first (RGB images give the same fingerprint as before). `recheck_art_fingerprints()` (startup thread, once: `drift_fp_alpha_v1`) recomputes stored logo/backdrop fingerprints from `drift_sent/` copies and clears marks that no longer hold against the cached image.
+
+## v1.8.32 (2026-11-03) — `webui-overhaul-dev` branch
+
+### Improvements
+- **Live overlay badge** — the Overlay Manager list and editor mark an overlay a live Kometa file writes to (matched by the file's `config_id` from `GET /api/live-kometa-files`, not the `overlay-live-` id prefix), with the file path and interval in the tooltip, and a note in the editor that its layers are replaced when the file changes.
+
+- **Overlay notes & credits** — new `overlay_configs.notes` column (`OverlayConfigSaveRequest.notes`, max 4000 chars). `save_overlay_config(notes=None)` keeps the stored notes, so Kometa re-imports and live file syncs don't wipe them; preset shares and database backups carry them via `overlay_bundle`. The list renders http(s) links without `v-html`; editing notes doesn't offer a poster refresh.
+
+- **Smaller image caches** — new `backend/cache_images.py`. Display caches (`posters` via both `_save_poster_cache()`, and `backdrops`/`square_art`/`thumb_art`/`logos` via `art_cache.save_cache()`) are written downscaled: posters 1000px tall, others 1280px long side, JPEG 85; logos 800px wide PNG (alpha kept). Resend caches (`save_render_cache()`, `save_render_cache_by_tmdb()`) store a PNG render as full-size JPEG 95, 4:4:4. `start_shrink_existing()` (startup thread, once: `applied_migrations` `cache_shrink_v1`) rewrites older files, keeping each file's mtime so cache URLs and thumbnails stay valid. Backup no longer copies the cache: `fetch_and_cache(full_copy_to=...)` writes the full-size original straight to the backup file. Measured on test images: a 17.6 MB poster PNG -> 255 KB display copy; an 8.4 MB render -> 3 MB JPEG.
+
+### Bug Fixes
+- **Rename asked to refresh posters** — `saveConfig()` offered Overlay Refresh on any unsaved change. It now compares `renderSnapshotOf()` (the config without its name and without layer names; a layer rename also renames it in hide rules) against the saved one.
+
+## v1.8.31 (2026-11-02) — `webui-overhaul-dev` branch
+
+### New Features
+- **Type-in preset editing in Template Manager** — `PresetEditForm.vue` (fields from `services/presetFields.ts`: every option the editors save, grouped Image/Logo/Text/Extras, same ranges and units, `percent` stored 0-1) replaces the read-only summary. Series saves go through the merge endpoint `/api/presets/save` with only the form's fields and both overlay lists (never `season_options`); season saves send the full resolved season object to `/api/presets/save-season-options`, which keeps the diff. Kometa presets get their own field list. Unsaved edits are confirmed before collapsing a card or leaving the page.
+- **Only the settings that apply** — `PresetField.showIf`/`isFieldVisible()` hide fields whose switch is off or that don't apply (logo hex unless `logo_mode` is hex; logo box/style/drop shadow with no logo; drop-shadow, text-shadow and outline details while off; every text field while custom text is off; border details while off); hidden fields keep their stored value. Fields sit under `section` sub-headings. Fallback rules (logo source, poster/logo fallback action, template, preset) moved from the ⚙ popup into a Fallback tab (series view only); a non-"template" action clears its target. The popup was removed; it also saved without the preset `name`, which reset a renamed preset to its id.
+- **Overlay order per preset** — `PresetOverlayList.vue`: top-first list (stored bottom-to-top in `overlay_config_ids`), add on top, ↑/↓, above/below logo & text, remove; missing overlays are shown and kept. Season view shows "Same as series" until overridden. The editors' Overlays card lists ticked overlays first in draw order with a position number.
+- **Refresh prompt after a preset's overlays change** — new `POST /api/overlay-refresh/by-preset` and `/run-preset` (`backend/api/overlay_refresh.py`), `overlay_refresh.preset_overlay_lists()`/`match_preset_states()`, `db.set_overlay_state_overlay_lists()`. Tracked posters whose snapshot equals the preset's old lists are offered; posters with other overlays can be included (checkbox, off by default); posters already on the new lists, or of a kind (series/season) whose lists didn't change, are left out. Run rewrites the chosen snapshots' overlay lists and starts a normal non-forced refresh per library group. Shown by Template Manager and by Save Preset in both editors (`usePresetRefreshPrompt.ts`, `PresetRefreshPrompt.vue`).
+- **Unraid template** — `unraid/simposter.xml` (port 8003, appdata → `/config` required; TMDb/Plex/Jellyfin/TVDB/Fanart keys, PUID 99/PGID 100 optional). New `JELLYFIN_URL`/`JELLYFIN_API_KEY`: `db.seed_jellyfin_from_env()` adds the server to `mediaServers` once, recorded in `applied_migrations` as `env_jellyfin:<id>` so a server removed in the UI isn't re-added; the id is `_media_server_id()`, the same FNV-1a hash as `mediaServerId.ts`.
+- **Date rules for overlays** — new "Dates" field group: `today` (only `between`/`not_between`), `added_date`, `release_date` (TMDb release / first air date, cached in a new `release_dates` table for 30 days, daily while TMDb has none), `days_since_release`, and `days_since_added` moved into it. `between` takes `[start, end]` (or `a..b`): MM-DD ends are a yearly range that may wrap New Year, YYYY-MM-DD ends a fixed range; `gt/gte/lt/lte` compare dates when the value is a date. Same logic in `overlay_engine.py` and `overlayEngine.ts` (`date_in_range`/`dateInRange`). Rule editor uses `DateRangeInput.vue` (Every year toggle, month/day selects, quick picks). Preview: "Pretend today is" (both modes) and Date added / Release date example values. `today` uses the server's local date; seasonal layers change at the next render or scheduled Overlay Refresh.
+
+### Bug Fixes
+- **Template Manager on a phone** — the preset name was squeezed to 0px by the action buttons; the header now wraps.
+- **TVDB/Fanart env keys ignored** — `_apply_runtime_settings()` set `TVDB_API_KEY`/`FANART_API_KEY` (and TMDb) to the saved value or `""`, wiping a container env var; it now falls back to the env var when nothing is saved.
+- **Sticky previews never stuck on desktop** — `.main-pane` (App.vue) was `overflow-y: auto` but never scrolls (the window does), which disables `position: sticky` inside it; now `overflow: clip` with `min-width: 0`, and `.workspace` uses `minmax(0, 1fr)` (same fix as phones in v1.8.30). Template Manager's preview panel and Batch Edit's preview sidebar now follow the page.
+- **Template Manager fallback** — no fallback template dropdown; the fallback preset list is this template's own presets (minus itself) and saving stores the template automatically. The ✎ (rename) button also opens the card.
+- **"Resend" re-uploaded stale posters** — with `existingContentMode=resend`, the webhook and auto-generate resend shortcuts re-uploaded whatever image was saved for the Plex item (e.g. a render from before the preset had overlays). New `backend/resend_policy.py` `resend_check()`: resend only when the preset has no overlays, the last real Plex render (skipping `resent_to_plex` rows) used the same template/preset with no fallback, and the preset wasn't edited since; otherwise render fresh, with a log line saying why.
+
+## v1.8.30 (2026-11-02) — `webui-overhaul-dev` branch
+
+### Improvements
+- **Mobile layout** — checked every main page at 390px wide (Chrome phone emulation against a copy of the database) and fixed what was clunky. CSS only, all behind `max-width: 900px`/`600px` breakpoints; desktop is unchanged.
+  - **Editors** (`EditorPane.vue`, `TvShowEditorPane.vue`): the preview pane moves above the controls and stays pinned to the top (`position: sticky`, image 30vh, or 15vh after "Smaller", remembered in `localStorage` `simposter-mobile-preview-small`); action buttons in two rows with their labels (they were icon-only and one was empty); the controls scroll with the page instead of in their own inner box; the TV editor's rendered-seasons strip is hidden on phones.
+  - **App shell** (`App.vue`): on phones `.main-pane` is `overflow: clip` (was `auto`, which made it a scroll container and stopped sticky elements working) with the workspace column at `minmax(0, 1fr)`.
+  - **Movies/TV Shows/Batch Edit/History**: sort and filter controls behind a "Sort & filter"/"Filters" button showing the current sort or number of active filters. History rows become cards (title, View, date, badges, library, preset, path or error).
+  - **Template Manager, Overlays**: grid columns `minmax(0, 1fr)` so content no longer runs past the screen; **Local Assets, Collections**: header and filter rows wrap; **Settings**: less nested padding.
+
+## v1.8.29 (2026-10-31) — `webui-overhaul-dev` branch
+
+### New Features
+- **Update notifications** — new `backend/update_notice.py`: `check_and_notify()` runs every 6 hours (first run 5 minutes after start-up, `schedule_update_check()` in `scheduler.py`), reuses `version_info.check_for_updates()` for the running branch, reads that branch's `frontend/src/releaseNotes.ts` from GitHub (`parse_release_notes()`, `highlights_between()`), and sends `send_app_update_notification()` (Discord embed / Apprise text: new version, running version, highlights, how to update). Announced once per version (one-row `app_update_notice` table; only marked when a notification went out). New "App updates" toggles (`discordNotifyAppUpdates`/`appriseNotifyAppUpdates`, default on, source `app_update`).
+
+### Improvements
+- **History merges multi-server rows** — `HistoryView.vue`'s `displayRows` folds rows with the same title, year, template, preset, source and kind of action on different servers within 5 minutes into one row ("Sent to Plex + Jellyfin"), using the Plex row for the preview and title link. Display only; the database keeps one row per server.
+
 ## v1.8.28 (2026-10-31) — `webui-overhaul-dev` branch
 
 ### Bug Fixes

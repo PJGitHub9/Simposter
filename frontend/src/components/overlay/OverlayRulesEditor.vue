@@ -4,7 +4,8 @@
 // when several overlap lives in the config-level Badge sets panel.
 import { normalizeListUrl, type OverlayCondition, type OverlayRuleFields } from '@/services/overlayEngine'
 import { computed, onMounted, ref } from 'vue'
-import { FIELDS, FIELD_GROUPS, fieldDef, opsFor, opDef, needsMdblist } from '@/services/overlayFields'
+import { FIELDS, FIELD_GROUPS, fieldDef, opsFor, opDef, needsMdblist, needsMaintainerr, rangeParts } from '@/services/overlayFields'
+import DateRangeInput from '@/components/overlay/DateRangeInput.vue'
 import { useSettingsStore } from '@/stores/settings'
 import { listDisplayName, providerLabel, useListSources } from '@/composables/useListSources'
 
@@ -16,13 +17,17 @@ const what = computed(() => (props.subject === 'overlay' ? 'this overlay' : 'thi
 // (a condition that already uses one keeps showing its field).
 const settings = useSettingsStore()
 const hasMdblistKey = computed(() => !!settings.mdblist.value.apiKey)
-// "On a list" works with any list service set up in Settings → General.
+// "On a list" works with any list service set up in Settings → Ratings & Lists.
 const hasListSource = computed(() => hasMdblistKey.value || !!settings.wetrakr.value.clientId
   || !!settings.simkl.value.clientId || !!(settings.floppy.value.url && settings.floppy.value.token))
+// Maintainerr removal dates once a Maintainerr address is saved.
+const hasMaintainerr = computed(() => !!settings.maintainerr.value.url)
 const fieldsFor = (c: OverlayCondition) => {
   const current = fieldDef(String(c.field || ''))?.value
   const offered = (f: (typeof FIELDS)[number]) => f.value === current
-    || (f.kind === 'list' ? hasListSource.value : (hasMdblistKey.value || !needsMdblist(f)))
+    || (f.kind === 'list' ? hasListSource.value
+      : needsMaintainerr(f) ? hasMaintainerr.value
+      : (hasMdblistKey.value || !needsMdblist(f)))
   return FIELD_GROUPS
     .map(g => ({ group: g, fields: FIELDS.filter(f => f.group === g && offered(f)) }))
     .filter(g => g.fields.length)
@@ -77,6 +82,8 @@ const addPasted = async (i: number, c: OverlayCondition) => {
 }
 
 const isMulti = (c: OverlayCondition) => !!opDef(String(c.op))?.multi
+const isRange = (c: OverlayCondition) => !!opDef(String(c.op))?.range
+const isDateField = (c: OverlayCondition) => ['date', 'today'].includes(fieldDef(String(c.field || ''))?.kind || '')
 const isNoValue = (c: OverlayCondition) => !!opDef(String(c.op))?.noValue
 const isUnsupported = (c: OverlayCondition) => String(c.field || '').startsWith('_')
 
@@ -109,13 +116,22 @@ const changeField = (c: OverlayCondition, field: string) => {
   if (def?.kind === 'list') listSources.load()
   const first = opsFor(field)[0]
   c.op = first ? first.value : 'eq'
-  c.value = def?.kind === 'choice' && def.options?.[0] ? def.options[0].value : ''
+  c.value = def?.kind === 'choice' && def.options?.[0] ? def.options[0].value
+    : def?.kind === 'today' ? ['12-01', '12-26']
+    : opDef(c.op)?.range ? ['', ''] : ''
 }
 
 const changeOp = (c: OverlayCondition, op: string) => {
   const wasMulti = isMulti(c)
+  const wasRange = isRange(c)
   c.op = op
   if (opDef(op)?.noValue) { delete c.value; return }
+  if (isRange(c) !== wasRange) {
+    // between <-> a single date: keep the first date.
+    const first = wasRange ? rangeParts(c.value)[0] : String(c.value ?? '')
+    c.value = isRange(c) ? [first, ''] : first
+    return
+  }
   const nowMulti = isMulti(c)
   if (nowMulti && !wasMulti) c.value = valueList(c)
   else if (!nowMulti && wasMulti) c.value = valueList(c)[0] ?? ''
@@ -186,10 +202,15 @@ const removeCondition = (i: number) => {
             <button type="button" class="btn-small" :disabled="pasteBusy[i]" @click="addPasted(i, c)">{{ pasteBusy[i] ? 'Checking…' : 'Add' }}</button>
           </div>
           <p v-if="pasteMsg[i]" class="cond-note inline" :class="{ warn: !pasteMsg[i]?.ok }">{{ pasteMsg[i]?.text }}</p>
-          <p v-if="listSources.loaded.value && !listSources.groups.value.length" class="cond-note inline">
-            No lists found yet. Connect WeTrakr, SIMKL or Floppy in Settings → General, or paste a list link.
+          <p v-if="!hasMdblistKey && listKeys(c).some(k => k.includes('mdblist.com/'))" class="cond-note inline warn">
+            MDBList lists need an MDBList API key (Settings → Ratings & Lists). Until one is added, this layer never shows.
           </p>
-          <p v-for="(msg, svc) in listSources.errors.value" :key="svc" class="cond-note inline warn">{{ providerLabel(String(svc)) }}: {{ msg }}</p>
+          <p v-if="listSources.loaded.value && !listSources.groups.value.length" class="cond-note inline">
+            No lists found yet. Connect WeTrakr, SIMKL or Floppy in Settings → Ratings & Lists, or paste a list link.
+          </p>
+          <p v-for="(msg, svc) in listSources.errors.value" :key="svc" class="cond-note inline warn">
+            Your {{ providerLabel(String(svc)) }} lists couldn't be loaded into this menu ({{ msg }}). Lists from other services aren't affected.
+          </p>
         </div>
 
         <div v-else-if="!isUnsupported(c) && !isNoValue(c)" class="cond-value-row">
@@ -214,6 +235,15 @@ const removeCondition = (i: number) => {
             <option v-if="c.value && !fieldDef(String(c.field))?.options?.some(o => o.value === String(c.value))" :value="String(c.value)">{{ c.value }}</option>
             <option v-for="o in fieldDef(String(c.field))?.options || []" :key="o.value" :value="o.value">{{ o.label }}</option>
           </select>
+          <!-- A date, or a date range (yearly or fixed) -->
+          <DateRangeInput
+            v-else-if="isDateField(c)"
+            :model-value="c.value"
+            :range="isRange(c)"
+            :allow-yearly="isRange(c)"
+            :yearly-default="fieldDef(String(c.field))?.kind === 'today'"
+            @update:model-value="c.value = $event as OverlayCondition['value']"
+          />
           <!-- Free value -->
           <input
             v-else
@@ -226,6 +256,18 @@ const removeCondition = (i: number) => {
           />
         </div>
 
+        <div v-if="!isUnsupported(c) && fieldDef(String(c.field))?.regional" class="cond-value-row cond-region">
+          <span class="cond-region-label">Country</span>
+          <input
+            class="cond-value cond-region-input"
+            type="text"
+            maxlength="2"
+            :value="(c.region || 'US').toUpperCase()"
+            placeholder="US"
+            title="Two-letter country code, e.g. US, GB, DE, AU"
+            @change="c.region = ($event.target as HTMLInputElement).value.replace(/[^A-Za-z]/g, '').toUpperCase().slice(0, 2) || 'US'"
+          />
+        </div>
         <p v-if="isUnsupported(c)" class="cond-note warn">
           An imported Kometa rule Simposter can't check, so {{ what }} never shows. Remove this condition to show it.
         </p>
@@ -239,7 +281,7 @@ const removeCondition = (i: number) => {
 
       <div class="rules-actions">
         <button type="button" class="btn-small" @click="addCondition">+ Add condition</button>
-        <p v-if="!hasMdblistKey" class="hint">Ratings show up here once you add an MDBList API key in Settings → General{{ hasListSource ? '' : ', and lists once you set up MDBList, WeTrakr, SIMKL or Floppy there' }}.</p>
+        <p v-if="!hasMdblistKey" class="hint">Ratings show up here once you add an MDBList API key in Settings → Ratings & Lists{{ hasListSource ? '' : ', and lists once you set up MDBList, WeTrakr, SIMKL or Floppy there' }}.</p>
         <span v-if="(element.conditions?.length || 0) > 1" class="hint">All conditions must match.</span>
       </div>
 
@@ -259,6 +301,9 @@ const removeCondition = (i: number) => {
 .cond-op { flex: 1; min-width: 0; }
 .cond-value-row { padding-left: 2.75rem; }
 .cond-value { width: 100%; box-sizing: border-box; }
+.cond-region { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.cond-region-label { font-size: 12px; color: var(--text-muted, #a8b3cf); }
+.cond-region-input { width: 4.5em; text-transform: uppercase; }
 .cond select, .cond input { padding: 0.32rem 0.4rem; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border, #2a2f3e); border-radius: 5px; color: var(--text-primary, #fff); font-size: 0.78rem; }
 .cond select { background-color: var(--surface-soft, #141824); color-scheme: dark; }
 :root[data-theme='light'] .cond select { color-scheme: light; }

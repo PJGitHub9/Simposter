@@ -83,8 +83,9 @@ const addPasted = () => {
   pasteError.value = ''
   const text = pasteText.value.trim()
   if (!text) return
-  if (!/^(overlays|templates)\s*:/m.test(text)) {
-    pasteError.value = "Paste a whole Kometa overlay file: it should have a line starting with 'overlays:'."
+  // An overlay file, or config.yml overlay_files entries ("- default: ratings").
+  if (!/^(overlays|templates|overlay_files|libraries)\s*:/m.test(text) && !/^\s*-\s*(default|file)\s*:/m.test(text)) {
+    pasteError.value = "Paste a whole Kometa overlay file (with a line starting with 'overlays:') or config.yml overlay_files entries such as '- default: ratings'."
     return
   }
   const base = (pasteName.value.trim() || 'Pasted overlay').replace(/[\/:*?"<>|]+/g, ' ').trim() || 'Pasted overlay'

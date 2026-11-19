@@ -13,6 +13,8 @@ const props = defineProps<{
   pngCompression: number
   webpQuality: number
   unsavedChanges: boolean
+  // Per-section unsaved flags from SettingsView.vue (sectionsWithChanges)
+  changed?: Record<string, boolean>
   imageQualityChanged?: boolean
 }>()
 
@@ -321,7 +323,7 @@ function insertVar(key: FieldKey, token: string) {
     </div>
 
     <!-- Saving -->
-    <div class="section">
+    <div :class="['section', { 'section-unsaved': changed?.output }]">
       <h3>Saving</h3>
       <p class="section-description">How Save to Disk names its files. The examples update as you choose.</p>
 
@@ -765,5 +767,11 @@ button:disabled {
 
 .options .checkbox-help {
   margin-bottom: 10px;
+}
+
+/* Yellow highlight for a section with unsaved changes (flags from SettingsView.vue). */
+.section.section-unsaved {
+  background: rgba(255, 200, 0, 0.08);
+  border-color: rgba(255, 200, 0, 0.4);
 }
 </style>

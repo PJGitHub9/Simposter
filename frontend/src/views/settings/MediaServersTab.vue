@@ -1,10 +1,14 @@
 <template>
   <div class="media-servers-tab">
     <h2>Media Servers</h2>
-    <p class="hint">
-      Connect Simposter to one or more media servers — Plex, Jellyfin, or Emby.
-      More than one can be enabled at once.
-    </p>
+
+    <div class="area-head">
+      <h3 class="area-title">Media servers</h3>
+      <p class="hint">
+        Where Simposter reads your libraries and sends posters. Connect Plex, Jellyfin and/or Emby;
+        more than one can be enabled at once.
+      </p>
+    </div>
 
     <!-- One section per server type (Plex / Jellyfin / Emby), each laid out
          identically -- requested directly so the three "look the same in
@@ -53,6 +57,9 @@
             <input v-model="localPlexUrl" placeholder="http://localhost:32400" class="server-url-input" />
             <input v-model="localPlexToken" type="password" placeholder="X-Plex-Token" class="server-credential-input" />
           </div>
+          <p v-if="keyNeedsReentry(localPlexUrl, localPlexToken, settingsStore.savedServerUrls.value.plex)" class="reentry-hint">
+            The address changed, so enter the Plex token again. A saved token is only ever sent to the address it was saved with.
+          </p>
           <div class="server-card-row">
             <button
               class="secondary"
@@ -104,6 +111,12 @@
               class="server-credential-input"
             />
           </div>
+          <p
+            v-if="keyNeedsReentry(server.url, server.type === 'plex' ? server.token : server.apiKey, settingsStore.savedServerUrls.value[`ms:${server.id}`])"
+            class="reentry-hint"
+          >
+            The address changed, so enter the {{ server.type === 'plex' ? 'token' : 'API key' }} again. A saved key is only ever sent to the address it was saved with.
+          </p>
           <div class="server-card-row">
             <button class="secondary" @click="testServerConnection(server)" :disabled="testingId === server.id">
               {{ testingId === server.id ? 'Testing…' : 'Test Connection' }}
@@ -211,15 +224,37 @@
     </div>
     </div>
 
-    <!-- "When the same item is found on more than one server, prefer..." used
-         to live here as one global setting (Quirk #74). Moved to Settings ->
-         Libraries, scoped per Library Group instead (see
-         LinkedServerLibraries.vue's own preferred-server dropdown) -- one
-         global choice applied to every linked group at once wasn't granular
-         enough once an install has more than one group linked, and the
-         user's own framing ("add it in the library category sections") is
-         also just a better fit: this choice is about a specific library's
-         merged content, not a server-wide default. -->
+    <!-- Radarr / Sonarr: optional, read only; their tags feed poster mode rules. -->
+    <div class="area-head">
+      <h3 class="area-title">Radarr &amp; Sonarr <span class="optional-tag">Optional</span></h3>
+      <p class="hint">
+        Only needed for poster mode rules based on Radarr or Sonarr tags. Simposter only reads tags and never
+        changes anything in them. Webhooks from Radarr/Sonarr are set up in Settings → Automation.
+      </p>
+    </div>
+    <div class="server-groups-grid">
+      <ArrInstancesSection type="radarr" :changed="radarrChanged" />
+      <ArrInstancesSection type="sonarr" :changed="sonarrChanged" />
+    </div>
+
+    <div class="area-head">
+      <h3 class="area-title">Other</h3>
+    </div>
+
+    <!-- Poster API: off by default; the sidebar page only appears once it's on
+         and saved. Saved with the rest of Settings, like every other field. -->
+    <div :class="['section', { 'section-unsaved': posterApiChanged }]">
+      <h3>Poster API</h3>
+      <p class="poster-api-text">
+        Lets other apps ask Simposter for a poster by TMDb id. Turning it on adds the Poster API page to the sidebar,
+        where you set the key and default presets.
+      </p>
+      <label class="poster-api-toggle">
+        <input type="checkbox" :checked="posterApiEnabled" @change="togglePosterApi(($event.target as HTMLInputElement).checked)" />
+        Enable Poster API
+      </label>
+      <router-link v-if="posterApiEnabled && settingsStore.posterApiEnabledSaved.value" to="/poster-api" class="poster-api-link">Open the Poster API page</router-link>
+    </div>
 
     <div class="save-row">
       <button class="primary" @click="emit('save')">Save Media Servers</button>
@@ -232,6 +267,8 @@ import { computed, reactive, ref } from 'vue'
 import { useSettingsStore, type MediaServerEntry } from '@/stores/settings'
 import { getApiBase } from '@/services/apiBase'
 import { mediaServerId } from '@/services/mediaServerId'
+import { keyNeedsReentry } from '@/services/serverOrigin'
+import ArrInstancesSection from '@/components/settings/ArrInstancesSection.vue'
 
 // Plex is deliberately threaded through as props/emits (mirroring exactly how
 // LibrariesTab.vue received them, since the Plex Connection card moved here
@@ -257,6 +294,9 @@ const props = defineProps<{
   plexServersChanged?: boolean
   jellyfinServersChanged?: boolean
   embyServersChanged?: boolean
+  radarrChanged?: boolean
+  sonarrChanged?: boolean
+  posterApiChanged?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -283,6 +323,14 @@ const localPlexToken = computed({
 
 const apiBase = getApiBase()
 const settingsStore = useSettingsStore()
+
+// Poster API on/off. Only changes the settings store; the page-wide Save sends
+// it (posterApi is part of the /api/ui-settings payload), and SettingsView's
+// unsaved-changes check picks it up (posterApiEnabled in both snapshots).
+const posterApiEnabled = computed(() => !!settingsStore.posterApi.value.enabled)
+function togglePosterApi(enabled: boolean) {
+  settingsStore.posterApi.value = { ...settingsStore.posterApi.value, enabled }
+}
 const servers = settingsStore.mediaServers
 
 // The primary Plex connection can be named too, same as any other server --
@@ -430,7 +478,7 @@ async function testConnectionRequest(type: string, url: string, credential: stri
     })
     if (!res.ok) return { ok: false, message: '✗ Could not connect' }
     const data = await res.json()
-    if (!data.connected) return { ok: false, message: '✗ Could not connect' }
+    if (!data.connected) return { ok: false, message: `✗ ${data.error || 'Could not connect'}` }
     return { ok: true, message: buildConnectionMessage(data.sections || []) }
   } catch {
     return { ok: false, message: '✗ Could not connect' }
@@ -504,6 +552,14 @@ async function testNewServer(type: 'plex' | 'jellyfin' | 'emby') {
     state.testResult = { ok: false, message: '✗ Could not connect' }
   } finally {
     state.testing = false
+  }
+  // A server that tests fine is added straight away: a tested-but-not-added
+  // form was easy to leave open, and the page Save silently left it out.
+  const result = state.testResult
+  if (result?.ok && state.url.trim() && state.credential) {
+    const id = mediaServerId(type, state.url)
+    addServer(type)
+    testResults[id] = result
   }
 }
 
@@ -623,6 +679,34 @@ function removePrimaryPlex() {
 .server-groups-grid .section {
   margin-bottom: 0;
 }
+.area-head {
+  margin: 8px 0 12px;
+}
+.area-head .hint { margin-bottom: 0; }
+h3.area-title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin: 0 0 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.optional-tag {
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text-secondary);
+}
+@media (max-width: 900px) {
+  .server-groups-grid { grid-template-columns: 1fr; }
+}
 
 h2 {
   margin-top: 0;
@@ -638,6 +722,12 @@ h3 {
   font-size: 18px;
 }
 
+.reentry-hint {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: #f5a524;
+}
+
 .hint {
   color: var(--text-secondary);
   font-size: 13px;
@@ -648,6 +738,24 @@ h3 {
   color: var(--text-secondary);
   font-style: italic;
   margin: 0 0 16px 0;
+}
+
+.poster-api-text {
+  color: var(--text-muted);
+  font-size: 14px;
+  margin: 0 0 12px;
+  line-height: 1.5;
+}
+.poster-api-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.poster-api-link {
+  margin-left: 16px;
+  color: var(--accent, #3dd6b7);
+  font-size: 14px;
 }
 
 .section {

@@ -10,6 +10,685 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.87',
+    date: '2026-11-19',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Dependency updates: FastAPI 0.162.3, Apprise 2.2.0, pydantic-settings 2.16.2 and python-multipart 0.0.33.',
+        ],
+      },
+    ],
+  },
+  {
+    version: 'v1.8.86',
+    date: '2026-11-19',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Updating from main: the What’s New window now also has a page on overlays, ratings and the new connections (Ratings & Lists, Radarr/Sonarr, Maintainerr), next to the poster modes and Poster API pages.',
+          'Documentation: a new User Guide with a tour of every page and how-to guides, a step-by-step setup wizard guide, Unraid install steps, and new screenshots throughout.',
+          'The Overlays page is no longer marked experimental. Kometa import stays in beta.',
+        ],
+      },
+    ],
+  },
+  {
+    version: 'v1.8.85',
+    date: '2026-11-18',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Countdown text for overlays: put {countdown} in a text layer and pick a "Countdown to" date (every year, like Dec 25, or a fixed date). It shows the days left, 0 on the day, and an every-year date starts again afterwards. Pair it with a "Today is between" rule and a daily Overlay Refresh.',
+          "Template Manager can preview a preset on a random show or a random season (with the preset's season settings), next to the random movie. Random season needs a TV library on a media server.",
+        ],
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Season and show previews in the editors and Template Manager could switch to the fallback preset when TMDb had no matching poster. Previews now keep the preset you picked, as movie previews already did.',
+        ],
+      },
+    ],
+  },
+  {
+    version: 'v1.8.84',
+    date: '2026-11-18',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Merging branches: poster modes (Full / Overlay only / Leave alone) and Radarr/Sonarr tag rules are now on webui-overhaul-dev.',
+        ],
+      },
+    ],
+  },
+  {
+    version: 'v1.8.83',
+    date: '2026-11-18',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          "A show that was new to your server could get only its season poster from a Sonarr webhook, no series poster, when a library scan ran at the same moment and saw the show first. A show the server added in the last 24 hours that hasn't had a series poster from Simposter yet is now treated as new.",
+        ],
+      },
+    ],
+  },
+  {
+    version: 'v1.8.82',
+    date: '2026-11-17',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          "Batch Edit could skip sending logos to Plex when the server's DNS had a hiccup (\"Temporary failure in name resolution\"). The logo the poster was just made with is now reused, and a failed download is retried.",
+          "Jellyfin/Emby uploads that timed out during a busy batch now wait longer for Jellyfin and try once more instead of failing.",
+          "Overlay Refresh asked TMDb for a collection (e.g. Harry Potter) as if it were a movie on every run, logging a 404 each time. Collection posters sent to Jellyfin/Emby are now tracked as collections.",
+        ],
+      },
+    ],
+  },
+  {
+    version: 'v1.8.81',
+    date: '2026-11-16',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          "Batch Edit, webhooks and Media Mirror skipped Jellyfin for movies that Jellyfin groups into a collection (Rocky, Moana 2, 101 Dalmatians...), sending only to Plex with \"no item with TMDb ... in its linked library\" in the log. Those movies are now found and sent.",
+        ],
+      },
+    ],
+  },
+  {
+    version: 'v1.8.80',
+    date: '2026-11-16',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          "Setup wizard: the default presets and starter overlays now show a picture of what they look like. Click one to see it larger.",
+          "Setup wizard: a new Library groups step right after picking libraries. Libraries with the same name on different servers start out in one group (\"4k Movies\" and \"4k-Movies\" count as the same name); you can rename a group or move a library to another group or its own.",
+          "Setup wizard: a new Group settings step after Radarr & Sonarr. Pick each group's Radarr or Sonarr and add poster mode rules (a Plex label or Radarr/Sonarr tag gives matching titles Overlay only or Leave alone), the same rules as Settings → Libraries.",
+          "Setup wizard: the Automation step can turn on Overlay Refresh for every library group, with the time it runs and the Plex label for posters with overlays (default \"Simposter-Overlay\").",
+        ],
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          "Running the setup wizard again: a saved Jellyfin or Emby connection now keeps its API key, so Test works without typing it again. Changing the address clears it, since a saved key is only used with the address it was saved for.",
+          "Setup wizard: pressing Next on the server step now tests any server you ticked but didn't test yourself. Before, testing only one server dropped the others from the wizard (their libraries disappeared). A server that doesn't connect keeps you on that step with its error; leave its fields empty to skip it.",
+        ],
+      },
+    ],
+  },
+  {
+    version: 'v1.8.79',
+    date: '2026-11-16',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          "The setup wizard now finishes the job: pick your default preset and any starter overlays, connect Radarr and Sonarr (Simposter can create its webhook in them for you), and add Maintainerr, MDBList, WeTrakr, SIMKL or Floppy keys. When you click Finish, new movies and shows get their poster automatically with that preset.",
+          "New starter overlay: Maintainerr - Leaving Soon. A red border and \"Leaving <day>\" text on titles Maintainerr is about to remove. Meant for Maintainerr users.",
+          "Overlays added in the wizard go on the preset's movie and show posters, not season posters.",
+          "Running the wizard again only changes what you change in it; your existing libraries, labels and automation settings are kept.",
+        ],
+      },
+    ],
+  },
+  {
+    version: 'v1.8.78',
+    date: '2026-11-16',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          "Overlay Refresh no longer forgets a poster when its movie or show briefly leaves the library (for example when a placeholder file is replaced by the real one and Plex or Jellyfin gives it a new id). It's set aside, and once a scan finds the title again it's tracked again and its poster is re-sent with overlays. Titles that don't come back within 60 days are dropped. Posters it already forgot before this update need one send with overlays (Batch Edit) to be tracked again.",
+        ],
+      },
+    ],
+  },
+  {
+    version: 'v1.8.77',
+    date: '2026-11-14',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          "TV show editor: switching from the series to a season (or back) now loads that poster's own overlays from the preset. Before, the overlays ticked on the series stayed ticked on every season, even when the preset's season list is different (Template Manager → Season → Overlays). Overlays you tick by hand on a season or the series are still kept when you switch back.",
+        ],
+      },
+    ],
+  },
+  {
+    version: 'v1.8.76',
+    date: '2026-11-14',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          "Overlay only now draws the overlays on whatever poster is on the server, including a plain poster Simposter sent earlier. It only holds back when Simposter knows that poster already has its overlays (so they aren't added twice). Before, it waited for another app's poster whenever the poster was one Simposter had sent.",
+          "Overlay only, poster editor: when the poster on the server already has Simposter's overlays, the preview still shows, with a \"Remove overlays\" button that puts the poster back without them.",
+        ],
+      },
+    ],
+  },
+  {
+    version: 'v1.8.75',
+    date: '2026-11-14',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          "Shorter sidebar: each library now has Batch Edit, Collections, Artwork and Tools. Artwork holds Logos, Backdrops, Square Art and Thumb Art as tabs; Tools holds Overlay Refresh, Media Mirror, Local Assets and Backup / Restore. Old links and bookmarks still work.",
+          "Settings → Libraries: each library group is shown as a one-line summary (its servers, auto-generate, labels and rules). Click Edit to change it.",
+          "The labels to remove when sending to Plex are now set in each library group's Edit view, instead of one long list at the bottom of the page.",
+          "Kometa compatibility now always removes the \"Overlay\" label for every Plex library, not only for libraries added after you turned it on.",
+          "\"Send logos with posters by default\" moved to Settings → Automation.",
+          "Settings → Media Servers is split into Media servers (Plex, Jellyfin, Emby) and an optional Radarr & Sonarr area below it, then the Poster API.",
+          "Template Manager shows your presets first (movie & TV presets, then collection presets); Default Batch Settings is folded away below them.",
+        ],
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          "Overlay only titles: when there's nothing to draw the overlays on yet (the poster on the server is still Simposter's own render), the editor's preview now says so. Before, it said \"Tick an overlay\" even with overlays ticked, and the real reason was a small note on the side.",
+          "Renaming a media server or a library group in Settings no longer changes the top bar pill or the sidebar until you click Save.",
+          "The labels to remove for a TV library were ignored by webhooks, auto-generate, scheduled scans and resends; only movie libraries' labels were removed. The TV show editor also pre-ticked the movie libraries' labels instead of the show's own.",
+        ],
+      },
+    ],
+  },
+  {
+    version: 'v1.8.74',
+    date: '2026-11-14',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          "Simposter no longer shows the setup wizard (or empty pages) to an install that's already set up. This happened when the server refused or couldn't answer the settings request, for example after refreshing a few times or with two tabs open. Settings are now retried, and if they still can't load you get a \"couldn't load its settings\" message with a Try again button.",
+          "A brand-new install no longer shows What's New behind the setup wizard, and What's New doesn't pop up right after finishing the wizard.",
+          "Batch Edit's \"Send logos\" now also sends logos to Jellyfin and Emby. Before, logos were only sent when Plex was ticked, so a Jellyfin-only batch never sent them.",
+          "Typing an address that doesn't exist in Simposter now takes you to the home page instead of an empty page.",
+        ],
+      },
+      {
+        title: 'Improvements',
+        items: [
+          "Settings → Libraries: the help texts for linking a library, \"Merge items\" and \"Send logos to media servers by default\" now say what actually happens (changes take effect after Save Changes; logos go to every server the poster goes to).",
+        ],
+      },
+    ],
+  },
+  {
+    version: 'v1.8.73',
+    date: '2026-11-13',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          "Security: a saved Plex token or Jellyfin/Emby API key is now only ever sent to the address it was saved with. Before, Test Connection with a different address (including a link opened on another website), changing a server's address in Settings, or restoring a backup with another address could send the saved key to that other address.",
+        ],
+      },
+      {
+        title: 'Improvements',
+        items: [
+          "If you change a server's address in Settings → Media Servers, the page now says to enter its key again. Using Simposter from another computer is not affected; only the server address matters.",
+          "Adding a Radarr, Sonarr, Plex, Jellyfin or Emby server: a Test Connection that succeeds now adds it right away. Before, a server that was tested but not added with the Add button was left out when you clicked Save.",
+          "TMDb audience ratings now follow Overlays → Scheduler's \"Re-check ratings every N days\", like MDBList ratings. Before, the TMDb score was read again on every Overlay Refresh, so new titles whose score moved a little were re-sent (and notified) again and again. Titles with no TMDb votes yet are checked daily.",
+          "Settings → Libraries: a poster mode rule's \"titles matched\" count is up to date when the page opens. Before, it only changed when you saved the rules, so titles a later scan matched (for example after adding the tag in Sonarr) weren't counted.",
+        ],
+      },
+    ],
+  },
+  {
+    version: 'v1.8.72',
+    date: '2026-11-12',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Radarr and Sonarr tags as poster mode rules: connect Radarr/Sonarr in Settings → Media Servers, pick one on a library group in Settings → Libraries, then add a rule such as "Radarr tag Aura means Overlay only". This works for Jellyfin and Emby libraries, which have no labels. Simposter only reads tags and never changes anything in Radarr or Sonarr.',
+          'A title that goes back to Full because its label or tag was removed now shows an amber warning icon on its card, since Simposter may replace its poster. The editor shows why, with a Dismiss link, and the Poster mode filter has "Lost its rule".',
+        ],
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'If Radarr or Sonarr cannot be reached, the poster modes its tags set earlier are kept until it can be read again.',
+          'A poster mode rule row now has a source (Plex label, Radarr tag or Sonarr tag) and suggests the tags that exist.',
+        ],
+      },
+    ],
+  },
+  {
+    version: 'v1.8.71',
+    date: '2026-11-12',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Poster modes: each title can now be Full (Simposter renders the whole poster, as before), Overlay only (Simposter keeps the poster another app such as Aura chose and only draws your overlays on it) or Leave alone (Simposter never touches the poster). Modes are set per library group, so every server in a group shares them.',
+          'Set a mode in Batch Edit (select titles, then Set mode) or per title in the editor. Movies and TV Shows show an icon on titles that are not Full and have a new Poster mode filter.',
+          'Rules set modes automatically: under each library group in Settings → Libraries, add a rule such as "Plex label Aura means Overlay only". Plex labels only in this version; Radarr/Sonarr tags and Jellyfin tags are planned.',
+          'When the other app changes an Overlay only poster, the next scan notices, keeps the new poster as a clean copy and draws your overlays on it again. A poster Simposter sent itself is never used as the clean copy. See the new "Posters from another app" section in the overlay docs.',
+        ],
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'The old per-library "webhook ignore labels" became Leave alone rules on the library group, once, on upgrade. Titles with those labels are now also skipped by Overlay Refresh, the retry queue, Batch Edit (unless you tick "Include Leave alone titles") and Media Mirror (posters), not just webhooks and auto-generate.',
+          'Cleanup has a new "Clean base posters" category for clean copies of titles that left your library.',
+        ],
+      },
+    ],
+  },
+  {
+    version: 'v1.8.61',
+    date: '2026-11-10',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Maintainerr leaving dates: add your Maintainerr address in Settings → Ratings & Lists, then overlays can show when an item will be removed, e.g. "Leaving {leaving}" gives "Leaving tomorrow", "Leaving Wednesday" or "Leaving Nov 12". Also {leaving_date}, {leaving_day}, {leaving_days}, and "Show when" rules on the removal date, days until removal and Maintainerr collection.',
+          'Overlay Refresh updates these posters as the date gets closer or when an item is kept; the page suggests refreshing daily when an overlay uses them.',
+        ],
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Overlay preview: "A real movie or show" now lists your library groups instead of each server library separately.',
+        ],
+      },
+    ],
+  },
+  {
+    version: 'v1.8.60',
+    date: '2026-11-10',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Merging branches.',
+        ],
+      },
+    ],
+  },
+  {
+    version: 'v1.8.57',
+    date: '2026-11-10',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Settings: turning the Poster API on or off took effect at once, without Save. It now waits for Save like every other setting: the section turns yellow, and the sidebar entry only appears or disappears after saving.',
+          'Settings → Libraries: the "Merge items" checkbox of a library group also saved on its own. It now waits for Save too.',
+          'Poster API page: Generate and Clear changed the API key straight away. They now only change the field; the new key takes effect when you click Save, and the old one keeps working until then.',
+        ],
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'The Poster API docs and the "what’s new" overview now explain why connecting a media server is still recommended even if you only use the Poster API: badges from your actual files, ratings from the server, posters you already have, and posters kept up to date.',
+        ],
+      },
+    ],
+  },
+  {
+    version: 'v1.8.56',
+    date: '2026-11-09',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Setup wizard: on slower servers the last step could say "Failed to import preset" even though the starter presets were imported. Importing presets now finishes right away and prepares their effects in the background, and the rest of Simposter no longer stops responding while it does.',
+          'Template Manager and the Poster API editor: previews of a movie or show from TMDb now show rating, list and other TMDb-based overlay layers. They never had the TMDb id of the item before, so those layers were always left off.',
+          'Ratings with no media server: when the audience or critic source is "Your media server" and there is no server (or it has no rating), Simposter now uses MDBList if you have a key (IMDb for audience, Rotten Tomatoes for critic). Before, the critic rating was never filled.',
+          'The log now says which score is missing, e.g. "MDBList has no Rotten Tomatoes (critics) score for this item", instead of "ratings: none found".',
+        ],
+      },
+    ],
+  },
+  {
+    version: 'v1.8.55',
+    date: '2026-11-09',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Faster API calls: every TMDb and TVDB request also asked Plex for its library list. It no longer does, so batch renders, scans, webhooks and new Poster API renders make one Plex request fewer per TMDb call (about 20% faster in a 100-poster test), and server-less installs no longer log a Plex warning for each one.',
+          'Poster API: posters it already has are served about 10× faster (0.3 s → 0.025 s each, and no slowdown when many arrive at once). The request history and hit counts are now saved in the background instead of during each request.',
+        ],
+      },
+    ],
+  },
+  {
+    version: 'v1.8.54',
+    date: '2026-11-09',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Security: the Poster API key is no longer written to Simposter\u2019s log. Request lines with ?key= showed it in full. If you shared a log since turning the Poster API on, change the key.',
+          'The short /poster address now honors group=, like /api/poster.',
+          'Searching the Poster API page for a very long number no longer shows an error.',
+        ],
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Removed 11 old API addresses nothing in Simposter used any more (a duplicate TV poster lookup, old cache/retry/scheduler/MDBList helpers).',
+          'The Poster API page, setup wizard and docs now show one address, /poster (with a line each for movies and TV shows), instead of three versions of the same link. It\u2019s the one a reverse proxy can pass on its own. Older /api/poster links keep working.',
+        ],
+      },
+    ],
+  },
+  {
+    version: 'v1.8.53',
+    date: '2026-11-09',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Text with an image next to it (e.g. a Rotten Tomatoes rating and its tomato) is now centered against the image, as Kometa does; it used to sit at the top. The Overlay Manager has a new Align option to put them at the top or bottom edges instead, and the Side option no longer shows blank for Left.',
+          'A layer that uses an MDBList list now shows a warning when there\u2019s no MDBList API key, since it can\u2019t show until one is added.',
+          'The note about a service whose sign-in failed (e.g. WeTrakr) now says it only affects that service\u2019s lists in the list menu.',
+          'Kometa imports that fail, save nothing, or skip layers are now written to the log with the reason (before, the reason only showed in the import window).'
+        ]
+      },
+      {
+        title: 'New Features',
+        items: [
+          'Kometa import: paste the overlay_files entries from your Kometa config.yml, such as "- default: ratings" with its template_variables (copied straight out of the file is fine, even when the first line lost its indent). Simposter downloads Kometa\u2019s built-in overlay file and builds the overlay with your settings.',
+          'New overlay rules: content rating (from TMDb, per country, e.g. PG-13 or 12A), TV network, and streaming service (subscription services in a country, from TMDb). Kometa\u2019s built-in content rating, network and streaming overlays now import with working badges.',
+          'Rating text formats from Kometa: {critic_rating%} shows the rating as a whole number out of 100 (7.6 \u2192 76), {critic_rating#} drops a trailing .0, and {critic_rating/} halves it. Imported Kometa rating overlays now show "76%" instead of "7.6%".'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.52',
+    date: '2026-11-09',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Poster API request history: the Poster API page lists recent calls with what each one got back (a poster from your library, a pinned one, an earlier render, a new render, the stock TMDb poster, not found, or a wrong key), how long it took, and totals per result.',
+          'Poster API library groups: pick which movie and TV library group the Poster API uses (for example "4K Movies" or "Movies"), or add &group=Name to a request URL, so one app can get the 4K version and another the regular one. The group decides which existing poster is served and where the 4K/HDR/audio badges come from.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'The Poster API rendered a new poster even when the title\u2019s poster was already in your library. It now serves the poster your media server has (or the last one Simposter sent) without rendering.'
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Posters the Poster API serves straight from your library no longer get a tile on the Poster API page (they are files your library already has); they show in the request history instead.',
+          'The Poster API page only appears in the sidebar once the Poster API is turned on. The on/off switch moved to Settings \u2192 Media Servers.'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.51',
+    date: '2026-11-09',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Some changes in Settings could not be saved: changing the theme, poster density, timezone, default sort, duplicate grouping or any save location left the Save button on "No Changes", and a few other settings could lose their unsaved status after another change.',
+          'Clicking "Skip setup" in the setup wizard overwrote existing settings with the wizard defaults (timezone, performance, image quality, automation, scan schedule) and could clear your Plex library list.',
+          'Settings are no longer saved if they never loaded, which could otherwise write blank values (including API keys) over your real settings.'
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Every section in Settings now turns yellow when it has unsaved changes, and goes back to normal if you change a value back.',
+          'Running the setup wizard again starts from your current settings, keeps your scan schedule library selection, and keeps each Plex library’s auto-generate and ignore-label settings. Plex libraries are only changed when Plex was connected in that run.'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.50',
+    date: '2026-11-08',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Poster API: other apps (like Ether) can ask Simposter for a poster by TMDb id. You get the poster you pinned, the one already on your media server, or a fresh render from your Uniform Logo preset, and if a render takes too long the request is sent to the stock TMDb poster while the render finishes. Turn it on in the new Poster API page, with an optional key, default presets, and a tile per cached poster (regenerate, clear, open in the editor).',
+          'Run Simposter without a media server: the setup wizard has a "No media server" choice that skips the server and library steps and sets up the Poster API instead. The menu shrinks to Poster API, Template Manager, Overlays, Logs and Settings (Settings hides Libraries, Output and Automation), the quick start guide shows what you can do without a server, and previews and search use TMDb titles. Connect a server later and the full menu returns.',
+          'Pin a poster from the editor: open any TMDb title in the editor from the Poster API page or global search and click Pin. The Poster API then always serves that poster for the title.',
+          'TMDb ratings for overlays: "TMDb (user score)" is a new audience rating source that needs only your TMDb key. When your media server has no rating for a title (always the case with no media server), the audience rating now comes from TMDb, so rating overlays work out of the box.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Saving Settings could reset some settings sections to defaults when the page did not send them.',
+          'The API rate limit did not apply to the /poster address, and the TMDb search limit was low enough that fast typing could return empty results.'
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Cleanup has a new "Poster API renders" category, and database export and import include pinned posters.',
+          'Template Manager and Overlay Manager previews work with TMDb titles when you have no library.',
+          'Poster API defaults to the simposter-main preset, and the Copy buttons copy each URL with your API key already filled in.',
+          'The setup wizard shows a spinner while it imports the starter presets.',
+          'Poster API page: tick posters (or Select page / Select all) to regenerate or clear many at once. Pinning a poster from the editor removes the old rendered copy for that title, since the pinned one is served instead.',
+          'With no media server, Overlay Manager marks video, audio and edition badges as needing a media server (they read file details from a library scan).'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.39',
+    date: '2026-11-08',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Template Manager → Fallback: a new "Use current overlays on fallback poster" option (on by default). When a preset falls back to another preset because the preferred poster or logo wasn’t found, turn it off to give the fallback poster only the fallback preset’s own overlays (none, if it has none).'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fallback posters always kept the original preset’s overlays when the fallback preset had none of its own, and silently swapped them for the fallback preset’s overlays when it did. Which overlays a fallback poster gets is now decided by the option above, for Batch Edit, webhooks, scheduled runs, retries and previews.'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.38',
+    date: '2026-11-06',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Overlay ratings now default to your media server: audience and critic rating come from the first media server (in Settings → Media Servers order) that has a rating for the item, so rating overlays work with no setup. Installs without an MDBList key are switched over automatically; if you use MDBList, your choice is kept.',
+          'Settings: a new Ratings & Lists tab holds where overlay ratings come from, MDBList, WeTrakr, SIMKL and Floppy. General is back to appearance, library display and API keys.',
+          'Settings → Libraries: each library group shows its Media Mirror and Overlay Refresh status (on/off, schedule, last run) with a link to that page.',
+          'Default presets now come from the simposter-assets repository, so new or improved starter presets arrive without a Simposter update. Template Manager → Import Simposter defaults always gets the latest ones (your own presets aren’t touched; defaults with the same name are updated). If the repository can’t be reached, the presets built into Simposter are used.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Setup wizard: every library you pick is now scanned. Before, it started all the scans at once and only one ran (Simposter scans one library at a time), so most libraries stayed empty until you scanned them yourself.'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.37',
+    date: '2026-11-06',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Ratings without MDBList: overlays that use the audience or critic rating (like the Audience Rating starter overlay) can now use the rating your Plex, Jellyfin or Emby server already has. Pick the source in Settings → Ratings & Lists → “Audience rating comes from”. Ratings are read during library scans, so scan once after updating. Without an MDBList key, the media server’s rating is used automatically.'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.36',
+    date: '2026-11-05',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Logs: a Problems summary at the top groups the day’s warnings and errors by kind, with a count and a plain explanation of what it means and what to do. Click one to see its latest lines.'
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Logs: the top bar’s once-a-minute server status checks are no longer written to the log (about half of a debug-level log).',
+          'Logs: previews in the Kometa collection creator no longer warn that the collection has no TMDb ID.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'TV posters made by Batch Edit, webhooks and auto-generate never used Fanart.tv logos (an internal error was logged as "Fanart series fetch failed").'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.35',
+    date: '2026-11-05',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Retry queue: with "Reuse cached poster for (days)" turned on, a retry re-sent the poster from the last send (usually the fallback poster the item was queued for) and marked the item resolved, so queued items disappeared. Retries now always render fresh and stay in the queue until the poster meets the template.'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.34',
+    date: '2026-11-04',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Starter overlays: Overlays → Starter overlays adds ready-made overlays in one click. First up: jmxd’s MediaInfo badges and Audience Rating badge (thanks to jmxd, github.com/jmxd/Kometa). Their images are downloaded from his repository when you add them. New starter overlays appear here without updating Simposter, and Replace brings an added one up to date (your changes to it are lost).'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.33',
+    date: '2026-11-03',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'History → Changed Outside Simposter is grouped by library group, then by type (posters, logos, backdrops), with counts. Each group can be collapsed.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Changed Outside Simposter flagged almost every logo after the cache got smaller. Logo checks now compare only what you can see (the hidden colour under transparent areas no longer counts), and the false marks are cleared on the next start.'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.32',
+    date: '2026-11-03',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Much smaller cache folder: cached posters, backdrops, square art and logos are only shown in the app, so they are now stored at display size (posters 1000px tall, about 100–300 KB) instead of full resolution, and saved renders kept for re-sending are stored as high-quality JPEG. Existing files are shrunk once in the background after updating; Backup still saves full-size images.',
+          'Overlays: a Notes & credits field on each overlay, e.g. to thank the creator an overlay was imported from. Shown under the overlay in the list, with clickable links, and kept when the overlay is shared or re-imported.',
+          'Overlays: the How overlays work guide is shorter (one line per step).',
+          'Overlays: an overlay kept in sync with a live Kometa file now has a Live badge (grey when paused), and its editor says its layers are replaced when the file changes.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Overlays: renaming an overlay (or a layer) no longer asks to refresh posters; only changes that can alter a poster do.'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.31',
+    date: '2026-11-02',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Edit presets in Template Manager by typing values: open a preset and change any setting (Image, Logo, Text, Extras) without opening a poster. Series and season settings each have their own view; season values follow the series unless you set them.',
+          'Overlay order on a preset: the Overlays tab lists a preset’s overlays in draw order (top is drawn on top). Add one, move it up or down, switch it between above and below the logo and text, or remove it. The editor’s Overlays list now shows the same order.',
+          'Template Manager only shows the settings that apply: the logo hex color only for Custom hex, drop shadow and outline details only when they’re on, text settings only when custom text is on, border details only with a border. Settings are grouped under small headings, and fallback rules are a Fallback tab instead of a separate window.',
+          'After a preset’s overlays change (in Template Manager or with Save Preset in the editor), Simposter asks whether to refresh the posters made with that preset. Posters whose overlays were set differently can be included with a separate checkbox.',
+          'Date rules for overlays: show a layer only between two dates each year (e.g. Christmas, Halloween, St Patrick’s Day; quick picks included), or by date added, release date or days since release. Put several seasonal layers in one overlay, each with its own dates. A scheduled Overlay Refresh switches them on and off; the preview’s “Pretend today is” lets you check any season now.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'TVDB_API_KEY and FANART_API_KEY set on the container were ignored unless the key was also saved in Settings.',
+          'Template Manager: on a phone the preset name was squeezed to nothing by its buttons, so a preset couldn’t be opened by tapping its name.',
+          'Template Manager and Batch Edit: the preview panel now stays in view as you scroll down, so pressing ▶ on a preset further down the list shows the preview without scrolling back up.',
+          'Template Manager: a preset’s fallback only asks for a fallback preset (it always uses the same template), and the ✎ button also opens the preset’s settings.',
+          'With “Items that already have a poster” set to resend, a webhook or new-content scan could re-upload an old poster made before your preset’s current settings or overlays (or with a fallback preset). It now renders fresh with the preset when the preset uses overlays, was edited since, or the saved poster was made with a different or fallback preset.'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.30',
+    date: '2026-11-02',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Easier to use on a phone. In the poster editor the preview stays at the top of the screen while you scroll the controls (tap "Smaller" to shrink it), and the Send/Save buttons show their names again.',
+          'Movies, TV Shows, Batch Edit and History keep their sort and filter options behind one button on a phone, so the posters start near the top. History rows show as small cards instead of a wide table.',
+          'Template Manager, Local Assets, Collections, Overlays and Settings no longer run off the side of a phone screen, and use less padding there.'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.29',
+    date: '2026-10-31',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Update notifications: when a newer version is available on your branch, Simposter sends a Discord/Apprise notification with what it includes and how to update. Once per version, checked every 6 hours. Turn it off with "App updates" in Settings \u2192 Notifications.'
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'History shows a poster sent to several servers as one row ("Sent to Plex + Jellyfin") instead of one row per server. The Server filter still shows each server\u2019s sends on their own.'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.28',
     date: '2026-10-31',
     sections: [

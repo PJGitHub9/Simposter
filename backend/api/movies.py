@@ -185,17 +185,9 @@ def _poster_cache_url(rating_key: str, cached: Path) -> str:
 
 
 def _save_poster_cache(rating_key: str, content: bytes, content_type: str) -> Optional[Path]:
-    cache_dir = Path(POSTER_CACHE_DIR)
-    ext = (content_type.split("/")[-1] if "/" in content_type else "jpg").lower()
-    if ext not in ("jpg", "jpeg", "png", "webp"):
-        ext = "jpg"
-    target = cache_dir / f"{rating_key}.{ext}"
-    try:
-        target.write_bytes(content)
-        return target
-    except Exception as e:
-        logger.debug("[CACHE] failed to write poster cache for %s: %s", rating_key, e)
-        return None
+    """Cached for display only, so stored 1000px tall (cache_images.py)."""
+    from ..cache_images import write_display
+    return write_display(Path(POSTER_CACHE_DIR), str(rating_key), content, "poster")
 
 
 def poster_thumbnail(source: Path, max_height: int = 600, quality: int = 82) -> Optional[Path]:
@@ -475,7 +467,17 @@ def test_plex_connection(plex_url: str = None, plex_token: str = None):
     # freshly-typed URL can connect fine once (e.g. during initial setup, if it happened
     # not to have a trailing slash that time) but fail on a later re-test that does.
     test_url = (plex_url or settings.PLEX_URL or "").rstrip("/")
-    test_token = plex_token if (plex_token and plex_token != SECRET_MASK) else settings.PLEX_TOKEN
+    typed_token = plex_token if (plex_token and plex_token != SECRET_MASK) else ""
+    test_token = typed_token
+    if not typed_token:
+        # The saved token is only ever sent to the saved Plex address. This is a
+        # GET, so any web page could otherwise make Simposter send it elsewhere.
+        from ..config import same_origin
+        if test_url and settings.PLEX_TOKEN and not same_origin(test_url, settings.PLEX_URL):
+            return {"status": "error", "error": "Address changed",
+                    "message": "enter the Plex token again to test a different address",
+                    "plex_url": test_url, "has_token": False, "sections": []}
+        test_token = settings.PLEX_TOKEN
 
     if not test_url:
         # A Jellyfin/Emby-only install: nothing to test, not an error.
@@ -697,6 +699,8 @@ def api_movies(force_refresh: bool = False, max_age: int = 900, library_id: str 
         }
         for m in cached
     ]
+    from .. import poster_mode
+    poster_mode.annotate(movies, server_id, library_id, "movie")
 
     # Deduplicate by TMDb ID if requested (keep most recently added)
     if deduplicate:
@@ -1520,15 +1524,6 @@ def api_thumb_art(rating_key: str, thumb: bool = False, force_refresh: bool = Fa
     return resp
 
 
-@router.get("/movies/tmdb")
-def api_movies_tmdb():
-    movies = get_plex_movies()
-    return [
-        {"title": m.title, "year": m.year, "rating_key": m.key, "tmdb_id": None}
-        for m in movies
-    ]
-
-
 @router.post("/movies/labels/bulk")
 def api_movie_labels_bulk(movie_keys: List[str] = Body(...)):
     """Get labels for multiple movies at once."""
@@ -1583,6 +1578,16 @@ def _log_changed_in_plex(changed: Dict[str, List[str]]) -> None:
         parts.append(f"{len(keys)} {noun} ({', '.join(titles)}{more})")
     if parts:
         logger.info("[SCAN] Re-downloaded art changed in Plex: %s", "; ".join(parts))
+
+
+def _evaluate_poster_modes(server_id: str, library_id, media_type: str) -> None:
+    """Re-apply the library group's poster mode rules after its cache refresh.
+    A rule failure must never fail a scan."""
+    try:
+        from .. import poster_mode
+        poster_mode.evaluate_group(poster_mode.group_id_for(server_id, str(library_id), media_type))
+    except Exception as e:
+        logger.warning(f"[SCAN] Poster mode rules failed for library {library_id}: {e}")
 
 
 @router.post("/scan-library")
@@ -1669,6 +1674,7 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
         bulk_labels = {}
         bulk_tmdb_ids = {}
         bulk_thumb_versions = {}
+        bulk_ratings = {}  # rating_key -> (audience, critic) from Plex
         bulk_art_versions = {}
         bulk_file_paths = {}
         # Parallelized (was a fully sequential one-request-at-a-time loop) --
@@ -1700,10 +1706,11 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                 for image in root.findall(".//Image"):
                     if image.get("type") == "clearLogo":
                         art_versions["logo"] = image.get("url")
-                return movie_key, labels_list, extract_tmdb_id_from_metadata(r.text), thumb_version, extract_media_paths_from_metadata(r.text), art_versions
+                from ..server_ratings import from_plex_element
+                return movie_key, labels_list, extract_tmdb_id_from_metadata(r.text), thumb_version, extract_media_paths_from_metadata(r.text), art_versions, from_plex_element(video)
             except Exception as e:
                 logger.debug(f"[SCAN] Failed to fetch labels for {movie_key}: {e}")
-                return movie_key, [], None, None, None, {}
+                return movie_key, [], None, None, None, {}, (None, None)
 
         if movie_keys:
             try:
@@ -1712,7 +1719,8 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                     label_futures = {executor.submit(_fetch_label_for_movie, key): key for key in movie_keys}
                     label_done = 0
                     for future in as_completed(label_futures):
-                        movie_key, labels_list, tmdb_id, thumb_version, file_paths, art_versions = future.result()
+                        movie_key, labels_list, tmdb_id, thumb_version, file_paths, art_versions, ratings = future.result()
+                        bulk_ratings[movie_key] = ratings
                         bulk_art_versions[movie_key] = art_versions
                         bulk_file_paths[movie_key] = file_paths
                         bulk_labels[movie_key] = labels_list
@@ -1897,7 +1905,13 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                 db.set_file_paths({m["rating_key"]: bulk_file_paths.get(m["rating_key"]) for m in cached_movies})
             except Exception as e:
                 logger.debug(f"[SCAN] Failed to store file paths for library {lib_id}: {e}")
+            from .. import server_ratings
+            server_ratings.store("plex-1", "plex", "movie", [
+                (m["rating_key"], bulk_tmdb_ids.get(m["rating_key"]), *bulk_ratings[m["rating_key"]])
+                for m in cached_movies if m["rating_key"] in bulk_ratings
+            ])
             logger.info(f"[SCAN] Cached {len(cached_movies)} movies for library {lib_id} ({len(new_movies)} new)")
+            _evaluate_poster_modes("plex-1", lib_id, "movie")
 
             # Mark every currently-present movie with a known tmdb_id as "still here" --
             # this is what reuseCachedPosterDays' grace period actually measures (see
@@ -2031,6 +2045,7 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
             tmdb_id = None
             tvdb_id = None
             file_paths = None
+            show_ratings = (None, None)
             try:
                 url = f"{settings.PLEX_URL}/library/metadata/{key}"
                 r = plex_session.get(url, headers=plex_headers(), timeout=10)
@@ -2038,6 +2053,8 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                 tmdb_id = extract_tmdb_id_from_metadata(r.text)
                 tvdb_id = extract_tvdb_id_from_metadata(r.text)
                 file_paths = extract_media_paths_from_metadata(r.text)
+                from ..server_ratings import from_plex_xml
+                show_ratings = from_plex_xml(r.text)
             except Exception as e:
                 logger.debug(f"[SCAN] Failed to fetch tmdb/tvdb id for TV show {key}: {e}")
 
@@ -2065,6 +2082,7 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                 "library_id": lib_id,
                 "file_paths": file_paths,
                 "episode_media": episode_media,
+                "ratings": show_ratings,
             }
 
         if tv_shows:
@@ -2088,10 +2106,15 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
 
             # Refresh cache
             cache.refresh_tv_from_list(cached_shows)
+            _evaluate_poster_modes("plex-1", lib_id, "tv")
             try:
                 db.set_file_paths({s["rating_key"]: s.get("file_paths") for s in cached_shows}, is_tv=True)
             except Exception as e:
                 logger.debug(f"[SCAN] Failed to store file paths for TV library {lib_id}: {e}")
+            from .. import server_ratings
+            server_ratings.store("plex-1", "plex", "tv", [
+                (s["rating_key"], s.get("tmdb_id"), *(s.get("ratings") or (None, None))) for s in cached_shows
+            ])
             for s in cached_shows:
                 em = s.get("episode_media")
                 if not em:

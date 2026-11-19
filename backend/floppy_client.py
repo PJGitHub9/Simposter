@@ -74,7 +74,7 @@ def owns(key: str) -> bool:
 
 def missing_setup(key: str) -> Optional[str]:
     if not _base() or not _token():
-        return "Floppy isn't set up (server address and app token in Settings > General)"
+        return "Floppy isn't set up (server address and app token in Settings > Ratings & Lists)"
     return None
 
 

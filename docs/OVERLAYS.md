@@ -11,10 +11,12 @@ This guide covers building overlays, the rules that decide which posters get whi
 - [Text with values](#text-with-values)
 - [Badge sets and hide rules](#badge-sets-and-hide-rules)
 - [Importing Kometa overlays](#importing-kometa-overlays)
+- [Ratings](#ratings)
 - [MDBList ratings and lists](#mdblist-ratings-and-lists)
 - [Lists from WeTrakr, SIMKL and Floppy](#lists-from-wetrakr-simkl-and-floppy)
 - [Scheduler](#scheduler)
 - [Overlay Refresh](#overlay-refresh)
+- [Posters from another app](#posters-from-another-app)
 - [Live Kometa files](#live-kometa-files)
 - [Sharing overlays](#sharing-overlays)
 - [Reading the overlay log](#reading-the-overlay-log)
@@ -27,7 +29,7 @@ This guide covers building overlays, the rules that decide which posters get whi
 **Show information about the item**
 - Quality badges: resolution (4K, 1080p…), HDR/Dolby Vision (from the file name), video codec, audio codec, channels and language, with a different image or text per value.
 - Edition (Director's Cut, Extended, IMAX…), studio or TV network logo, and where the title streams.
-- Ratings from IMDb, Rotten Tomatoes, Metacritic, TMDb, Trakt, Letterboxd, MyAnimeList and the MDBList score, as a number on the poster or as a rule (e.g. a frame only above 8.5). Needs an MDBList key.
+- Audience and critic ratings, as a number on the poster or as a rule (e.g. a frame only above 8.5). They come from your media server (Plex's audience/critic rating, Jellyfin/Emby's community/critic rating) with no extra setup, or from MDBList (IMDb, Rotten Tomatoes, Metacritic, TMDb, Trakt, Letterboxd, MyAnimeList) with an MDBList key.
 - Any text, with values filled in per item: `{title}`, `{year}`, `{audience_rating}`, `{resolution}`…
 
 **Decide which posters get which layers**
@@ -55,6 +57,8 @@ Works with Plex, Jellyfin and Emby. Labels and editions come from Plex only; see
 
 ## How overlays fit in
 
+![Overlays page](images/overlays.png)
+
 - An **overlay** is a named set of **layers**. You build overlays in **📐 Overlays** (sidebar).
 - An overlay does nothing until it's turned on in a **preset** (Template Manager) or in the poster editor (**Extras → Overlays**). A preset can use several overlays.
 - Each overlay sits **above** the logo and text by default; tick **Place below logo & text** next to it in the editor's Extras → Overlays to draw it underneath.
@@ -68,6 +72,8 @@ Simposter renders the poster from the original artwork with the overlay baked in
 ## Building an overlay
 
 Open **📐 Overlays** and create an overlay. The editor has a preview on the right and three tabs on the left:
+
+![The overlay editor](images/overlay-editor.png)
 
 1. **Layers**: the layers, top of the list = drawn on top. Drag on the preview to move a layer; use the ↑ ↓ buttons to change its order.
 2. **Badge sets**: groups of layers where only one is shown (see [below](#badge-sets-and-hide-rules)).
@@ -124,23 +130,32 @@ Every layer, and every overlay as a whole, can have rules. All of a layer's rule
 | **Video** | Resolution (4K / 1080p / 720p / SD), video codec |
 | **Audio** | Audio codec, audio channels, audio language |
 | **File** | File path / name (pattern match on the file name, e.g. TRaSH naming, CAM/TS, `{edition-…}` tags), edition (Plex only) |
-| **Ratings** | Audience rating (0–10), critic rating (0–10), MDBList score, IMDb, Rotten Tomatoes (critics and audience), Metacritic, TMDb, Trakt, Letterboxd. All need an [MDBList key](#mdblist-ratings-and-lists). |
+| **Ratings** | Audience rating (0–10) and critic rating (0–10), from your media server or MDBList ([Ratings](#ratings)). MDBList score, IMDb, Rotten Tomatoes (critics and audience), Metacritic, TMDb, Trakt, Letterboxd need an [MDBList key](#mdblist-ratings-and-lists). |
 | **Lists** | On a list from MDBList, WeTrakr, SIMKL or Floppy (see [Lists from other services](#lists-from-wetrakr-simkl-and-floppy)) |
-| **Item** | Label (Plex only), movie or show, year, days since added, show status (TV), TMDb ID, TVDB ID, title, studio, streaming platform |
+| **Dates** | Today's date, date added, days since added, release date, days since release |
+| **Item** | Label (Plex only), movie or show, year, show status (TV), TMDb ID, TVDB ID, title, studio, streaming platform, content rating, network (TV), streaming service |
 
 Operators depend on the field:
 
 - **Text and choice fields**: is, is not, is any of, is none of, contains, matches pattern, is set, is empty.
 - **Numbers**: is at least, is above, is at most, is below, is exactly, is known, is unknown.
 - **Lists**: is on, is on any of, is not on.
+- **Dates**: is between, is not between, is after, is before, is on or after, is on or before. Today's date only has "is between" / "is not between".
 
 Notes on some fields:
 
-- **Days since added** counts from the date your last library scan recorded. Use "is at most 7" for a "NEW" badge.
+- **Today's date** is for seasonal overlays. Tick **Every year** to pick a month and day for each end (or use **Quick pick** for Christmas, Halloween, St Patrick's Day and others); the range may cross New Year, e.g. Dec 27 to Jan 2. It uses the server's time zone. A poster only changes when it's rendered, so turn on a scheduled [Overlay Refresh](#overlay-refresh) for the library to put seasonal layers on and take them off. In the preview, **Pretend today is** lets you check a season any time of year.
+- **A seasonal overlay**: make one overlay with a layer per season (Christmas, Halloween, ...), each with its own Today's date rule, plus any other rule such as being on a list.
+- **Days since added** and **Date added** come from the date your last library scan recorded. Use "is at most 7" for a "NEW" badge.
+- **Release date** and **Days since release** come from TMDb (movie release date, or a show's first air date), stored for 30 days. Days since release is below 0 before release.
 - **Show status** is continuing, ended, canceled or upcoming, from TMDb. TV shows only.
+- **Content rating** is the certification in a country, from TMDb (PG-13 or R in the US, 12A or 15 in GB, TV-MA for US shows). Set the country under the rule (US by default). Plex's spelling with a country prefix (`gb/12A`) matches too.
+- **Network** is a TV show's network from TMDb (HBO, Netflix, AMC; a show can have several).
+- **Streaming service** is a subscription service the title is on in a country, from TMDb's watch providers (rent/buy doesn't count). Use the service's name or TMDb's provider id (Netflix is 8); set the country under the rule.
+- Content rating and network are stored for 30 days and streaming services for 7, so renders don't ask TMDb each time.
 - **TMDb ID / TVDB ID** with "is any of" takes a list of IDs. This is how tools like UMTK and TSSK pick items.
 - **Label** and **edition** come from Plex only. On Jellyfin/Emby, match the file name instead (most edition tags are in the file name).
-- Rating fields only appear once an MDBList key is set in Settings → General; "On a list" appears once any list service is set up there.
+- Audience and critic rating are always listed; the other rating fields only appear once an MDBList key is set in Settings → Ratings & Lists; "On a list" appears once any list service is set up there.
 - A rule that can't be checked (missing data) doesn't match, so the layer stays off.
 - **TV shows and seasons**: a show or season has no file of its own, so resolution, codec and audio come from its best episode (highest resolution, then most audio channels). A show with one 4K episode counts as 4K, matching Kometa; each season uses its own episodes. These values are read during a TV scan (one extra request per show), so scan once after updating. On Plex, audio language isn't available this way. File-name rules on a show check the show's folder.
 
@@ -155,9 +170,24 @@ A **Text** layer can include values that are filled in per item. Use **+ Insert 
 | Item | `{title}`, `{year}`, `{edition}` (Plex only), `{studio}` |
 | Video | `{resolution}`, `{video_codec}` |
 | Audio | `{audio_codec}`, `{audio_channels}`, `{audio_language}` |
-| Ratings (MDBList) | `{audience_rating}`, `{critic_rating}`, `{mdb_rating}`, `{mdb_imdb_rating}`, `{mdb_tomatoes_rating}`, `{mdb_tomatoesaudience_rating}`, `{mdb_metacritic_rating}`, `{mdb_metacriticuser_rating}`, `{mdb_tmdb_rating}`, `{mdb_trakt_rating}`, `{mdb_letterboxd_rating}`, `{mdb_myanimelist_rating}`, `{mdb_average_rating}` |
+| Dates | `{countdown}` ([Countdowns](#countdowns)) |
+| Maintainerr | `{leaving}`, `{leaving_date}`, `{leaving_day}`, `{leaving_days}` ([Maintainerr leaving dates](#maintainerr-leaving-dates)) |
+| Ratings | `{audience_rating}`, `{critic_rating}` (media server or MDBList); with MDBList also `{mdb_rating}`, `{mdb_imdb_rating}`, `{mdb_tomatoes_rating}`, `{mdb_tomatoesaudience_rating}`, `{mdb_metacritic_rating}`, `{mdb_metacriticuser_rating}`, `{mdb_tmdb_rating}`, `{mdb_trakt_rating}`, `{mdb_letterboxd_rating}`, `{mdb_myanimelist_rating}`, `{mdb_average_rating}` |
 
 If a value is missing for an item (no rating yet, no MDBList key), the layer isn't drawn at all rather than showing an empty or literal `{…}` text.
+
+Ratings can be formatted the way Kometa does by adding a character before the closing brace: `{critic_rating%}` is the rating × 10 as a whole number (7.6 → 76, so `{critic_rating%}%` shows "76%"), `{critic_rating#}` drops a trailing `.0` (9.0 → 9), and `{critic_rating/}` halves it (7.6 → 3.8, for 5-star scales).
+
+### Countdowns
+
+`{countdown}` is the number of days left until a date you pick on the layer itself. Once the text uses it, a **Countdown to** setting appears under the Text box: either a date every year (`Dec 25`) or a fixed date (`2026-12-25`).
+
+- On the day it shows `0`.
+- An every-year date starts again after it passes (the day after Dec 25 shows `364`).
+- A fixed date that has passed has no value, so the layer isn't drawn.
+- A layer using `{countdown}` without a date is never drawn; the layer shows a warning.
+
+Example: a text layer `{countdown} days to Christmas`, Countdown to Dec 25, with "Show when: Today is between Dec 1 and Dec 25". The number on a poster only changes when the poster is made again, so give the library groups using it a daily [Overlay Refresh](#overlay-refresh). In the preview, **Pretend today is** shows the countdown for any day.
 
 ---
 
@@ -170,13 +200,27 @@ Rename a layer with the pencil icon or by double-clicking its name. Hide rules f
 
 ---
 
+## Starter overlays
+
+**📐 Overlays → Starter overlays** lists ready-made overlays you can add with one click. The list comes from the [simposter-assets](https://github.com/PJGitHub9/simposter-assets/tree/main/starter_overlays) repository, so new ones appear without updating Simposter (**Check for new** looks again right away):
+
+- **MediaInfo - jmxd**: resolution, HDR/Dolby Vision, audio codec and edition badges (needs TRaSH-style file names).
+- **Audience Rating - jmxd**: a green/yellow/red audience score badge, using your media server's audience rating (or MDBList, see [Ratings](#ratings)).
+- **Maintainerr - Leaving Soon**: a red border and "Leaving &lt;day&gt;" text on titles a Maintainerr collection will remove (needs [Maintainerr](#maintainerr-leaving-dates)).
+
+![Starter overlays](images/starter-overlays.png)
+
+The first two were made by [jmxd](https://github.com/jmxd/Kometa); the Leaving Soon border image is by [netplexflix](https://github.com/netplexflix/Overlays). Adding one downloads its images (and any font it uses) from the creator's repository into **Your images**; none of their files are bundled with Simposter. After adding, tick it in a preset to use it, as with any overlay. **Replace** (on one you've already added) overwrites it with the version that ships with Simposter, including any updates since you added it; your own changes to it are lost, and presets using it stay linked.
+
 ## Importing Kometa overlays
 
 **📐 Overlays → Import Kometa** turns Kometa overlay files into Simposter overlays (one overlay per file).
 
+![Import Kometa](images/kometa-import.png)
+
 > **Beta.** Kometa import and live Kometa files work, but Kometa files vary a lot and some may still import slightly differently than Kometa draws them. Please report anything that looks off.
 
-1. Add the overlay `.yml` files, or **Paste YAML** to paste one in. Add the images and fonts they use alongside: loose files, a folder, or a zip.
+1. Add the overlay `.yml` files, or **Paste YAML** to paste one in. You can also paste the `overlay_files` entries from your Kometa `config.yml`, such as `- default: ratings` with its `template_variables`: Simposter downloads Kometa's built-in file (`defaults/overlays/ratings.yml` from Kometa's GitHub, kept for a week) and expands it with your variables, all entries into one overlay. A `- file:` entry uses the uploaded file with that name. Copying the lines straight out of `config.yml` is fine, even when the first line lost its indent. Add the images and fonts they use alongside: loose files, a folder, or a zip.
 2. Pick the library type the files are for: **Movies**, **TV Shows**, or **Movies and TV Shows** (one overlay for both kinds of library, like a Kometa file both libraries use; layers that only apply to one kind, or look different, get a movie/show rule so they only show there). Also add the images the files use, unless they're already in Your images from an earlier import: an image with the same file name is reused.
 3. **Check** shows a report per file and per overlay: what imported, what was skipped and why, and which images weren't found.
 4. **Import** saves the overlays. Re-importing a file updates the same overlay instead of creating a copy.
@@ -187,11 +231,12 @@ Then turn the overlays on in a preset (or the editor's Extras → Overlays).
 
 - Kometa's own templates, including `default: templates`, variables, defaults, conditionals and optional values. Simposter expands them the way Kometa does.
 - Images from files, links (`url:`, `git:`) and Kometa's defaults (`default:`/`pmm:`). Linked images are downloaded into **Your images**.
-- Positions (`horizontal_align`/`vertical_align` and offsets), background boxes (`back_color`, size, radius, padding, border), text with `text(…)` and variables, fonts, outlines.
+- Positions (`horizontal_align`/`vertical_align` and offsets), background boxes (`back_color`, size, radius, padding, border), text with `text(…)` and variables (including the `%`, `#` and `/` rating formats), fonts, outlines.
 - `group`/`weight` (as badge sets) and `suppress_overlays` (as hide rules).
 - `queues` (layers fill a list of positions, highest weight first), `blur`, images next to text (addon images) and `font_style` for variable fonts.
 - Filters: resolution, codecs, channels, language, file path, edition, labels, year, title, studio, ratings, `added`, `tvdb_status`/`tmdb_status`, and the usual modifiers (`.not`, `.regex`, `.gte`, `.lte`, …). Comma-separated values (`label.not: Coming Soon, RequestNeeded`) are split, as in Kometa.
-- Builders: `tmdb_movie`, `tmdb_show` and `tvdb_show` ID lists, and `mdblist_list`.
+- Builders: `tmdb_movie`, `tmdb_show` and `tvdb_show` ID lists, `mdblist_list`, and `tmdb_discover` with `with_watch_providers` (as a streaming-service rule in its `watch_region`).
+- `content_rating` and `network` filters and searches. Kometa's built-in content rating files (`content_rating_us_movie`, `_us_show`, `_uk`, `_au`, `_de`, `_nz`, `commonsense`) check their own country.
 
 ### What doesn't
 
@@ -214,11 +259,27 @@ Overlay files from [UMTK](https://github.com/netplexflix/Upcoming-Movies-TV-Show
 
 ---
 
+## Ratings
+
+`audience_rating` and `critic_rating` (0–10) work without any extra service. Pick where they come from in **Settings → Ratings & Lists → Audience rating comes from / Critic rating comes from**:
+
+![Settings → Ratings & Lists](images/settings-ratings.png)
+
+- **Your media server** (the default): the first enabled server in Settings → Media Servers, in the order they're listed, that has a rating for the item. With only Plex or only Jellyfin, that's simply your server. If no server has an audience rating for the item, TMDb's user score is used.
+- **Plex**: the audience and critic rating Plex shows for the item. Which site those come from (Rotten Tomatoes, IMDb, TMDb) is set per library in Plex (Edit library → Advanced → Ratings source). This is what Kometa's `audience_rating` uses.
+- **Jellyfin / Emby**: the community rating (0–10) and critic rating (0–100, shown as 0–10).
+- **TMDb**: TMDb's user score (0–10), using the TMDb key you already have. Audience rating only; TMDb has no critic score.
+- **An MDBList source** (IMDb, Rotten Tomatoes, ...): needs an MDBList key (below). Without a key, the media server's rating is used instead, then TMDb.
+
+**No media server** ([Poster API](POSTER_API.md) / server-less installs): the audience rating comes from TMDb, so rating overlays work with no extra key. A critic rating needs an MDBList source and key. Video, audio and edition badges need a media server (they come from the file details a library scan reads), so they never draw; studio and streaming badges come from TMDb and do.
+
+Media server ratings are read during library scans, so scan the library once after updating. A rating found on one server applies to the same movie or show on your other servers (matched by TMDb ID). The render log says where each rating came from ("Audience rating 8.6 (from Plex)").
+
 ## MDBList ratings and lists
 
-[MDBList](https://mdblist.com) provides ratings from many sources and user-made lists. Add a free API key in **Settings → General → MDBList** (get one at mdblist.com/preferences, API section; the free tier has a daily request limit). Then:
+[MDBList](https://mdblist.com) provides ratings from many sources and user-made lists. Add a free API key in **Settings → Ratings & Lists → MDBList** (get one at mdblist.com/preferences, API section; the free tier has a daily request limit). Then:
 
-- **Audience rating comes from** / **Critic rating comes from**: which source fills `audience_rating` and `critic_rating` (IMDb, Rotten Tomatoes critics or audience, TMDb, Trakt, Metacritic, Letterboxd, MyAnimeList, or the MDBList score). Both are scaled to 0–10.
+- **Audience rating comes from** / **Critic rating comes from**: besides Plex and Jellyfin/Emby ([Ratings](#ratings)), an MDBList source (IMDb, Rotten Tomatoes critics or audience, Trakt, Metacritic, Letterboxd, MyAnimeList, or the MDBList score). All are scaled to 0–10. (TMDb is its own source and doesn't need MDBList; `{mdb_tmdb_rating}` is still available as text.)
 
 Simposter only contacts MDBList when an overlay actually uses a rating or list, and remembers the results; how often they are fetched again is set in [Scheduler](#scheduler). If MDBList is unreachable, the render still happens; layers that needed the missing value are left off.
 
@@ -226,13 +287,32 @@ For a list rule, choose **On a list** and paste the list's URL (`https://mdblist
 
 ### Lists from WeTrakr, SIMKL and Floppy
 
-"On a list" also works with these services. Set them up in **Settings → General**:
+"On a list" also works with these services. Set them up in **Settings → Ratings & Lists**:
 
 - **WeTrakr**: the **Client ID** of an app you create at wetrakr.com → Settings → API (not the client secret; the redirect URL isn't used). Public lists work with just the Client ID. To use your own private lists and your tracking lists (Watchlist, Watching, Watched, On hold, Dropped), click **Connect account**: Simposter shows a code to enter at wetrakr.com/activate.
 - **SIMKL**: a client ID from an app registered at simkl.com/settings/developer as **TV, devices & command line**, then **Connect account** (approve the code on simkl.com). Every SIMKL list needs the connection. Plan to Watch, Watching, Completed, On Hold and Dropped work on a free account; custom lists need SIMKL PRO or VIP.
 - **Floppy**: your server's address (e.g. `http://192.168.1.10:8000`) and an app token from Floppy's Settings → Integrations → App tokens, with the `lists:read` scope.
 
 In the rule, the dropdown lists your own lists from every connected service, grouped by service. To use someone else's public list, choose **Paste a list link…** and paste its link. Lists are matched by TMDb ID and re-fetched as often as [Scheduler](#scheduler) says; until then the stored copy is used, so a render never waits on a list service. If a service can't be reached, layers that need its list stay off and the overlay log says why.
+
+### Maintainerr leaving dates
+
+[Maintainerr](https://github.com/Maintainerr/Maintainerr) removes items after they've been in one of its collections for a set number of days. Simposter can show that date on the poster. Add Maintainerr's address (e.g. `http://192.168.1.10:6246`) in **Settings → Ratings & Lists → Maintainerr** and click **Test** (needs Maintainerr 3.20 or newer; the API key is optional, only for a proxy that asks for one). Turn off Maintainerr's own overlays for these items, or the two will keep replacing each other's posters.
+
+Text values (Insert value → Maintainerr):
+
+| Value | Example |
+|-------|---------|
+| `{leaving}` | `today`, `tomorrow`, a weekday within the next 6 days (`Wednesday`), else `Nov 12` |
+| `{leaving_date}` | `Nov 12` |
+| `{leaving_day}` | `Wednesday` |
+| `{leaving_days}` | `6` |
+
+Write the sentence yourself: `Leaving {leaving}`. Show when fields: **Removal date** (date rules), **Days until removal** (`is at most 7`, or `is set` = in any Maintainerr collection) and **Maintainerr collection** (its name).
+
+Example: a red box layer with "Show when: Days until removal is set", and a text layer `Leaving {leaving}`. Items not in a Maintainerr collection get neither.
+
+Every active Maintainerr collection counts, whatever its action, including ones that only unmonitor, change the quality profile or do nothing (a "do nothing" collection with no day count makes its items due today). To show only real removals, add a **Maintainerr collection** rule naming the collections that delete. An item in several collections uses the earliest date, as Maintainerr does. The Plex and Jellyfin copies of a title get the same date. A season in a season collection gets its own date; any other season gets its show's. Simposter fetches Maintainerr's collections at most once an hour while rendering, and always just before an Overlay Refresh run. Because `{leaving}` changes from day to day, give the library group a daily [Overlay Refresh](#overlay-refresh) (e.g. `5 0 * * *`); the page shows a hint when it doesn't run daily. Postponing an item in Maintainerr moves its date, and the next refresh updates the poster.
 
 ---
 
@@ -251,7 +331,9 @@ The section also lists every library group's **Overlay Refresh** schedule (below
 
 ## Overlay Refresh
 
-A poster's overlay can change after it's been sent: a better rating, a new list membership, a 4K upgrade, an edited overlay. **Overlay Refresh** (🔁, in each library's sidebar menu) finds posters whose overlay would now come out differently and re-renders them.
+A poster's overlay can change after it's been sent: a better rating, a new list membership, a 4K upgrade, an edited overlay. **Overlay Refresh** (each library's **Tools** page in the sidebar) finds posters whose overlay would now come out differently and re-renders them.
+
+![Overlay Refresh](images/overlay-refresh.png)
 
 - **Check for changes** lists the posters that would change, with the reason: what changed in the item's data, then the layers, e.g. "now on list Trending: added Trending frame" or "Audience rating 8.4 → 8.7: added High score". Only data that crossed one of the overlay's rules is named, so a rating moving from 8.4 to 8.5 without crossing a threshold isn't a change. It doesn't send anything.
 - **Refresh changed posters** re-renders and sends those posters. **Re-send all** re-sends every tracked poster.
@@ -264,8 +346,38 @@ How it works and its limits:
 
 - Only posters sent by Simposter since this feature existed are tracked. A poster is re-rendered from the artwork it was originally rendered from, not from what's on the server now.
 - A poster keeps the overlays it was sent with. Turning an overlay on or off in a preset reaches already-sent posters the next time they're sent (use Re-send in Tracked posters).
-- New data (resolution, file name, date added) arrives with library scans; ratings and lists arrive from MDBList.
+- New data (resolution, file name, date added, media server ratings) arrives with library scans; MDBList ratings and lists arrive from MDBList.
 - Runs are logged and send a summary notification (toggle "Overlay Refresh" in Settings → Notifications). A poster sent to several servers is listed once, with the servers.
+
+---
+
+## Posters from another app
+
+Some people let another app (Aura, or any tool that uploads posters) choose the poster for some titles, but still want Simposter's overlays on them. Each title can have a **poster mode**, set per library group (the same title in two groups can have two modes; every server in a group shares it):
+
+| Mode | What Simposter does |
+|---|---|
+| **Full** | The default. Simposter renders the whole poster (art, logo, text, effects, overlays) and sends it. |
+| **Overlay only** | Simposter never replaces the poster. It draws only the preset's overlays on the poster the other app chose and sends that. No logo, text, matte, fade, vignette, grain or border. |
+| **Leave alone** | Simposter doesn't touch the poster at all: webhooks, auto-generate, retries, Overlay Refresh, Batch Edit (unless you tick "Include Leave alone titles") and Media Mirror (posters) all skip it. |
+
+Set a mode in **Batch Edit** (select titles, then **Set mode**) or per title in the editor (the mode line near Send). Movies and TV Shows show an icon on titles that aren't Full, and have a **Poster mode** filter. A title with no TMDb or TVDB id can't have a mode (it is always Full). Series and season posters follow the show's mode.
+
+**Rules**: under each library group in **Settings → Libraries**, add rules that set the mode from a Plex label or a Radarr/Sonarr tag (e.g. label `Aura` means Overlay only, label `Custom` means Leave alone). If several rules match, Leave alone wins. A mode set by hand always beats a rule; "Follow rules" removes it. Jellyfin/Emby tags are planned. The old per-library "webhook ignore labels" became Leave alone rules on upgrade.
+
+**Radarr/Sonarr tags**: Jellyfin and Emby have no labels, so for those libraries use a tag in Radarr or Sonarr (Aura can add one). Connect Radarr/Sonarr in **Settings → Media Servers**, pick it on the library group ("Radarr for this group" on a movie group, "Sonarr for this group" on a TV group), then add a rule with the source set to Radarr tag or Sonarr tag. The mode applies to every server in the group. Simposter only reads tags; it never changes anything in Radarr or Sonarr.
+
+- Tags are read after each library scan, when you save a group's rules, and when a webhook or a newly scanned title needs its mode (at most once a minute there).
+- Movies are matched by TMDb id, shows by TVDB id (or TMDb id).
+- If Radarr or Sonarr can't be reached, the modes its tags set earlier stay as they are until it can be read again. The log has a warning.
+
+**When a rule stops matching**: a title that was Overlay only or Leave alone because of a label or tag, and loses it, goes back to Full. Its card shows an amber warning icon and the editor shows the reason, because Simposter may now replace its poster with a full one. The Poster mode filter has "Lost its rule" to list them. The warning goes away when the label or tag comes back, you set a mode by hand, you click Dismiss in the editor, or Simposter sends a full poster for the title.
+
+**The clean copy**: to draw overlays without stacking them, Simposter keeps the other app's poster, without overlays, in `config/cache/clean_base/` (one per server and title, at full size). Every overlay-only render starts from that copy, so a refresh never draws overlays on a poster that already has them. The clean copy is taken from the server's poster when Simposter sees it is not one Simposter itself sent (a poster Simposter sent is never used as the clean copy). If the title's current poster is Simposter's own and no clean copy exists, Simposter uses the art that poster was originally rendered from; with neither, the title waits for the other app's poster. Each server in a group gets its own clean copy, since the other app may only have changed one of them. Cleanup has a "Clean base posters" category for copies of titles that left the library.
+
+**When the other app changes a poster**: a library scan notices the change (the poster no longer matches what Simposter sent), stores it as the new clean copy and sends the overlays again. For a title Simposter never sent, a later change by the other app is only noticed after Simposter has applied overlays to it once. The change is not listed under Changed Outside Simposter for an Overlay only title.
+
+Overlay Refresh keeps overlay-only posters up to date from the clean copy. If a preset has no overlays, an Overlay only title is left as it is.
 
 ---
 

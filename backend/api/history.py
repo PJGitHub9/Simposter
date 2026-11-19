@@ -8,7 +8,6 @@ import time
 
 from .. import database as db
 from ..config import settings, logger
-from ..scheduler import schedule_poster_retry, cancel_poster_retry
 
 router = APIRouter()
 
@@ -125,12 +124,6 @@ def api_get_retry_queue(include_resolved: bool = Query(default=False)):
     return {"items": items, "pending_count": count}
 
 
-@router.get("/retry-queue/count")
-def api_get_retry_queue_count():
-    """Return just the pending retry count (for badge indicators)."""
-    return {"pending_count": db.get_retry_queue_count()}
-
-
 @router.delete("/retry-queue/{rating_key}")
 def api_remove_retry_item(rating_key: str):
     """Manually remove an item from the retry queue (dismiss)."""
@@ -182,6 +175,14 @@ def api_retry_now(rating_key: str):
     send_logos = bool(ui.get("plex", {}).get("sendLogosToPlex", False))
     media_type = item.get("media_type", "movie")
     title = item.get("title", rating_key)
+
+    from .. import poster_mode
+    mode = poster_mode.gate(db.get_server_id_for_rating_key(rating_key) or "plex-1", rating_key,
+                            item.get("library_id") or None, media_type == "tv")
+    if mode != "full":
+        db.remove_from_retry_queue(rating_key)
+        logger.info("[RETRY] Removed %s from the retry queue (poster mode: %s)", title, mode)
+        return {"status": "skipped", "reason": f"poster mode: {mode}", "resolved": True}
 
     db.update_retry_attempt(rating_key)
     _retry_start = time.time()
@@ -239,17 +240,6 @@ def api_retry_now(rating_key: str):
     except Exception as e:
         logger.warning("[RETRY] Manual retry-now for %s [%s] failed after %.1fs: %s", rating_key, title, time.time() - _retry_start, e)
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/retry-queue/apply-settings")
-def api_apply_retry_settings(enabled: bool = Query(...), interval_hours: float = Query(default=24.0)):
-    """Apply retry scheduler settings (called when user saves settings)."""
-    if enabled:
-        schedule_poster_retry(interval_hours)
-    else:
-        cancel_poster_retry()
-    return {"status": "ok"}
-
 
 
 # ============================================================================
@@ -341,6 +331,18 @@ def api_poster_drift_resend(server_id: str, rating_key: str, asset: str = "poste
     """Put Simposter's last poster/logo/backdrop back on the server."""
     from .. import poster_drift
     asset = _drift_asset(asset)
+    if asset == "poster":
+        mode, season_index = poster_drift.poster_mode_for(server_id, rating_key)
+        if mode == "leave_alone":
+            raise HTTPException(409, "This title is set to Leave alone, so Simposter doesn't put its poster back.")
+        if mode == "overlay_only":
+            # Overlay-only: the server's poster is the other app's; keep it as
+            # the clean copy and draw the overlays on it again.
+            from .. import overlay_only
+            res = overlay_only.on_external_poster(server_id, rating_key, season_index)
+            if res.get("status") != "ok":
+                raise HTTPException(502, f"Couldn't put the overlays back: {res.get('reason') or 'see the log'}")
+            return {"status": "ok"}
     if not poster_drift.resend(server_id, rating_key, asset):
         raise HTTPException(502, f"Couldn't re-send: no saved {asset} for this item, or the upload failed (see the log).")
     return {"status": "ok"}

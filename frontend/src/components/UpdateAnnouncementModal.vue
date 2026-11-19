@@ -39,10 +39,12 @@ onMounted(() => {
     // Every milestone crossed, newest first, so someone coming from main sees
     // both Jellyfin/Emby and the overlay overhaul, while someone coming from
     // webui-overhaul-dev (already past v1.7.0) sees only the overlays. Capped at
-    // two so a very old install doesn't get a wall of tours.
+    // three (main at v1.8.28 crosses v1.8.29, v1.8.50 and v1.8.84) so a very old
+    // install doesn't get a wall of tours. The newest three are kept, then shown
+    // oldest first so the pages read in the order the features arrived.
     const crossed = [...majorReleases].reverse().filter(
       (m) => compareVersions(APP_VERSION, m.version) >= 0 && compareVersions(lastSeen, m.version) < 0
-    ).slice(0, 2)
+    ).slice(0, 3).reverse()
     if (crossed.length) {
       activeMajorReleases.value = crossed
       visible.value = true
@@ -88,7 +90,7 @@ function viewFullChangelog() {
         <div class="announcement-header major-header">
           <div>
             <span class="major-eyebrow">{{ activeMajorReleases.length > 1 ? 'Major Updates' : 'Major Update' }}</span>
-            <h2>{{ activeMajorReleases.map(m => m.title).join(' + ') }}</h2>
+            <h2>{{ activeMajorReleases.length > 2 ? 'What’s new since your last update' : activeMajorReleases.map(m => m.title).join(' + ') }}</h2>
           </div>
           <button class="close-btn" @click="dismiss">&times;</button>
         </div>

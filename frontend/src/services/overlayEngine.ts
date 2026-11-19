@@ -6,7 +6,16 @@ export interface OverlayCondition {
   field: string
   op: string
   value?: string | number | string[]
+  /** Country for content_rating / streaming (two letters, US by default). */
+  region?: string
 }
+
+// Fields whose value depends on a country (see backend/overlay_engine.py):
+// the context holds one list per country as "<field>@<REGION>".
+export const REGIONAL_FIELDS = ['content_rating', 'streaming']
+export const conditionRegion = (cond: { region?: string }): string =>
+  (String(cond.region || '').replace(/[^A-Za-z]/g, '').toUpperCase().slice(0, 2)) || 'US'
+export const regionalKey = (field: string, region: string): string => `${field}@${(region || 'US').toUpperCase()}`
 
 export interface OverlayRuleFields {
   name?: string
@@ -35,8 +44,10 @@ export interface OverlayRuleFields {
   box_only?: boolean
   type?: string
   font_style?: string
+  countdown_to?: string | null
   addon_position?: string
   addon_offset?: number
+  addon_align?: string
   addon_scale?: number
   blur_amount?: number
   queue?: string
@@ -169,9 +180,88 @@ export const normalizeResolution = (value: unknown): string | null => {
   return RESOLUTION_ALIASES[key] ?? (key || null)
 }
 
+// --- Dates (a port of overlay_engine.py's date helpers; keep them identical) ---
+
+const pad2 = (n: number) => String(n).padStart(2, '0')
+
+/** Today as YYYY-MM-DD in this browser's time zone. */
+export const localToday = (): string => {
+  const d = new Date()
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
+}
+
+/** A YYYY-MM-DD date (anything after the first 10 characters is ignored), as UTC midnight. */
+export const parseDate = (value: unknown): Date | null => {
+  const m = String(value ?? '').trim().slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!m) return null
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])]
+  const date = new Date(Date.UTC(y, mo - 1, d))
+  return date.getUTCMonth() === mo - 1 && date.getUTCDate() === d ? date : null
+}
+
+const LEAVING_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const LEAVING_DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+
+/** Maintainerr leaving values for a removal date (both as parseDate() UTC midnights).
+ *  Keep identical to backend/maintainerr_data.py format_leaving(). */
+export const formatLeaving = (removal: Date, today: Date): Record<string, string | number> => {
+  const days = Math.max(0, Math.round((removal.getTime() - today.getTime()) / 86400000))
+  const short = `${LEAVING_MONTHS[removal.getUTCMonth()]} ${removal.getUTCDate()}`
+  const weekday = LEAVING_DAYS[removal.getUTCDay()] as string
+  const leaving = days === 0 ? 'today' : days === 1 ? 'tomorrow' : days <= 6 ? weekday : short
+  const iso = `${removal.getUTCFullYear()}-${pad2(removal.getUTCMonth() + 1)}-${pad2(removal.getUTCDate())}`
+  return { removal_date: iso, days_until_removal: days, leaving, leaving_date: short, leaving_day: weekday, leaving_days: String(days) }
+}
+
+/** A yearly date, MM-DD (e.g. 12-25), as [month, day]. */
+const monthDay = (value: unknown): [number, number] | null => {
+  const m = String(value ?? '').match(/^\s*(\d{1,2})-(\d{1,2})\s*$/)
+  if (!m) return null
+  const month = Number(m[1]); const day = Number(m[2])
+  return month >= 1 && month <= 12 && day >= 1 && day <= 31 ? [month, day] : null
+}
+
+const rangeBounds = (target: unknown): [string, string] | null => {
+  const parts = (Array.isArray(target) ? target.map(t => String(t).trim()) : String(target ?? '').split(/\.\.|~/).map(p => p.trim()))
+    .filter(Boolean)
+  return parts.length === 2 ? [parts[0] as string, parts[1] as string] : null
+}
+
+const mdLess = (a: [number, number], b: [number, number]) => a[0] < b[0] || (a[0] === b[0] && a[1] < b[1])
+
+/** Is the date `value` within `target` (ends included)? MM-DD ends = a yearly range
+ *  that may wrap past New Year; YYYY-MM-DD ends = a fixed range. null if unreadable. */
+export const dateInRange = (value: unknown, target: unknown): boolean | null => {
+  const when = parseDate(value)
+  const bounds = rangeBounds(target)
+  if (!when || !bounds) return null
+  const smd = monthDay(bounds[0]); const emd = monthDay(bounds[1])
+  if (smd && emd) {
+    const md: [number, number] = [when.getUTCMonth() + 1, when.getUTCDate()]
+    if (!mdLess(emd, smd)) return !mdLess(md, smd) && !mdLess(emd, md)
+    return !mdLess(md, smd) || !mdLess(emd, md)
+  }
+  let start = parseDate(bounds[0]); let end = parseDate(bounds[1])
+  if (!start || !end) return null
+  if (start > end) [start, end] = [end, start]
+  return when >= start && when <= end
+}
+
 export const buildContext = (meta: Record<string, unknown>): OverlayContext => {
   const ctx: OverlayContext = { ...meta }
   ctx.resolution = normalizeResolution(ctx.video_resolution)
+  // Today's date for seasonal rules; the preview can set its own to test a season.
+  if (!parseDate(ctx.today)) ctx.today = localToday()
+  // Maintainerr: the leaving values follow the removal date and "today", so
+  // "Pretend today is" and the example date work like a real render.
+  const removal = parseDate(ctx.removal_date)
+  if (removal) {
+    const f = formatLeaving(removal, parseDate(ctx.today) as Date)
+    for (const [k, v] of Object.entries(f)) if (k !== 'removal_date') ctx[k] = v
+  }
+  if (parseDate(ctx.release_date)) {
+    ctx.days_since_release = Math.round(((parseDate(ctx.today) as Date).getTime() - (parseDate(ctx.release_date) as Date).getTime()) / 86400000)
+  }
   if (ctx.year == null && ctx.movie_year != null && ctx.movie_year !== '') ctx.year = ctx.movie_year
   if (ctx.title == null && ctx.movie_title) ctx.title = ctx.movie_title
   ctx.labels = ((meta.labels as unknown[]) || []).map(String)
@@ -215,7 +305,13 @@ export const checkCondition = (cond: OverlayCondition, ctx: OverlayContext): boo
   const op = String(cond.op || 'eq').trim().toLowerCase()
   const field = String(cond.field || '').trim().toLowerCase()
   let target: unknown = cond.value
-  const values = fieldValues(field, ctx)
+  let values: unknown[]
+  if (REGIONAL_FIELDS.includes(field)) {
+    const raw = ctx[regionalKey(field, conditionRegion(cond))]
+    values = Array.isArray(raw) ? raw : (raw === null || raw === undefined || raw === '' ? [] : [raw])
+  } else {
+    values = fieldValues(field, ctx)
+  }
   if (field === 'resolution') {
     target = Array.isArray(target) ? target.map(normalizeResolution) : normalizeResolution(target)
   }
@@ -232,6 +328,22 @@ export const checkCondition = (cond: OverlayCondition, ctx: OverlayContext): boo
     if (res.some(r => r === null)) return false
     const hit = values.some(v => res.some(r => (r as RegExp).test(String(v))))
     return op === 'regex' ? hit : !hit
+  }
+
+  if (op === 'between' || op === 'not_between') {
+    const hits = values.map(v => dateInRange(v, target))
+    if (!hits.some(h => h !== null)) return false
+    const hit = hits.some(h => h === true)
+    return op === 'between' ? hit : !hit
+  }
+
+  if (['gt', 'gte', 'lt', 'lte'].includes(op) && parseDate(target)) {
+    // Dates: gt = after, lt = before.
+    const when = values.map(parseDate).find((d): d is Date => d !== null)
+    if (!when) return false
+    const limit = (parseDate(target) as Date).getTime()
+    const n = when.getTime()
+    return op === 'gt' ? n > limit : op === 'gte' ? n >= limit : op === 'lt' ? n < limit : n <= limit
   }
 
   if (['gt', 'gte', 'lt', 'lte'].includes(op)) {
@@ -320,15 +432,74 @@ export const queuePlacements = (
   return out
 }
 
-export const fillText = (template: string, ctx: OverlayContext): string | null => {
+// Kometa's number formats ({x%} = x * 10 whole, {x#} = no trailing ".0", {x/} = half);
+// keep in step with _format_value() in backend/overlay_engine.py.
+const formatValue = (v: unknown, fmt: string): string => {
+  if (fmt) {
+    const n = asNumber(v)
+    if (n !== null) {
+      if (fmt === '%') return String(Math.trunc(n * 10))
+      if (fmt === '#') { const t = n.toFixed(1); return t.endsWith('.0') ? t.slice(0, -2) : t }
+      if (fmt === '/') return (n / 2).toFixed(1)
+    }
+    return String(v)
+  }
+  return typeof v === 'number' && !Number.isInteger(v) ? v.toFixed(1) : String(v)
+}
+
+/** Whole days from `today` (UTC midnight, as parseDate gives) to the {countdown}
+ * date: YYYY-MM-DD (fixed; null once passed) or MM-DD (yearly; counts to next
+ * year's after the day). 0 on the day. A yearly 02-29 means 03-01 in other years.
+ * Same rules as overlay_engine.countdown_days(). */
+export const countdownDays = (target: unknown, today: Date): number | null => {
+  const text = String(target ?? '').trim()
+  const days = (when: Date) => Math.round((when.getTime() - today.getTime()) / 86400000)
+  if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(text)) {
+    const [y, m, d] = text.split('-').map(Number) as [number, number, number]
+    const when = parseDate(`${y}-${pad2(m)}-${pad2(d)}`)
+    if (!when || when.getTime() < today.getTime()) return null
+    return days(when)
+  }
+  const md = text.match(/^(\d{1,2})-(\d{1,2})$/)
+  if (!md) return null
+  const [mo, dd] = [Number(md[1]), Number(md[2])]
+  if (mo < 1 || mo > 12 || dd < 1 || dd > 31) return null
+  const inYear = (year: number): Date | null =>
+    parseDate(`${year}-${pad2(mo)}-${pad2(dd)}`) ?? (mo === 2 && dd === 29 ? parseDate(`${year}-03-01`) : null)
+  let when = inYear(today.getUTCFullYear())
+  if (!when) return null
+  if (when.getTime() < today.getTime()) when = inYear(today.getUTCFullYear() + 1)
+  return when ? days(when) : null
+}
+
+/** Does this text use {countdown} (with or without a format character)? */
+export const usesCountdown = (text: unknown): boolean => /\{countdown[%#/]?\}/.test(String(text ?? ''))
+
+/** Why a layer using {countdown} would never be drawn (no date, a date that
+ * can't be read, or a fixed date already past `today`), else null. */
+export const countdownWarning = (text: unknown, countdownTo: unknown, today: string): string | null => {
+  if (!usesCountdown(text)) return null
+  const target = String(countdownTo ?? '').trim()
+  if (!target) return 'Uses {countdown} but no "Countdown to" date is set, so it never appears.'
+  const now = parseDate(today)
+  if (now && countdownDays(target, now) === null) {
+    return /^\d{4}-/.test(target)
+      ? `The "Countdown to" date has passed, so {countdown} has no value and this layer isn't drawn.`
+      : `The "Countdown to" date isn't a real date (e.g. Feb 30), so this layer is never drawn.`
+  }
+  return null
+}
+
+export const fillText = (template: string, ctx: OverlayContext, el?: { countdown_to?: string | null } | null): string | null => {
   let missing = false
-  const out = (template || '').replace(/\{([A-Za-z0-9_.]+)\}/g, (_m, key: string) => {
+  const out = (template || '').replace(/\{([A-Za-z0-9_.]+)([%#/]?)\}/g, (_m, key: string, fmt: string) => {
     let v: unknown
     if (key === 'title' || key === 'movie_title') v = ctx.movie_title ?? ctx.title
     else if (key === 'year' || key === 'movie_year') v = ctx.movie_year ?? ctx.year
+    else if (key === 'countdown') v = el ? countdownDays(el.countdown_to, parseDate(ctx.today) ?? (parseDate(localToday()) as Date)) : null
     else v = ctx[key]
     if (v === null || v === undefined || String(v).trim() === '') { missing = true; return '' }
-    return typeof v === 'number' && !Number.isInteger(v) ? v.toFixed(1) : String(v)
+    return formatValue(v, fmt)
   })
   return missing ? null : out
 }

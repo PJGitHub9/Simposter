@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import PresetRefreshPrompt from '@/components/presets/PresetRefreshPrompt.vue'
+import { usePresetRefreshPrompt } from '@/composables/usePresetRefreshPrompt'
+import { presetOverlayLists, type PresetOverlayLists } from '@/services/presetOverlayLists'
 import { computed, onBeforeUnmount, onMounted, ref, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import type { MovieInput } from '../../services/types'
@@ -11,6 +14,7 @@ import TextOverlayPanel from './TextOverlayPanel.vue'
 import EditorCard from './EditorCard.vue'
 import PreviewOverlay from './PreviewOverlay.vue'
 import ExternalLinksRow from './ExternalLinksRow.vue'
+import PosterModeLine from './PosterModeLine.vue'
 import AddToRetryQueueModal from '../AddToRetryQueueModal.vue'
 import SendToServerModal from './SendToServerModal.vue'
 import ImagePickerModal from './ImagePickerModal.vue'
@@ -18,6 +22,7 @@ import UploadPosterModal from './UploadPosterModal.vue'
 import { getApiBase } from '../../services/apiBase'
 import { notifySendSummary } from '../../services/sendNotify'
 import { mediaServerLabel } from '../../services/mediaServerLabel'
+import { labelsToRemoveFor } from '../../services/labelsToRemove'
 
 // Simple debounce helper
 function debounce<T extends (...args: any[]) => any>(fn: T, delay: number): (...args: Parameters<T>) => void {
@@ -42,6 +47,11 @@ const apiBase = getApiBase()
 // linked server(s) are what doSend() actually targets for it instead
 // (getLinkedServersForItem(), see doSend()'s own comment).
 const isNonPlexItem = computed(() => !!props.movie.server_id && props.movie.server_id !== 'plex-1')
+// API mode (Poster API page / server-less search): a TMDb-identified show with no
+// media-server item. `props.movie.key` is a synthetic `api-tv-<id>` (season keys
+// `api-tv-<id>-s<n>`), so every rating_key-keyed request, cache write and server
+// send/save below is skipped; seasons come from TMDb. See EditorPane.vue's twin.
+const isApiMode = computed(() => !!props.movie?.apiMode)
 // `showServerPreviewToggle`/`showMultiServerSend` are declared further down
 // (after `selectedPosterType`/`selectedSeasons`, which these depend on) --
 // safe to reference here since computed() getters are lazy and never
@@ -206,6 +216,14 @@ let previewChangeSeq = 0
 
 // Collapsible "Current poster/logo" column, remembered across sessions.
 const CURRENT_COLLAPSED_KEY = 'simposter-editor-current-collapsed'
+// Phones: the pinned preview can be shrunk while scrolling the controls.
+const mobilePreviewSmall = ref((() => {
+  try { return localStorage.getItem('simposter-mobile-preview-small') === '1' } catch { return false }
+})())
+function toggleMobilePreview() {
+  mobilePreviewSmall.value = !mobilePreviewSmall.value
+  try { localStorage.setItem('simposter-mobile-preview-small', mobilePreviewSmall.value ? '1' : '0') } catch { /* storage unavailable */ }
+}
 const currentCollapsed = ref((() => {
   try { return localStorage.getItem(CURRENT_COLLAPSED_KEY) === '1' } catch { return false }
 })())
@@ -446,6 +464,7 @@ const loadSeasonsCache = () => {
 }
 
 const saveSeasonsCache = () => {
+  if (isApiMode.value) return
   if (typeof sessionStorage === 'undefined') return
   try {
     sessionStorage.setItem(SEASONS_CACHE_KEY, JSON.stringify(seasonsCache.value))
@@ -455,7 +474,7 @@ const saveSeasonsCache = () => {
 }
 
 const posterUrlForRatingKey = (ratingKey?: string | null) => {
-  if (!ratingKey) return undefined
+  if (!ratingKey || isApiMode.value) return undefined
   return `${apiBase}/api/movie/${ratingKey}/poster?raw=1`
 }
 const toPlexPosterUrl = (path?: string | null) => {
@@ -590,6 +609,27 @@ const availableFonts = ref<string[]>([])
 
 // Overlay configs
 const overlayConfigs = ref<{ id: string; name: string }[]>([])
+// Ticked overlays first, in draw order (top = drawn on top), then the rest.
+const orderedOverlayConfigs = computed(() => {
+  const byId = new Map(overlayConfigs.value.map(c => [c.id, c]))
+  const ticked = [...options.value.overlayConfigIds].reverse().filter(id => byId.has(id)).map(id => byId.get(id)!)
+  return [...ticked, ...overlayConfigs.value.filter(c => !options.value.overlayConfigIds.includes(c.id))]
+})
+const overlayDrawPos = (id: string) => {
+  const ticked = [...options.value.overlayConfigIds].reverse().filter(x => overlayConfigs.value.some(c => c.id === x))
+  return ticked.indexOf(id) + 1
+}
+
+// After Save Preset: offer to refresh tracked posters when the preset's overlays changed.
+const { prompt: refreshPrompt, offer: offerRefresh, close: closeRefreshPrompt } = usePresetRefreshPrompt()
+const storedOverlayLists = (): PresetOverlayLists => {
+  const p = presetService.presets.value.find(x => x.id === presetService.selectedPreset.value)
+  return presetOverlayLists((p?.options || {}) as Record<string, any>, (p?.season_options || null) as Record<string, any> | null)
+}
+const offerPresetRefresh = async (before: PresetOverlayLists) => {
+  const p = presetService.presets.value.find(x => x.id === presetService.selectedPreset.value)
+  await offerRefresh(presetService.selectedTemplate.value, presetService.selectedPreset.value, p?.name || presetService.selectedPreset.value, before, storedOverlayLists())
+}
 
 const render = useRenderService()
 const loading = render.loading
@@ -783,7 +823,7 @@ const restoreSettingsForCurrent = () => {
   const isSeason = currentSeason.value && !currentSeason.value.isSeries
 
   if (isSeason) {
-    applyPresetOptions(selectedPreset.value, { forceSeasonOverrides: true, keepOverlays: true })
+    applyPresetOptions(selectedPreset.value, { forceSeasonOverrides: true })
     if (cached) {
       // Apply all cached season edits so manual tweaks persist when returning
       applySettings(cached)
@@ -807,7 +847,7 @@ const restoreSettingsForCurrent = () => {
         delete options.value.season_number
       }
     } else {
-      applyPresetOptions(selectedPreset.value, { forceSeasonOverrides: false, keepOverlays: true })
+      applyPresetOptions(selectedPreset.value, { forceSeasonOverrides: false })
     }
   }
 
@@ -1370,6 +1410,7 @@ const saveCurrentPreset = async () => {
 
   // When editing season options, we need to save to season_options_json
   // The presetService will handle both options and season_options
+  const beforeOverlays = storedOverlayLists()
   if (selectedPosterType.value === 'season') {
     // Fetch current preset, update only season_options
     const currentPreset = presets.value.find(p => p.id === selectedPreset.value)
@@ -1388,6 +1429,7 @@ const saveCurrentPreset = async () => {
         if (!res.ok) throw new Error(`API error ${res.status}`)
         success('Season preset saved!')
         await presetService.load()
+        await offerPresetRefresh(beforeOverlays)
       } catch (e) {
         notifyError(`Failed to save: ${e instanceof Error ? e.message : 'Unknown error'}`)
       }
@@ -1397,6 +1439,7 @@ const saveCurrentPreset = async () => {
     await presetService.savePreset(backendOptions)
     if (!presetService.error.value) {
       success('Preset saved!')
+      await offerPresetRefresh(beforeOverlays)
     } else {
       notifyError(`Failed to save: ${presetService.error.value}`)
     }
@@ -1557,15 +1600,22 @@ const fetchTmdbAssets = async () => {
     const mediaType = props.movie.mediaType || 'movie'
     const isTvShow = mediaType === 'tv-show'
 
+  if (isApiMode.value) {
+    // No media-server item: the TMDb id comes with the item. The images endpoint
+    // resolves the TVDB id itself when none is passed.
+    tmdbId.value = Number(props.movie.tmdb_id) || null
+    tvdbId.value = null
+  } else {
     // Use appropriate endpoint for TMDB ID lookup
     const tmdbEndpoint = isTvShow
       ? `${apiBase}/api/tv-show/${props.movie.key}/tmdb`
       : `${apiBase}/api/movie/${props.movie.key}/tmdb`
 
-  const tmdbRes = await fetch(tmdbEndpoint)
-  const tmdb = await tmdbRes.json()
-  tmdbId.value = tmdb.tmdb_id || null
-  tvdbId.value = tmdb.tvdb_id || null
+    const tmdbRes = await fetch(tmdbEndpoint)
+    const tmdb = await tmdbRes.json()
+    tmdbId.value = tmdb.tmdb_id || null
+    tvdbId.value = tmdb.tvdb_id || null
+  }
   if (!tmdbId.value) return
 
     // Use appropriate endpoint for images
@@ -1677,6 +1727,7 @@ const fetchAssetsForAllSeasons = async () => {
 }
 
 const fetchLabels = async () => {
+  if (isApiMode.value) { labels.value = []; selectedLabels.value = new Set(); return }
   try {
     // Use appropriate endpoint based on media type
     const mediaType = props.movie.mediaType || 'movie'
@@ -1690,16 +1741,9 @@ const fetchLabels = async () => {
     const data = await res.json()
     labels.value = data.labels || []
     // Apply default labels to remove from settings
-    const defaultLabelsConfig = settings.defaultLabelsToRemove.value || {}
-    let defaultToRemove: string[] = []
-
-    // Handle both legacy array format and new Record format
-    if (Array.isArray(defaultLabelsConfig)) {
-      defaultToRemove = defaultLabelsConfig
-    } else {
-      // Get labels from all libraries (since we don't have library context here)
-      defaultToRemove = Object.values(defaultLabelsConfig).flat()
-    }
+    // This show's library (all TV libraries when unknown; this used to read the
+    // movie list), plus "Overlay" while Kometa compatibility is on.
+    const defaultToRemove = labelsToRemoveFor(props.movie.library_id, 'tv')
 
     selectedLabels.value = new Set(defaultToRemove.filter((label: string) => labels.value.includes(label)))
   } catch (e) {
@@ -1710,6 +1754,7 @@ const fetchLabels = async () => {
 // After a send: refresh the grid thumbnail of every other server's copy that
 // got the poster. fetchExistingPoster() only refreshes the one on screen.
 const refreshSentThumbnails = async (sent: { server_id: string; rating_key: string }[]) => {
+  if (isApiMode.value) return
   const kind = 'tv-show'
   await Promise.all(sent.filter(t => t.rating_key && t.rating_key !== viewingRatingKey.value).map(async (t) => {
     try {
@@ -1722,7 +1767,7 @@ const refreshSentThumbnails = async (sent: { server_id: string; rating_key: stri
 }
 
 const updateGlobalPosterCache = (key: string, url: string | null) => {
-  if (typeof sessionStorage === 'undefined') return
+  if (isApiMode.value || typeof sessionStorage === 'undefined') return
   try {
     const raw = sessionStorage.getItem(POSTER_CACHE_KEY)
     const cache = raw ? JSON.parse(raw) : {}
@@ -1736,6 +1781,7 @@ const updateGlobalPosterCache = (key: string, url: string | null) => {
 }
 
 const fetchExistingPoster = async (forceRefresh?: boolean | Event) => {
+  if (isApiMode.value) { existingPoster.value = null; return }
   try {
     // Handle both boolean and Event parameter
     const refreshFlag = typeof forceRefresh === 'boolean'
@@ -1785,6 +1831,7 @@ const fetchExistingPoster = async (forceRefresh?: boolean | Event) => {
 }
 
 const fetchExistingLogo = async (forceRefresh = false) => {
+  if (isApiMode.value) { existingLogo.value = null; return }
   try {
     // Always resolves against the SERIES' own linked-server mapping,
     // regardless of whether a season is currently focused -- logos are
@@ -1821,6 +1868,7 @@ const toggleLabel = (label: string) => {
 }
 
 const doPreview = async (skipBackgroundRender = false) => {
+  if (overlayOnly.value) return doOverlayOnlyPreview()
   const capturedChangeSeq = previewChangeSeq
   if (!bgUrl.value) return
   // Cache current settings before rendering
@@ -1974,6 +2022,7 @@ const doPreview = async (skipBackgroundRender = false) => {
 
 // Render all selected seasons in the background so they're ready when user clicks them
 const renderAllSelectedSeasons = async () => {
+  if (overlayOnly.value) return
   const selectedKeys = Array.from(selectedSeasons.value)
   const currentKey = currentSeason.value?.key
 
@@ -2174,7 +2223,7 @@ const renderAllSelectedSeasons = async () => {
 
 
 const doSave = async () => {
-  if (!bgUrl.value) return
+  if (isApiMode.value || !bgUrl.value) return
 
   // Flush the currently-focused season/series' live UI state into settingsCache
   // before reading from it below -- without this, if you're saving the season
@@ -2476,6 +2525,7 @@ async function getLinkedServersForItem(season: Season): Promise<LinkedServer[]> 
 }
 
 const doSendLogoOnly = async () => {
+  if (isApiMode.value) return
   if (!logoUrl.value) {
     notifyError('No logo selected to send.')
     return
@@ -2543,8 +2593,160 @@ function onSendModalConfirm(serverIds: string[]) {
   doSend().finally(() => { pickedServerIds.value = null })
 }
 
+
+// ── Overlay only titles ─────────────────────────────────────────────────────
+// For an Overlay only show the manual settings don't apply: each poster is the
+// server's current one and only the preset's overlays are drawn on it. A season
+// follows its show's mode.
+const posterMode = ref('full')
+const overlayOnly = computed(() => posterMode.value === 'overlay_only' && !isApiMode.value)
+const overlayOnlyMessage = ref('')
+// The big empty-preview text in Overlay only mode: the backend's reason when
+// it couldn't build a preview (it used to be a small side note while this
+// said "Tick an overlay" even with overlays ticked).
+const OVERLAY_ONLY_WAITING = "waiting for the other app's poster"
+const overlayOnlyEmptyText = computed(() => {
+  if (overlayOnlyMessage.value === OVERLAY_ONLY_WAITING) {
+    return "Couldn't download the poster from this server, and there's no saved copy to draw on yet. " +
+      "Check the server is reachable, then refresh the Current poster."
+  }
+  if (!options.value.overlayConfigIds.length) return 'Tick an overlay to see it on the current poster'
+  if (overlayOnlyMessage.value) return overlayOnlyMessage.value
+  return ''
+})
+// Set by each preview: does Simposter know the poster on the viewed server
+// has its overlays (offer "Remove overlays"), and was the preview drawn on that
+// overlaid poster (so the overlays would show twice)?
+const overlayOnlyHasOverlays = ref(false)
+const overlayOnlyOverlaidBase = ref(false)
+const overlayOnlyTarget = ref<{ server_id: string; rating_key: string; season_index: number | null } | null>(null)
+const removingOverlays = ref(false)
+async function removeOverlaysFromPoster() {
+  const target = overlayOnlyTarget.value
+  if (!target || removingOverlays.value) return
+  removingOverlays.value = true
+  try {
+    const res = await fetch(`${apiBase}/api/overlay-only/remove-overlays`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(target),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.detail || 'Failed to remove the overlays')
+    success('Overlays removed from the poster')
+    await new Promise(resolve => setTimeout(resolve, 600))
+    await fetchExistingPoster(true)
+    await doOverlayOnlyPreview(true)
+  } catch (err) {
+    notifyError(err instanceof Error ? err.message : 'Failed to remove the overlays')
+  } finally {
+    removingOverlays.value = false
+  }
+}
+let overlayOnlySeq = 0
+function overlayOnlyBody(season: Season | null, useTicks: boolean, extra: Record<string, unknown> = {}) {
+  const isSeason = !!season && !season.isSeries
+  return {
+    server_id: props.movie.server_id || 'plex-1',
+    rating_key: isSeason ? season!.key : props.movie.key,
+    season_index: isSeason ? season!.index : null,
+    is_tv: true,
+    library_id: props.movie.library_id != null ? String(props.movie.library_id) : null,
+    template_id: selectedTemplate.value,
+    preset_id: selectedPreset.value,
+    // null = the preset's own series/season lists
+    overlay_config_ids: useTicks ? [...options.value.overlayConfigIds] : null,
+    overlay_config_ids_below: useTicks ? [...options.value.overlayConfigIdsBelow] : [],
+    ...extra,
+  }
+}
+// The preview is drawn on the poster of the server picked with ‹ › in the
+// Current column (that server's copy of this season or the series).
+function overlayOnlyViewing() {
+  const hit = linkedServers.value.find(s => s.server_id === viewingServerId.value)
+  return hit ? { server_id: hit.server_id, rating_key: hit.rating_key } : {}
+}
+async function doOverlayOnlyPreview(refreshBase = false) {
+  const seq = ++overlayOnlySeq
+  const season = currentSeason.value
+  overlayOnlyMessage.value = ''
+  render.loading.value = true
+  try {
+    const res = await fetch(`${apiBase}/api/overlay-only/preview`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(overlayOnlyBody(season, true, { ...overlayOnlyViewing(), refresh_base: refreshBase })),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (seq !== overlayOnlySeq || currentSeason.value?.key !== season?.key) return
+    if (data.status === 'ok' && data.image_data) {
+      render.lastPreview.value = data.image_data
+      overlayOnlyHasOverlays.value = !!data.has_overlays
+      overlayOnlyOverlaidBase.value = !!data.overlaid_base
+      overlayOnlyTarget.value = (() => { const b = overlayOnlyBody(season, true, overlayOnlyViewing()); return { server_id: b.server_id, rating_key: b.rating_key, season_index: b.season_index } })()
+      previewDirty.value = false
+    } else {
+      render.lastPreview.value = ''
+      overlayOnlyHasOverlays.value = false
+      overlayOnlyOverlaidBase.value = false
+      overlayOnlyMessage.value = data.reason || data.detail || 'Could not build the preview.'
+    }
+  } catch {
+    if (seq === overlayOnlySeq) overlayOnlyMessage.value = 'Could not build the preview.'
+  } finally {
+    if (seq === overlayOnlySeq) render.loading.value = false
+  }
+}
+// Sends every selected poster (series and seasons). The one being viewed uses
+// the ticked overlays; the others use the preset's own lists.
+async function doOverlayOnlySend() {
+  const keys = Array.from(selectedSeasons.value)
+  if (!keys.length) { notifyError('No seasons selected'); return }
+  const viewingKey = currentSeason.value?.key
+  const picked = pickedServerIds.value
+  posterSending.value = true
+  let sent = 0
+  let total = 0
+  const errors: string[] = []
+  try {
+    for (const key of keys) {
+      const season = seasons.value.find(s => s.key === key)
+      if (!season) continue
+      const servers = await getLinkedServersForItem(season)
+      const targets = picked ? servers.filter(s => picked.has(s.server_id)) : resolveSendTargetsFor(servers)
+      if (!targets.length) continue
+      const res = await fetch(`${apiBase}/api/overlay-only/send`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(overlayOnlyBody(season, key === viewingKey, {
+          targets: targets.map(t => ({ server_id: t.server_id, rating_key: t.rating_key })),
+        })),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) { errors.push(`${season.title}: ${data.detail || 'failed'}`); total += targets.length; continue }
+      sent += data.sent || 0
+      total += data.total || 0
+      for (const r of data.results || []) {
+        if (r.status !== 'ok' && r.reason) errors.push(`${season.title}: ${r.reason}`)
+      }
+    }
+    if (!sent) throw new Error(errors[0] || 'Failed to send')
+    success(sent === total ? 'Overlays applied and sent!' : `Sent ${sent}/${total}`)
+    if (errors.length) notifyInfo(errors.slice(0, 3).join(' · '))
+    await new Promise(resolve => setTimeout(resolve, 600))
+    await fetchExistingPoster()
+  } catch (err: unknown) {
+    notifyError(err instanceof Error ? err.message : 'Failed to send')
+  } finally {
+    posterSending.value = false
+  }
+}
+watch([overlayOnly, () => currentSeason.value?.key, viewingServerId], ([on]) => { if (on) doOverlayOnlyPreview() })
+function refreshCurrentPoster() {
+  fetchExistingPoster(true)
+  if (overlayOnly.value) doOverlayOnlyPreview(true)
+}
+
 const doSend = async () => {
-  if (!bgUrl.value) return
+  if (overlayOnly.value) return doOverlayOnlySend()
+  if (isApiMode.value || !bgUrl.value) return
 
   // Every selected season/series on a non-Plex-sourced show needs the
   // multi-server send path, no matter how many are selected -- the
@@ -2827,9 +3029,76 @@ const onRetryQueued = () => {
   success('Queued — will retry automatically once a textless poster is found.')
 }
 
+// API mode's one primary action: store the current preview as the Poster API image
+// for the FOCUSED poster (series, or one season). Quirk #13: lastPreview can still
+// hold another season's render right after a season switch, so only pin when the
+// shown image is one this file attributed to the focused season's own key.
+const lastPreviewIsFocused = computed(() => {
+  const season = currentSeason.value
+  const image = lastPreview.value
+  if (!season || !image) return false
+  if (renderedPreviews.value.some(p => p.seasonKey === season.key && p.imageUrl === image)) return true
+  const prefix = `${season.key}_`
+  return Object.entries(renderedPreviewCache.value).some(([k, v]) => v === image && k.startsWith(prefix))
+})
+const pinning = ref(false)
+const canPin = computed(() => !!tmdbId.value && lastPreviewIsFocused.value)
+const pinToPosterApi = async () => {
+  if (!isApiMode.value || pinning.value || !canPin.value) return
+  // Capture identity before the await.
+  const season = currentSeason.value
+  const image = lastPreview.value
+  const capturedTmdbId = tmdbId.value
+  if (!season || !image || !capturedTmdbId) return
+  const body: Record<string, unknown> = { type: 'tv', tmdb_id: capturedTmdbId, title: props.movie.title, image_data: image }
+  if (!season.isSeries) body.season = season.index
+  pinning.value = true
+  try {
+    const res = await fetch(`${apiBase}/api/poster-api/pin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      throw new Error(`Pin failed (${res.status})${text ? `: ${text}` : ''}`)
+    }
+    success(season.isSeries ? 'Series poster pinned to Poster API' : `${season.title} pinned to Poster API`)
+  } catch (err: unknown) {
+    notifyError(err instanceof Error ? err.message : 'Pin failed')
+  } finally {
+    pinning.value = false
+  }
+}
+
 // Fetch TV show seasons
 async function fetchSeasons() {
   if (!props.movie?.key) return
+
+  if (isApiMode.value) {
+    // No media-server season list: seasons come from TMDb. Synthetic, never-sent keys.
+    const seriesEntry = buildSeriesEntry()
+    seasons.value = [seriesEntry]
+    selectedSeasons.value = new Set([seriesEntry.key])
+    currentSeasonIndex.value = 0
+    try {
+      const res = await fetch(`${apiBase}/api/tmdb/tv/${Number(props.movie.tmdb_id)}/seasons`)
+      if (!res.ok) throw new Error('Failed to fetch seasons')
+      const data: { index: number; name?: string; poster_path?: string | null }[] = await res.json()
+      const mapped: Season[] = (Array.isArray(data) ? data : []).map(s => ({
+        key: `${props.movie.key}-s${s.index}`,
+        title: s.name || `Season ${s.index}`,
+        index: s.index,
+        thumb: s.poster_path ? `https://image.tmdb.org/t/p/original${s.poster_path}` : undefined,
+      }))
+      seasons.value = [seriesEntry, ...mapped]
+    } catch (err) {
+      console.error('Failed to fetch seasons:', err)
+      notifyError('Failed to load TV show seasons')
+    }
+    syncRenderedPlaceholders()
+    return
+  }
 
   const cached = seasonsCache.value[props.movie.key]
   if (cached && cached.length) {
@@ -3156,9 +3425,6 @@ watch(logoPreference, () => {
 type PresetApplyOptions = {
   // Force applying season overrides even if we already have cached season edits
   forceSeasonOverrides?: boolean
-  // Keep the current overlay ticks (switching season/series): overlays aren't
-  // per-season, so only a preset change, reload or a new show resets them.
-  keepOverlays?: boolean
 }
 
 const applyPresetOptions = (id: string, opts: PresetApplyOptions = {}) => {
@@ -3231,12 +3497,13 @@ const applyPresetOptions = (id: string, opts: PresetApplyOptions = {}) => {
   if (o.overlay_file) options.value.overlayFile = String(o.overlay_file)
   if (typeof o.overlay_opacity === 'number') options.value.overlayOpacity = Math.round(o.overlay_opacity * 100)
   if (o.overlay_mode) options.value.overlayMode = String(o.overlay_mode)
-  // Always from the new preset (none = none), and copies, so ticking a box
-  // doesn't edit the loaded preset's own list.
-  if (!opts.keepOverlays) {
-    options.value.overlayConfigIds = Array.isArray(o.overlay_config_ids) ? [...o.overlay_config_ids] : []
-    options.value.overlayConfigIdsBelow = Array.isArray(o.overlay_config_ids_below) ? [...o.overlay_config_ids_below] : []
-  }
+  // Always from the preset (none = none), and copies, so ticking a box doesn't
+  // edit the loaded preset's own list. A season gets the preset's season list
+  // (its own override, else the series list; presets have had season overlay
+  // lists since v1.8.31). Ticks changed on a season or the series are kept in
+  // settingsCache and restored by applySettings() when switching back.
+  options.value.overlayConfigIds = Array.isArray(o.overlay_config_ids) ? [...o.overlay_config_ids] : []
+  options.value.overlayConfigIdsBelow = Array.isArray(o.overlay_config_ids_below) ? [...o.overlay_config_ids_below] : []
   if (typeof o.poster_filter === 'string' && ['all', 'textless', 'text'].includes(o.poster_filter)) {
     posterFilter.value = o.poster_filter as 'all' | 'textless' | 'text'
   }
@@ -3500,13 +3767,13 @@ watch(tmdbId, () => {
               </svg>
             </button>
           </div>
-          <div class="preset-row new-preset-row">
+          <div v-if="!overlayOnly" class="preset-row new-preset-row">
             <input v-model="newPresetId" type="text" placeholder="New preset id" class="new-preset-input" />
             <button class="save-preset-btn wide" @click="saveAsNewPreset" title="Save as a new preset">Save As</button>
           </div>
         </div>
 
-        <div class="editor-tabs" role="tablist">
+        <div v-if="!overlayOnly" class="editor-tabs" role="tablist">
           <button
             v-for="tab in editorTabs"
             :key="tab.id"
@@ -3521,7 +3788,7 @@ watch(tmdbId, () => {
           </button>
         </div>
 
-        <div v-show="activeTab === 'image'" class="tab-panel">
+        <div v-show="!overlayOnly && activeTab === 'image'" class="tab-panel">
           <div class="field-row">
             <label class="field-label">
               Images
@@ -3700,7 +3967,7 @@ watch(tmdbId, () => {
           </EditorCard>
         </div>
 
-        <div v-show="activeTab === 'logo'" class="tab-panel">
+        <div v-show="!overlayOnly && activeTab === 'logo'" class="tab-panel">
           <div class="field-row">
             <label class="field-label">
               Logo Mode
@@ -3909,7 +4176,7 @@ watch(tmdbId, () => {
           </EditorCard>
         </div>
 
-        <div v-show="activeTab === 'text'" class="tab-panel">
+        <div v-show="!overlayOnly && activeTab === 'text'" class="tab-panel">
           <TextOverlayPanel
             v-model:enabled="textOverlayEnabled"
             v-model:customText="customText"
@@ -3992,8 +4259,8 @@ watch(tmdbId, () => {
           </TextOverlayPanel>
         </div>
 
-        <div v-show="activeTab === 'extras'" class="tab-panel">
-          <EditorCard title="Border" :default-open="true" :summary="options.borderEnabled ? `${options.borderThickness}px` : 'Off'">
+        <div v-show="overlayOnly || activeTab === 'extras'" class="tab-panel">
+          <EditorCard v-if="!overlayOnly" title="Border" :default-open="true" :summary="options.borderEnabled ? `${options.borderThickness}px` : 'Off'">
             <div class="slider">
               <label class="checkbox-label">
                 <input v-model="options.borderEnabled" type="checkbox" />
@@ -4015,13 +4282,14 @@ watch(tmdbId, () => {
           <EditorCard v-if="overlayConfigs.length > 0" title="Overlays" :default-open="true" :summary="options.overlayConfigIds.length ? `${options.overlayConfigIds.length} on` : 'None'">
             <div v-if="overlayConfigs.length > 0" class="slider">
                             <div class="overlay-config-checkboxes">
-                <div v-for="cfg in overlayConfigs" :key="cfg.id" class="overlay-config-item">
+                <div v-for="cfg in orderedOverlayConfigs" :key="cfg.id" class="overlay-config-item">
                   <label class="checkbox-label">
                     <input
                       type="checkbox"
                       :checked="options.overlayConfigIds.includes(cfg.id)"
                       @change="toggleOverlayConfig(cfg.id)"
                     />
+                    <span v-if="overlayDrawPos(cfg.id)" class="overlay-pos" title="Draw order: 1 is drawn on top">{{ overlayDrawPos(cfg.id) }}</span>
                     {{ cfg.name }}
                   </label>
                   <label v-if="options.overlayConfigIds.includes(cfg.id)" class="checkbox-label overlay-config-below-row">
@@ -4040,7 +4308,7 @@ watch(tmdbId, () => {
 
         <!-- Actions -->
         <div class="acc-actions">
-          <div class="pinned-labels">
+          <div v-if="!isApiMode" class="pinned-labels">
             <div class="pinned-labels-title">
               Labels to remove on send
               <span v-if="selectedLabels.size" class="pinned-labels-count">{{ selectedLabels.size }} selected</span>
@@ -4147,8 +4415,10 @@ watch(tmdbId, () => {
       </div>
     </div>
 
-    <div class="preview-pane">
+    <div class="preview-pane" :class="{ 'mobile-preview-small': mobilePreviewSmall }">
       <div class="preview-inner">
+        <template v-if="!isApiMode">
+        <PosterModeLine v-if="currentCollapsed" v-show="false" :movie="props.movie" @mode="posterMode = $event" />
         <button v-if="currentCollapsed" type="button" class="current-expand" title="Show the current poster and logo" @click="currentCollapsed = false">Current ›</button>
         <div v-else class="preview-existing">
           <button type="button" class="current-collapse" title="Hide this column" @click="currentCollapsed = true">‹ Hide</button>
@@ -4159,7 +4429,7 @@ watch(tmdbId, () => {
           </div>
           <div class="preview-label">
             {{ currentPosterLabel }}
-            <button class="refresh-btn" title="Refresh poster" @click="fetchExistingPoster(true)">
+            <button class="refresh-btn" title="Refresh poster" @click="refreshCurrentPoster">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="23 4 23 10 17 10" />
                 <polyline points="1 20 1 14 7 14" />
@@ -4184,26 +4454,34 @@ watch(tmdbId, () => {
             <img v-if="existingLogo" :key="logoRefreshKey" :src="existingLogo" alt="Existing logo" class="existing-logo-img" />
             <div v-else class="empty-preview small">No logo</div>
           </div>
+          <PosterModeLine :movie="props.movie" class="pm-left" @mode="posterMode = $event" />
         </div>
+        </template>
 
         <div class="preview-content-wrapper">
           <div class="preview-main">
           <div class="preview-header-row">
             <div class="preview-label">
               <div class="preview-title-row">
-                <span>Preview</span>
+                <span>Preview<span v-if="overlayOnly" class="status-badge" title="Overlay only: the preset's overlays on the server's current poster"> Overlay only</span></span>
+                <button type="button" class="mobile-preview-toggle" @click="toggleMobilePreview">{{ mobilePreviewSmall ? 'Larger' : 'Smaller' }}</button>
               </div>
               <div v-if="currentSeason" class="current-season-label">{{ currentSeason.title }}</div>
               <span v-if="loading" class="status-badge">Rendering...</span>
               <span v-else-if="lastPreview && previewDirty" class="status-badge stale" title="Settings changed since this render. It re-renders on its own after a moment; click Preview if it does not.">Not up to date</span>
               <span v-else-if="lastPreview" class="status-badge success">Up to date</span>
             </div>
-            <div class="preview-actions">
-              <button title="Send Logo Only" class="btn-send-logo btn-inline" :disabled="logoSending || !logoUrl" @click="doSendLogoOnly">
+            <div v-if="isApiMode" class="preview-actions">
+              <button :title="currentSeason?.isSeries === false ? `Store this preview as the Poster API image for ${currentSeason.title}` : 'Store this preview as the Poster API image for the series'" class="btn-plex btn-inline" :disabled="loading || pinning || !canPin" @click="pinToPosterApi">
+                <span class="btn-label">{{ pinning ? 'Pinning...' : 'Pin to Poster API' }}</span>
+              </button>
+            </div>
+            <div v-else class="preview-actions">
+              <button v-if="!overlayOnly" title="Send Logo Only" class="btn-send-logo btn-inline" :disabled="logoSending || !logoUrl" @click="doSendLogoOnly">
                 <svg v-if="logoSending" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spin"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
                 <span class="btn-label">{{ logoSending ? 'Sending...' : 'Send Logo Only' }}</span>
               </button>
-              <button title="Save to Disk" class="btn-save btn-inline" :disabled="loading" @click="doSave">💾 <span class="btn-label">Save to Disk</span></button>
+              <button v-if="!overlayOnly" title="Save to Disk" class="btn-save btn-inline" :disabled="loading" @click="doSave">💾 <span class="btn-label">Save to Disk</span></button>
               <button :title="sendButtonLabel" class="btn-plex btn-inline" :disabled="loading || posterSending" @click="onSendClick">
                 <svg v-if="posterSending" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spin"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
                 <span v-else>📺</span>
@@ -4223,9 +4501,19 @@ watch(tmdbId, () => {
             @close="showSendModal = false"
             @send="onSendModalConfirm"
           />
+          <div v-if="overlayOnly && lastPreview && (overlayOnlyHasOverlays || overlayOnlyOverlaidBase)" class="overlay-only-banner" :class="{ warn: overlayOnlyOverlaidBase }">
+            <span v-if="overlayOnlyOverlaidBase">
+              The poster on this server already has Simposter's overlays and there's no clean copy to draw on, so they show twice here.
+              Remove them first, then send.
+            </span>
+            <span v-else>This server's poster has Simposter's overlays; the preview is drawn on the poster without them.</span>
+            <button type="button" class="banner-btn" :disabled="removingOverlays" @click="removeOverlaysFromPoster">
+              {{ removingOverlays ? 'Removing…' : 'Remove overlays' }}
+            </button>
+          </div>
           <div class="preview-container">
             <img v-if="lastPreview" ref="previewImgRef" :src="lastPreview" alt="Preview" class="preview-img" />
-            <div v-else-if="selectedPoster" class="placeholder-state">
+            <div v-else-if="selectedPoster && !overlayOnly" class="placeholder-state">
               <img :src="selectedPoster" alt="Selected poster" class="placeholder-img" referrerpolicy="no-referrer" />
               <div class="placeholder-overlay">
                 <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -4241,7 +4529,7 @@ watch(tmdbId, () => {
                 <circle cx="8.5" cy="8.5" r="1.5" />
                 <polyline points="21 15 16 10 5 21" />
               </svg>
-              <p>Select a poster to begin</p>
+              <p>{{ overlayOnly ? overlayOnlyEmptyText : 'Select a poster to begin' }}</p>
             </div>
 
             <!-- Loading Overlay -->
@@ -4251,7 +4539,7 @@ watch(tmdbId, () => {
             </div>
 
             <PreviewOverlay
-              v-if="lastPreview"
+              v-if="lastPreview && !overlayOnly"
               v-model:show-boxes="showBoundingBox"
               :img="previewImgRef"
               :can-show-boxes="isUniformLogo"
@@ -4295,7 +4583,7 @@ watch(tmdbId, () => {
   </div>
 
   <AddToRetryQueueModal
-    v-if="showRetryQueueModal"
+    v-if="showRetryQueueModal && !isApiMode"
     :rating-key="props.movie.key"
     media-type="tv"
     :library-id="retryQueueLibraryId"
@@ -4318,6 +4606,7 @@ watch(tmdbId, () => {
     @close="showLogoUploadModal = false"
     @uploaded="onLogoUploaded"
   />
+  <PresetRefreshPrompt v-if="refreshPrompt" :state="refreshPrompt" @close="closeRefreshPrompt" />
 </template>
 
 <style scoped>
@@ -5686,8 +5975,43 @@ button:disabled {
   opacity: 0.3;
 }
 
+.overlay-only-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.overlay-only-banner.warn {
+  border-color: rgba(255, 184, 107, 0.45);
+  background: rgba(255, 184, 107, 0.08);
+  color: #ffd7a8;
+}
+.overlay-only-banner span { flex: 1 1 260px; }
+.banner-btn {
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.banner-btn:disabled { opacity: 0.6; cursor: default; }
 .empty-preview p {
   font-size: 14px;
+  max-width: 420px;
+  text-align: center;
+  line-height: 1.5;
+  padding: 0 16px;
 }
 
 .loading-overlay {
@@ -6414,4 +6738,149 @@ button:disabled {
     gap: 4px;
   }
 }
+
+.mobile-preview-toggle {
+  display: none;
+  align-items: center;
+  margin-left: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-secondary, #aab);
+  cursor: pointer;
+}
+
+/* Phones and narrow windows: preview pinned at the top so slider changes are
+   visible without scrolling; "Smaller" shrinks it while browsing thumbnails. */
+@media (max-width: 900px) {
+  .editor-shell {
+    overflow: visible;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .preview-pane {
+    order: -1;
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+    padding: 8px 10px 10px;
+    background: #0c0e16;
+    border-bottom: 1px solid var(--border);
+    box-shadow: 0 8px 18px rgba(0, 0, 0, 0.45);
+  }
+
+  .preview-main {
+    gap: 6px;
+  }
+
+  .preview-header-row {
+    margin-bottom: 6px;
+    row-gap: 6px;
+  }
+
+  .preview-container {
+    min-height: 0;
+    aspect-ratio: auto;
+  }
+
+  .preview-img,
+  .placeholder-img {
+    max-height: 30vh;
+  }
+
+  .mobile-preview-small .preview-img,
+  .mobile-preview-small .placeholder-img {
+    max-height: 15vh;
+  }
+
+  .mobile-preview-toggle {
+    display: inline-flex;
+  }
+
+  /* Two rows: [Send to media server | more] [Save to disk | Send logo only] */
+  .preview-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr 40px;
+    width: 100%;
+    gap: 6px;
+    margin-top: 0;
+  }
+
+  .preview-actions .btn-inline {
+    min-width: 0;
+    max-width: none;
+    padding: 7px 6px;
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    justify-content: center;
+  }
+
+  .preview-actions .btn-plex {
+    order: 1;
+    grid-column: span 2;
+  }
+
+  .preview-actions .more-menu {
+    order: 2;
+  }
+
+  .preview-actions .btn-save {
+    order: 3;
+  }
+
+  .preview-actions .btn-send-logo {
+    order: 4;
+    grid-column: span 2;
+  }
+
+  .preview-actions .more-menu .btn-more {
+    width: 100%;
+  }
+
+  .preview-actions .btn-label {
+    display: inline;
+  }
+
+  .controls-sidebar,
+  .controls-scroll {
+    overflow: visible;
+  }
+
+  .controls-scroll {
+    padding-bottom: 16px;
+  }
+
+  /* These were pinned inside the controls' own scroll area; on phones the
+     page scrolls instead, and pinning them to the screen would leave little
+     room under the pinned preview. */
+  .editor-tabs,
+  .acc-actions {
+    position: static;
+  }
+
+  .rendered-previews-section {
+    display: none;
+  }
+}
+
+.overlay-pos {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  margin-right: 4px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: rgba(61, 214, 183, 0.15);
+  color: var(--accent, #3dd6b7);
+}
+
 </style>

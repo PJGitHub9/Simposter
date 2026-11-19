@@ -29,7 +29,7 @@ import io
 import re
 import threading
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from PIL import Image
 
@@ -103,11 +103,75 @@ def fingerprint(image: Any) -> Optional[str]:
             img = Image.open(io.BytesIO(image))
         else:
             img = Image.open(str(image))
-        img = img.convert("RGB").resize(_GRID, Image.BOX)
+        img = _flatten(img).resize(_GRID, Image.BOX)
         return base64.b64encode(img.tobytes()).decode("ascii")
     except Exception as e:
         logger.debug("[DRIFT] Couldn't fingerprint image: %s", e)
         return None
+
+
+def _flatten(img: Image.Image) -> Image.Image:
+    """RGB as the image looks: a transparent image (logos) is drawn on black.
+    convert("RGB") alone keeps the hidden colour under transparent pixels,
+    which any resize or re-save can change while the logo looks the same."""
+    if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+        rgba = img.convert("RGBA")
+        bg = Image.new("RGB", rgba.size, (0, 0, 0))
+        bg.paste(rgba, mask=rgba.getchannel("A"))
+        return bg
+    return img.convert("RGB")
+
+
+def recheck_art_fingerprints(force: bool = False) -> Dict[str, int]:
+    """Once after fingerprints started ignoring the colour under transparent
+    pixels: recompute stored logo/backdrop fingerprints from the kept sent
+    copies, and clear drift marks that no longer hold against the cached image.
+    (Shrinking the cache had made every logo look changed.)"""
+    marker = "drift_fp_alpha_v1"
+    out = {"recomputed": 0, "cleared": 0}
+    try:
+        with db.get_db() as conn:
+            cur = conn.cursor()
+            if not force and cur.execute("SELECT 1 FROM applied_migrations WHERE name = ?", (marker,)).fetchone():
+                return out
+            rows = cur.execute(
+                "SELECT server_id, rating_key, asset_type, fingerprint, drift_detected_at FROM poster_fingerprints "
+                "WHERE asset_type IN ('logo', 'backdrop')"
+            ).fetchall()
+        from .api import movies as m
+        for server_id, rating_key, asset_type, old_fp, drifted in rows:
+            fp = old_fp
+            sent = sent_copy_path(server_id, rating_key, asset_type)
+            if sent.exists():
+                new_fp = fingerprint(sent.read_bytes())
+                if new_fp and new_fp != old_fp:
+                    fp = new_fp
+                    out["recomputed"] += 1
+            clear = False
+            if drifted:
+                cached = m._logo_cache_path(rating_key) if asset_type == "logo" else m._art_cache_path(rating_key)
+                current = fingerprint(cached) if cached else None
+                clear = bool(current) and not compare(fp, current)["drift"]
+            if fp != old_fp or clear:
+                with db.get_db() as conn:
+                    if clear:
+                        conn.cursor().execute(
+                            """UPDATE poster_fingerprints SET fingerprint = ?, drift_detected_at = NULL, drift_score = NULL,
+                                 drift_action = NULL WHERE server_id = ? AND rating_key = ? AND asset_type = ?""",
+                            (fp, server_id, rating_key, asset_type))
+                        out["cleared"] += 1
+                    else:
+                        conn.cursor().execute(
+                            "UPDATE poster_fingerprints SET fingerprint = ? WHERE server_id = ? AND rating_key = ? AND asset_type = ?",
+                            (fp, server_id, rating_key, asset_type))
+        with db.get_db() as conn:
+            conn.cursor().execute("INSERT OR IGNORE INTO applied_migrations (name) VALUES (?)", (marker,))
+        if out["recomputed"] or out["cleared"]:
+            logger.info("[DRIFT] Logo/backdrop fingerprints updated: %d recomputed, %d false 'changed' marks cleared",
+                        out["recomputed"], out["cleared"])
+    except Exception as e:
+        logger.warning("[DRIFT] Couldn't recheck logo/backdrop fingerprints: %s", e)
+    return out
 
 
 def compare(a: str, b: str) -> Dict[str, Any]:
@@ -179,19 +243,82 @@ def record_sent(server_id: Optional[str], rating_key: Optional[str], image: Any,
         logger.debug("[DRIFT] Couldn't store %s fingerprint for %s: %s", asset_type, rating_key, e)
 
 
+def matches_sent(server_id: Optional[str], rating_key: Optional[str], image: Any,
+                 asset_type: str = "poster") -> Optional[bool]:
+    """Is this image what Simposter last sent to the item? True if it matches
+    the stored fingerprint (within re-encoding noise), False if it differs,
+    None when nothing was ever sent (no fingerprint) or the image can't be read.
+    Used by the overlay-only path (backend/overlay_only.py) so a poster
+    Simposter sent itself is never kept as the other app's clean copy."""
+    if not rating_key:
+        return None
+    try:
+        with db.get_db() as conn:
+            row = conn.execute(
+                "SELECT fingerprint FROM poster_fingerprints WHERE server_id = ? AND rating_key = ? AND asset_type = ?",
+                (server_id or "plex-1", str(rating_key), asset_type),
+            ).fetchone()
+        if not row or not row[0]:
+            return None
+        current = fingerprint(image)
+        if not current:
+            return None
+        return not compare(row[0], current)["drift"]
+    except Exception as e:
+        logger.debug("[DRIFT] matches_sent failed for %s: %s", rating_key, e)
+        return None
+
+
 # --------------------------------------------------------------------------
 # Checking after a scan
 # --------------------------------------------------------------------------
+
+def _clear_mark(server_id: str, rating_key: str, asset_type: str = "poster") -> None:
+    with db.get_db() as conn:
+        conn.execute("UPDATE poster_fingerprints SET drift_detected_at = NULL, drift_score = NULL, drift_action = NULL "
+                     "WHERE server_id = ? AND rating_key = ? AND asset_type = ?",
+                     (server_id, str(rating_key), asset_type))
+
+
+def poster_mode_for(server_id: str, rating_key: str) -> Tuple[str, Optional[int]]:
+    """(poster mode, season index) for a drift-tracked item. The season index
+    comes from Overlay Refresh tracking (None for a movie or show poster)."""
+    from . import poster_mode
+    season_index = None
+    try:
+        with db.get_db() as conn:
+            row = conn.execute("SELECT season_index FROM overlay_state WHERE server_id = ? AND rating_key = ? LIMIT 1",
+                               (server_id, str(rating_key))).fetchone()
+        if row and row[0] is not None and int(row[0]) >= 0:
+            season_index = int(row[0])
+    except Exception:
+        pass
+    mode = poster_mode.gate(server_id, str(rating_key), None, poster_mode.infer_is_tv(rating_key))
+    return mode, season_index
+
 
 def check_after_download(server_id: Optional[str], rating_key: str, poster_path: Any,
                          asset_type: str = "poster") -> Optional[Dict[str, Any]]:
     """Called by a scan right after it re-downloaded a poster/logo/backdrop
     whose version changed. Compares it with what Simposter last sent; marks
-    and handles a drift. Returns the drift info, or None."""
+    and handles a drift. Returns the drift info, or None.
+
+    Poster modes (posters only): leave_alone is never compared (and an old
+    mark is cleared); for overlay_only a difference is the other app's new
+    poster, so the overlays go back on it (overlay_only.on_external_poster)
+    instead of the configured action -- no mark, list entry or notification."""
     server_id = server_id or "plex-1"
     try:
+        poster_mode, season_index = ("full", None)
+        if asset_type == "poster":
+            poster_mode, season_index = poster_mode_for(server_id, rating_key)
+            if poster_mode == "leave_alone":
+                _clear_mark(server_id, rating_key)
+                return None
         action = get_action()
-        if action == "off":
+        # Overlay-only titles are checked even with the drift action off: it's
+        # how the other app's new poster gets its overlays back.
+        if action == "off" and poster_mode != "overlay_only":
             return None
         with db.get_db() as conn:
             cur = conn.cursor()
@@ -208,6 +335,11 @@ def check_after_download(server_id: Optional[str], rating_key: str, poster_path:
             return None
         result = compare(row[0], current)
         if not result["drift"]:
+            return None
+        if poster_mode == "overlay_only":
+            from . import overlay_only
+            _clear_mark(server_id, rating_key)
+            overlay_only.on_external_poster(server_id, str(rating_key), season_index)
             return None
         title = _title(rating_key)
         logger.debug("[DRIFT] %s for %s on %s was changed outside Simposter (difference %.1f, %d areas)",
@@ -337,6 +469,11 @@ def list_drifted() -> List[Dict[str, Any]]:
     for r in rows:
         r["title"] = _title(r["rating_key"])
         r["is_tv"] = _is_tv(r["rating_key"])
+        # For grouping by library group in History (a season maps to its show's library).
+        try:
+            r["library_id"] = db.get_library_id_for_rating_key(str(r["rating_key"]))
+        except Exception:
+            r["library_id"] = None
     return rows
 
 

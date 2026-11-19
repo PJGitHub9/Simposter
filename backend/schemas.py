@@ -31,11 +31,13 @@ class Movie(BaseModel):
                                           # fetch/send against a linked title's OTHER servers
                                           # directly, without a second API round-trip to
                                           # resolve which rating_key belongs to which server.
+    poster_mode: Optional[str] = "full"  # full | overlay_only | leave_alone for this library group
+    poster_mode_reason: Optional[str] = None  # "manual", 'plex label "X"', 'radarr tag "X"', or "" for the default
+    poster_mode_warning: Optional[str] = None  # set when the title dropped to Full because its rule stopped matching
 
 
 class MovieTMDbResponse(BaseModel):
     tmdb_id: Optional[int]
-
 
 
 class PreviewRequest(BaseModel):
@@ -69,6 +71,10 @@ class PreviewRequest(BaseModel):
     # a Jellyfin-specific issue. None (the default) preserves the exact
     # original guessing behavior for any caller that doesn't send this.
     is_tv: Optional[bool] = None
+    # TMDb id of an item with no media-server item (Template Manager's TMDb
+    # preview, the editor's Poster API mode). Only used when there's no
+    # rating_key, so overlays can still look up ratings, lists, studio, etc.
+    tmdb_id: Optional[int] = None
 
 
 class SaveRequest(PreviewRequest):
@@ -87,6 +93,13 @@ class PresetSaveRequest(BaseModel):
     name: Optional[str] = None
     options: Dict[str, Any]
     season_options: Optional[Dict[str, Any]] = None
+
+
+class PresetAddOverlaysRequest(BaseModel):
+    """Append overlays to a preset's movie/series overlay list (setup wizard)."""
+    template_id: str = "uniformlogo"
+    preset_id: str
+    config_ids: List[str]
 
 
 class PresetDeleteRequest(BaseModel):
@@ -140,11 +153,13 @@ class FanartSettings(BaseModel):
 
 class MDBListSettings(BaseModel):
     apiKey: str = ""
-    # Which MDBList rating fills the overlay fields audience_rating / critic_rating
-    # (0-10 scale, like Kometa's). Sources: imdb, tmdb, trakt, tomatoes,
-    # tomatoesaudience, metacritic, metacriticuser, letterboxd, myanimelist, score.
-    audienceRatingSource: str = "imdb"
-    criticRatingSource: str = "tomatoes"
+    # What fills the overlay fields audience_rating / critic_rating (0-10, like
+    # Kometa's): "server" (the first enabled media server that has a rating),
+    # "plex", "jellyfin" (Jellyfin or Emby), or an MDBList source: imdb, tmdb,
+    # trakt, tomatoes, tomatoesaudience, metacritic, metacriticuser, letterboxd,
+    # myanimelist, score. See server_ratings.py.
+    audienceRatingSource: str = "server"
+    criticRatingSource: str = "server"
     cacheDays: int = 7  # how long ratings and lists are reused before refetching
 
 
@@ -165,6 +180,11 @@ class FloppySettings(BaseModel):
     token: str = ""  # App token (Settings -> Integrations -> App tokens), scope lists:read
 
 
+class MaintainerrSettings(BaseModel):
+    url: str = ""     # e.g. http://192.168.1.10:6246 (a sub-path behind a proxy is fine)
+    apiKey: str = ""  # optional; Maintainerr's API doesn't check it, a proxy might
+
+
 class ImageQualitySettings(BaseModel):
     outputFormat: str = "jpg"  # jpg, png, webp
     jpgQuality: int = 95
@@ -182,7 +202,7 @@ class PerformanceSettings(BaseModel):
 
 _DEFAULT_CLEANUP_CATEGORIES = [
     "poster_cache", "logo_cache", "backdrop_cache", "square_art_cache",
-    "overlay_effect_cache", "uploaded_files", "overlay_assets", "poster_history",
+    "overlay_effect_cache", "uploaded_files", "overlay_assets", "poster_history", "poster_api_renders", "clean_base",
 ]
 
 
@@ -249,6 +269,7 @@ class NotificationSettings(BaseModel):
     discordNotifyAutoGenerate: bool = True
     discordNotifyMediaMirror: bool = True
     discordNotifyOverlayRefresh: bool = True
+    discordNotifyAppUpdates: bool = True
     appriseEnabled: bool = False
     appriseUrls: List[str] = Field(default_factory=list)
     appriseNotifyLibraries: List[str] = Field(default_factory=list)
@@ -258,6 +279,7 @@ class NotificationSettings(BaseModel):
     appriseNotifyAutoGenerate: bool = True
     appriseNotifyMediaMirror: bool = True
     appriseNotifyOverlayRefresh: bool = True
+    appriseNotifyAppUpdates: bool = True
 
 
 class LibraryGroupMember(BaseModel):
@@ -321,6 +343,27 @@ class OverlayRefreshConfig(BaseModel):
     lastRunStats: Optional[dict] = None
 
 
+class PosterModeRule(BaseModel):
+    """A per-group rule giving matching titles a poster mode (see poster_mode.py).
+    source "plex_label": a title whose Plex copy has this label.
+    source "arr_tag": a title with this tag in the group's linked Radarr/Sonarr
+    (LibraryGroup.arrInstanceId). Both case-insensitive."""
+    source: str = "plex_label"
+    value: str
+    mode: str  # overlay_only | leave_alone
+
+
+class ArrInstance(BaseModel):
+    """A Radarr or Sonarr connection (backend/arr_client.py). Read only: its
+    tags feed poster mode rules. apiKey is masked on read like media server keys."""
+    id: str
+    type: str  # "radarr" | "sonarr"
+    name: str = ""
+    url: str = ""
+    apiKey: str = ""
+    enabled: bool = True
+
+
 class LibraryGroup(BaseModel):
     """A user-defined set of libraries across different media servers that
     represent 'the same logical library' -- e.g. Plex 'Movies' + Jellyfin
@@ -366,6 +409,54 @@ class LibraryGroup(BaseModel):
     # and a collection with its own unique key is split from its title match.
     # Edited from the Collections page's "Collection matching" window.
     collectionMatchOverrides: Dict[str, str] = Field(default_factory=dict)
+    # Poster mode rules (plex_label -> overlay_only/leave_alone). Applied after
+    # every scan by poster_mode.evaluate_group(); manual modes win over them.
+    posterModeRules: List[PosterModeRule] = Field(default_factory=list)
+    # The Radarr (movie group) or Sonarr (show group) whose tags "arr_tag"
+    # rules read: an ArrInstance id from UISettings.arrInstances, or None.
+    arrInstanceId: Optional[str] = None
+
+
+class PosterApiSettings(BaseModel):
+    """Public poster API (/api/poster, /poster). Edited from the Poster API page."""
+    enabled: bool = False
+    key: str = ""  # empty = open access (a notice is shown in the UI)
+    defaultMoviePreset: str = ""  # uniformlogo preset id; "" = first preset
+    defaultTvPreset: str = ""
+    waitSeconds: int = 10  # how long a request waits for a render before 302 to TMDb (2-30)
+    retentionDays: int = 90  # rendered cache entries unserved this long are pruned
+    # Library group (LibraryGroup.id) a request uses when it names none: which
+    # library copy's poster is served and whose media info feeds overlay badges.
+    # "" = any library (Plex copy first).
+    movieGroup: str = ""
+    tvGroup: str = ""
+
+
+class PosterApiTarget(BaseModel):
+    """Identifies a Poster API cache entry (type accepts the public route's aliases)."""
+    type: str
+    tmdb_id: int
+    season: Optional[int] = None
+    preset: Optional[str] = None
+    group: Optional[str] = None  # library group id ("" / None = the default slot)
+
+
+class PosterApiClearRequest(PosterApiTarget):
+    source: Optional[str] = None  # rendered | pinned | library; None = every source
+
+
+class PosterApiBulkRequest(BaseModel):
+    """Regenerate or clear several Poster API tiles at once."""
+    action: str  # "regenerate" | "clear"
+    items: List[PosterApiClearRequest] = Field(default_factory=list)
+
+
+class PosterApiPinRequest(BaseModel):
+    type: str
+    tmdb_id: int
+    season: Optional[int] = None
+    title: str = ""
+    image_data: str  # data URL (data:image/...;base64,...)
 
 
 class UISettings(BaseModel):
@@ -390,9 +481,11 @@ class UISettings(BaseModel):
     tvdb: TVDBSettings = Field(default_factory=TVDBSettings)
     fanart: FanartSettings = Field(default_factory=FanartSettings)
     mdblist: MDBListSettings = Field(default_factory=MDBListSettings)
+    posterApi: PosterApiSettings = Field(default_factory=PosterApiSettings)
     wetrakr: WeTrakrSettings = Field(default_factory=WeTrakrSettings)
     simkl: SimklSettings = Field(default_factory=SimklSettings)
     floppy: FloppySettings = Field(default_factory=FloppySettings)
+    maintainerr: MaintainerrSettings = Field(default_factory=MaintainerrSettings)
     imageQuality: ImageQualitySettings = Field(default_factory=ImageQualitySettings)
     performance: PerformanceSettings = Field(default_factory=PerformanceSettings)
     scheduler: SchedulerSettings = Field(default_factory=SchedulerSettings)
@@ -402,6 +495,7 @@ class UISettings(BaseModel):
     onboarding_completed: bool = False
     mediaServers: List[MediaServerEntry] = Field(default_factory=list)
     libraryGroups: List[LibraryGroup] = Field(default_factory=list)
+    arrInstances: List[ArrInstance] = Field(default_factory=list)
 
 class PlexLogoSendRequest(BaseModel):
     rating_key: str
@@ -480,6 +574,7 @@ class MovieBatchRequest(BaseModel):
     # textless, regardless of fallbackPosterAction -- set only when resolving a manually-queued
     # RETRY_REASON_MANUAL_TEXTLESS retry item (database.py), since the ordinary needs_retry check
     # doesn't catch a missing textless poster when fallbackPosterAction is "continue" (the default).
+    include_leave_alone: bool = False  # Poster modes: also process titles set to Leave alone (an explicit override)
     batch_subfolder: Optional[str] = None  # Server-computed once per batch run; any client value is overwritten
     targets: List[str] = []  # Non-Plex server_ids to ALSO sync the rendered poster/logo to, in
     # addition to whatever send_to_plex already does (or doesn't) -- purely additive, does not
@@ -519,6 +614,7 @@ class TVShowBatchRequest(BaseModel):
     send_logos_to_plex: bool = False
     send_only_if_ideal: bool = False  # Skip Plex upload if the render still needs_retry (used by the retry queue)
     require_textless_poster: bool = False  # See MovieBatchRequest's field of the same name.
+    include_leave_alone: bool = False  # Poster modes: also process titles set to Leave alone (an explicit override)
     batch_subfolder: Optional[str] = None  # Server-computed once per batch run; any client value is overwritten
     targets: List[str] = []  # See MovieBatchRequest.targets -- covers both series- and season-level
     # posters/logos (JellyfinClient gained real season-level item resolution in Quirk #100; the
@@ -597,10 +693,12 @@ class OverlayElement(BaseModel):
     stroke_width: Optional[float] = None
     stroke_color: Optional[str] = None
     box_only: Optional[bool] = None  # Kometa "backdrop": draw only the back box
+    countdown_to: Optional[str] = None  # {countdown} target: YYYY-MM-DD (fixed) or MM-DD (yearly)
     font_style: Optional[str] = None  # Named style of a variable font (Kometa font_style)
     # Image drawn next to a text layer (Kometa text addon); the image is asset_id/url
     addon_position: Optional[str] = None  # left | right | top | bottom
     addon_offset: Optional[float] = None  # gap between text and image, Kometa px
+    addon_align: Optional[str] = None  # start | center | end: cross-axis alignment, default center (Kometa)
     addon_scale: Optional[float] = None
     blur_amount: Optional[float] = None  # type "blur": Kometa blur(N), 1-100
     # Kometa queue: selected layers take these positions, highest weight first
@@ -615,6 +713,8 @@ class OverlayConfigSaveRequest(BaseModel):
     streaming_region: str = "US"  # ISO 3166-1 alpha-2 region for TMDb watch provider lookups
     # Conditions for the whole overlay: when any fails, none of its layers draw.
     conditions: Optional[List[Dict[str, Any]]] = None
+    # Notes / credits shown with the overlay (None keeps the stored ones).
+    notes: Optional[str] = None
 
 
 class OverlayConfigDeleteRequest(BaseModel):
@@ -631,12 +731,6 @@ class OverlayAssetUploadRequest(BaseModel):
 
 class OverlayAssetDeleteRequest(BaseModel):
     id: str
-
-
-class PresetOverlayLinkRequest(BaseModel):
-    template_id: str
-    preset_id: str
-    overlay_config_id: Optional[str] = None
 
 
 # Radarr webhook schemas removed

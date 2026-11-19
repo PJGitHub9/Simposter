@@ -76,9 +76,9 @@ def owns(key: str) -> bool:
 
 def missing_setup(key: str) -> Optional[str]:
     if not _client_id():
-        return "no SIMKL client id in Settings > General"
+        return "no SIMKL client id in Settings > Ratings & Lists"
     if not _auth().get("access_token"):
-        return "SIMKL isn't connected (Settings > General > Connect account)"
+        return "SIMKL isn't connected (Settings > Ratings & Lists > Connect account)"
     return None
 
 

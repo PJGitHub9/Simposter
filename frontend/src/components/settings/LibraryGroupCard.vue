@@ -25,7 +25,32 @@
           </svg>
         </button>
       </template>
+      <button type="button" class="edit-toggle" :aria-expanded="expanded" @click="expanded = !expanded">
+        {{ expanded ? 'Done' : 'Edit' }}
+      </button>
     </div>
+
+    <!-- Collapsed: one summary line per group, so a page with several groups
+         stays short. Edit opens every setting below. -->
+    <div v-if="!expanded" class="group-summary">
+      <div class="summary-servers">
+        <span
+          v-for="m in summaryMembers"
+          :key="`${m.serverId}:${m.libraryId}`"
+          class="summary-chip"
+          :class="{ 'chip-broken': !memberAvailable(m) }"
+        >
+          <span class="summary-type" :class="serverTypeFor(m.serverId)">{{ serverTypeFor(m.serverId) }}</span>
+          {{ memberLibraryName(m) }}
+        </span>
+        <span v-if="!group.members.length" class="summary-muted">No libraries linked yet</span>
+      </div>
+      <p class="summary-text">
+        <span v-for="(part, i) in summaryParts" :key="i" :class="{ 'summary-warn': part.warn }">{{ part.text }}</span>
+      </p>
+    </div>
+
+    <template v-if="expanded">
 
     <!-- One row per server type (Plex, Jellyfin, Emby), all identical: a chip
          per linked library ("Server name: Library") with an ✕ to unlink, or
@@ -61,7 +86,7 @@
           </optgroup>
         </select>
       </div>
-      <p class="link-hint">Picking a library links it immediately — click Save Changes to keep it.</p>
+      <p class="link-hint">Picking a library adds it to this group. Click Save Changes to keep it.</p>
       <p v-if="!pickerGroups.length && !group.members.length" class="no-labels-hint">
         No media servers configured yet, or none reachable — add one in Settings → Media Servers.
       </p>
@@ -78,12 +103,12 @@
       <label class="checkbox-label">
         <input type="checkbox" :checked="mergeEnabled" @change="onMergeToggle" />
         <span>Merge items found on more than one linked server into a single poster</span>
-        <span v-if="mergeUnsaved" class="unsaved-dot" :title="mergeSaveFailed ? 'Could not save -- check your connection, or use Save Changes below' : 'Not saved yet'">● Unsaved</span>
+        <span v-if="mergeUnsaved" class="unsaved-dot" title="Not saved yet">● Unsaved</span>
       </label>
       <span class="help-text">
         On (default): the same movie/show on Plex and Jellyfin shows as one card, using whichever server the grid's "Show posters from" preference picks.
         Off: each linked server's own copy shows as its own separate card.
-        Applies immediately to the Movies/TV grid -- no need to click Save Changes.
+        Takes effect on the Movies/TV grid after you click Save Changes.
       </span>
     </div>
 
@@ -110,31 +135,77 @@
       </div>
     </div>
 
-    <!-- Webhook ignore labels -- Plex-only (no Jellyfin/Emby label mechanism
-         exists, Quirk #59/#93), only shown once this group has a Plex member. -->
-    <div v-if="plexMember" class="webhook-ignore-section">
+    <!-- The Radarr (movies) / Sonarr (TV) whose tags this group's rules can read. -->
+    <div v-if="hasAnyMember && (arrChoices.length || group.arrInstanceId)" class="arr-link">
       <label>
-        <span class="label-text">Webhook Ignore Labels <span class="plex-only-tag">Plex only</span></span>
-        <span class="help-text">Items with these labels will be skipped when webhooks trigger poster generation</span>
+        <span class="label-text">{{ arrLabel }} for this group</span>
+        <select :value="group.arrInstanceId || ''" @change="onArrChange(($event.target as HTMLSelectElement).value)">
+          <option value="">None</option>
+          <option v-for="inst in arrChoices" :key="inst.id" :value="inst.id">{{ inst.name || inst.url }}{{ inst.enabled === false ? ' (disabled)' : '' }}</option>
+        </select>
+        <span class="help-text">Lets a poster mode rule use a {{ arrLabel }} tag (for example one Aura adds). Simposter only reads tags.</span>
       </label>
-      <div v-if="availableLabels.length > 0" class="ignore-labels-grid">
+    </div>
+
+    <!-- Poster mode rules: a Plex label or a Radarr/Sonarr tag gives a title
+         Overlay only / Leave alone. Shown when the group has a source for one. -->
+    <PosterModeRules
+      v-if="plexMember || group.arrInstanceId || (group.posterModeRules || []).length"
+      :group-id="group.id"
+      :rules="group.posterModeRules || []"
+      :available-labels="availableLabels"
+      :has-plex="!!plexMember"
+      :arr-label="arrLabel"
+      :arr-instance-id="arrLinkedId"
+      @update:rules="onRulesChange"
+    />
+
+    <!-- Plex labels removed when a poster is sent to this group's Plex library
+         (moved here from the Libraries page). "Overlay" is always removed while
+         Kometa compatibility is on. -->
+    <div v-if="plexMember" class="labels-section">
+      <div class="labels-head">
+        <span class="label-text">Labels to remove when sending to Plex</span>
+        <button type="button" class="link-btn" :disabled="labelsLoading" @click="emit('refresh-labels')">
+          {{ labelsLoading ? 'Loading…' : 'Refresh labels' }}
+        </button>
+      </div>
+      <div v-if="labelChoices.length" class="labels-grid">
         <label
-          v-for="label in availableLabels"
-          :key="`ignore-${mapping?.id}-${label}`"
-          class="label-checkbox ignore-label-checkbox"
+          v-for="label in labelChoices"
+          :key="label"
+          class="label-checkbox"
+          :class="{ locked: isKometaLocked(label) }"
+          :title="isKometaLocked(label) ? 'Always removed while Kometa compatibility is on (Settings → Libraries)' : undefined"
         >
           <input
             type="checkbox"
-            :checked="(mapping?.webhookIgnoreLabels || []).includes(label)"
-            @change="emit('toggle-ignore-label', label)"
+            :checked="isKometaLocked(label) || removeLabels.includes(label)"
+            :disabled="isKometaLocked(label)"
+            @change="emit('toggle-label', label)"
           />
           <span>{{ label }}</span>
         </label>
       </div>
-      <p v-else class="no-labels-hint">
-        No labels available. Scan the library and click "Refresh Labels" in the Labels section below.
-      </p>
+      <p v-else class="help-text">No labels found in this Plex library yet. Scan it, then click Refresh labels.</p>
     </div>
+
+    <!-- Settings for this group that live on its own pages (Media Mirror,
+         Overlay Refresh), shown here so they aren't missed. Read-only. -->
+    <div v-if="status && hasAnyMember && groupSaved" class="group-status">
+      <div class="group-status-row">
+        <span class="group-status-name">Media Mirror</span>
+        <span class="group-status-text">{{ mirrorSummary }}</span>
+        <router-link :to="pageLink('media-mirror')" class="group-status-link">Open</router-link>
+      </div>
+      <div class="group-status-row">
+        <span class="group-status-name">Overlay Refresh</span>
+        <span class="group-status-text">{{ refreshSummary }}</span>
+        <router-link :to="pageLink('overlay-refresh')" class="group-status-link">Open</router-link>
+      </div>
+    </div>
+
+    </template>
 
     <div class="library-actions">
       <!-- One Scan button for every group, disabled while ANY scan is running
@@ -150,7 +221,7 @@
       >
         {{ thisGroupScanning ? 'Scanning...' : 'Scan' }}
       </button>
-      <button @click="removeGroup" class="remove-btn">Remove Group</button>
+      <button v-if="expanded" @click="removeGroup" class="remove-btn">Remove Group</button>
     </div>
     <p v-if="scanError" class="scan-error">{{ scanError }}</p>
   </div>
@@ -171,8 +242,27 @@
 // (CLAUDE.md's own documented, deliberate scope limit -- rewiring those
 // consumers to LibraryGroup directly is real, separate, larger work).
 import { computed, nextTick, ref, watch } from 'vue'
-import { useSettingsStore, type LibraryGroup, type LibraryGroupMember } from '@/stores/settings'
+import { KOMETA_LABEL } from '@/services/labelsToRemove'
+import { useSettingsStore, type LibraryGroup, type LibraryGroupMember, type PosterModeRule } from '@/stores/settings'
 import { mediaServerLabel } from '@/services/mediaServerLabel'
+import PosterModeRules from './PosterModeRules.vue'
+
+interface GroupStatus {
+  mirror: {
+    enabled: boolean
+    sourceServerId: string | null
+    targetServerIds: string[]
+    scheduleEnabled: boolean
+    lastRunAt: string | null
+    nextRun: string | null
+  }
+  overlayRefresh: {
+    enabled: boolean
+    scheduleCron: string
+    lastRunAt: string | null
+    nextRun: string | null
+  }
+}
 import { getApiBase } from '@/services/apiBase'
 import { useScanStore } from '@/stores/scan'
 
@@ -195,7 +285,6 @@ interface LibraryMapping {
   autoGenerateEnabled?: boolean
   autoGeneratePresetId?: string | null
   autoGenerateTemplateId?: string | null
-  webhookIgnoreLabels?: string[]
 }
 interface Preset {
   id: string
@@ -221,7 +310,103 @@ const props = defineProps<{
   // on specific fields (currently just "Merge items") -- the live `group`
   // prop above is always the current, possibly-unsaved, editable value.
   initialGroup?: LibraryGroup | null
+  // Media Mirror / Overlay Refresh status from /api/media-server/library-groups/status.
+  status?: GroupStatus | null
+  // Labels ticked for this group's Plex library, and the Kometa compatibility
+  // setting (which always adds "Overlay").
+  removeLabels?: string[]
+  kometaCompatibility?: boolean
+  labelsLoading?: boolean
 }>()
+
+// Status line helpers (Media Mirror / Overlay Refresh).
+const groupSaved = computed(() => !!props.initialGroup)
+
+// Collapsed to a summary by default; a new group with nothing linked opens
+// straight away, since there's nothing to summarize yet.
+const expanded = ref(!props.group.members.length)
+
+// Label checklist: the library's own labels, plus "Overlay" (shown ticked and
+// locked) while Kometa compatibility is on, even if no item has it yet.
+const removeLabels = computed(() => props.removeLabels || [])
+const isKometaLocked = (label: string) => !!props.kometaCompatibility && label === KOMETA_LABEL
+const labelChoices = computed(() => {
+  const set = new Set<string>(props.availableLabels || [])
+  removeLabels.value.forEach(l => set.add(l))
+  if (props.kometaCompatibility) set.add(KOMETA_LABEL)
+  return [...set].sort((a, b) => a.localeCompare(b))
+})
+
+// Plex, then Jellyfin, then Emby, as in the edit view.
+const summaryMembers = computed(() => {
+  const order = ['plex', 'jellyfin', 'emby']
+  const rank = (m: LibraryGroupMember) => { const i = order.indexOf(serverTypeFor(m.serverId)); return i === -1 ? 9 : i }
+  return [...props.group.members].sort((x, y) => rank(x) - rank(y))
+})
+
+const summaryParts = computed<{ text: string; warn?: boolean }[]>(() => {
+  const parts: { text: string; warn?: boolean }[] = []
+  if (props.group.members.some(m => !memberAvailable(m))) {
+    parts.push({ text: 'A linked server is missing or disabled', warn: true })
+  }
+  if (autoGenEnabled.value) {
+    const preset = props.allPresets.find(p => p.id === presetValue.value)
+    parts.push(preset
+      ? { text: `Auto-generate: ${preset.name}` }
+      : { text: 'Auto-generate on, no preset picked', warn: true })
+  } else {
+    parts.push({ text: 'Auto-generate off' })
+  }
+  if (hasMultipleMembers.value && !mergeEnabled.value) parts.push({ text: 'Not merged' })
+  if (plexMember.value) {
+    const n = new Set([...(props.removeLabels || []), ...(props.kometaCompatibility ? [KOMETA_LABEL] : [])]).size
+    if (n) parts.push({ text: `Removes ${n} Plex label${n === 1 ? '' : 's'}` })
+  }
+  const rules = (props.group.posterModeRules || []).length
+  if (rules) parts.push({ text: `${rules} poster mode rule${rules === 1 ? '' : 's'}` })
+  return parts
+})
+
+const whenText = (iso: string | null): string => {
+  if (!iso) return ''
+  const t = new Date(iso).getTime()
+  if (Number.isNaN(t)) return ''
+  const mins = Math.round((Date.now() - t) / 60000)
+  const ago = Math.abs(mins)
+  const span = ago < 60 ? `${ago} min` : ago < 48 * 60 ? `${Math.round(ago / 60)} h` : `${Math.round(ago / 1440)} days`
+  return mins >= 0 ? `${span} ago` : `in ${span}`
+}
+
+const serverName = (id: string | null) => (id ? mediaServerLabel(id, settingsStore.mediaServers.value) : '?')
+
+const mirrorSummary = computed(() => {
+  const m = props.status?.mirror
+  if (!m || !m.enabled) return 'Off'
+  const parts = [`${serverName(m.sourceServerId)} → ${m.targetServerIds.map(serverName).join(', ') || '?'}`]
+  parts.push(m.scheduleEnabled ? (m.nextRun ? `next run ${whenText(m.nextRun)}` : 'scheduled') : 'manual runs only')
+  if (m.lastRunAt) parts.push(`last run ${whenText(m.lastRunAt)}`)
+  return parts.join(' · ')
+})
+
+const refreshSummary = computed(() => {
+  const r = props.status?.overlayRefresh
+  if (!r || !r.enabled) return r?.lastRunAt ? `No schedule · last run ${whenText(r.lastRunAt)}` : 'No schedule'
+  const parts = [r.nextRun ? `next run ${whenText(r.nextRun)}` : 'scheduled']
+  if (r.lastRunAt) parts.push(`last run ${whenText(r.lastRunAt)}`)
+  return parts.join(' · ')
+})
+
+// Same library/server pair the sidebar uses for this group's pages: the
+// Plex library when the group has one, else its first library + server.
+const pageLink = (page: 'media-mirror' | 'overlay-refresh') => {
+  const name = props.mediaType === 'tv' ? `tv-${page}` : page
+  const plex = props.group.members.find(m => m.serverId === 'plex-1')
+  const first = props.group.members[0]
+  const query: Record<string, string> = plex
+    ? { library: plex.libraryId }
+    : first ? { library: first.libraryId, server: first.serverId } : {}
+  return { name, query }
+}
 
 const emit = defineEmits<{
   // Parent creates the corresponding mapping-array entry.
@@ -230,13 +415,14 @@ const emit = defineEmits<{
   // plex-1 member, and deletes the group entirely if it's now empty.
   'unlink-plex': []
   'update:mapping': [patch: Partial<LibraryMapping>]
-  'toggle-ignore-label': [label: string]
   'scan-plex': []
   // Only emitted when a Plex member exists -- parent confirms (if saved),
   // splices the mapping entry, then deletes the whole group. A Plex-less
   // group's removal is handled entirely inside this component instead
   // (no mapping-array entry to coordinate).
   'remove-group': []
+  'toggle-label': [label: string]
+  'refresh-labels': []
 }>()
 
 const settingsStore = useSettingsStore()
@@ -397,56 +583,35 @@ function stopEditingName() {
 const hasAnyMember = computed(() => props.group.members.length > 0)
 const hasMultipleMembers = computed(() => props.group.members.length > 1)
 const mergeEnabled = computed(() => props.group.mergeItems !== false)
-// Auto-saves immediately, matching the sibling "Show posters from" control
-// on the Movies/TV grid toolbar (Quirk #85) -- unlike every other field on
-// this card, this one can't wait for Settings' own page-wide Save button,
-// since forgetting to click it (or dismissing the "unsaved changes" confirm
-// dialog the wrong way when navigating off Settings) would otherwise leave
-// the Movies/TV grid silently out of sync with what the checkbox shows.
-// `mergeSavedOverride` tracks what was actually confirmed persisted this
-// session, independent of `initialGroup` (a prop only refreshed on a full
-// Settings mount) -- `mergeSaveFailed` covers the rare case the background
-// POST itself fails (offline, etc.), in which case the local store edit
-// still applies (nothing is lost), it just isn't confirmed saved yet; the
-// page's own Save Changes button remains a working fallback either way.
-const mergeSavedOverride = ref<boolean | null>(null)
-const mergeSaveFailed = ref(false)
-async function onMergeToggle(e: Event) {
+// Staged like every other field on this card: the page-wide Save sends it
+// (libraryGroups is in SettingsView's unsaved-changes diff, so the section
+// turns yellow). The dot marks it against the last-saved group.
+function onMergeToggle(e: Event) {
   const checked = (e.target as HTMLInputElement).checked
   groups.value = groups.value.map(g => g.id === props.group.id ? { ...g, mergeItems: checked } : g)
-  const anyMember = props.group.members[0]
-  if (!anyMember) return // a brand-new group with no members yet has nothing to resolve server-side
-  mergeSaveFailed.value = false
-  try {
-    const res = await fetch(`${apiBase}/api/media-server/library-group/merge-items`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        server_id: anyMember.serverId,
-        library_id: anyMember.libraryId,
-        media_type: props.mediaType,
-        merge_items: checked,
-      }),
-    })
-    if (res.ok) {
-      mergeSavedOverride.value = checked
-    } else {
-      mergeSaveFailed.value = true
-    }
-  } catch {
-    mergeSaveFailed.value = true
-  }
 }
-// Shows a small dot next to the checkbox whenever it differs from what's
-// actually confirmed persisted -- normally cleared the instant the
-// auto-save above succeeds, so this only lingers for the two edge cases
-// noted above (a brand-new group with no members, or a failed save).
-// `initialGroup` is null for a brand-new group, which never counts as
-// "unsaved" here -- the whole-section yellow border already covers "a new
-// group exists at all."
+// Radarr for a movie group, Sonarr for a TV group.
+const arrType = computed(() => (props.group.mediaType === 'tv' ? 'sonarr' : 'radarr'))
+const arrLabel = computed(() => (arrType.value === 'sonarr' ? 'Sonarr' : 'Radarr'))
+const arrChoices = computed(() =>
+  // Enabled ones, plus the linked one even when it is disabled (so the select still shows it).
+  settingsStore.arrInstances.value.filter(
+    i => i.type === arrType.value && (i.enabled !== false || i.id === props.group.arrInstanceId),
+  ),
+)
+// The linked instance, only while it still exists in the list.
+const arrLinkedId = computed(() => {
+  const id = props.group.arrInstanceId
+  return id && settingsStore.arrInstances.value.some(i => i.id === id && i.type === arrType.value) ? id : null
+})
+function onArrChange(value: string) {
+  groups.value = groups.value.map(g => g.id === props.group.id ? { ...g, arrInstanceId: value || null } : g)
+}
+// Poster mode rules are staged like the other group fields; the page-wide Save sends them.
+function onRulesChange(rules: PosterModeRule[]) {
+  groups.value = groups.value.map(g => g.id === props.group.id ? { ...g, posterModeRules: rules } : g)
+}
 const mergeUnsaved = computed(() => {
-  if (mergeSaveFailed.value) return true
-  if (mergeSavedOverride.value !== null) return mergeEnabled.value !== mergeSavedOverride.value
   if (!props.initialGroup) return false
   return mergeEnabled.value !== (props.initialGroup.mergeItems !== false)
 })
@@ -601,6 +766,101 @@ function removeGroup() {
   transition: all 0.2s;
 }
 .icon-btn:hover { color: var(--accent); background: rgba(255, 255, 255, 0.06); }
+.edit-toggle {
+  margin-left: auto;
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+.edit-toggle:hover { border-color: var(--accent); color: var(--accent); }
+.group-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.summary-servers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.summary-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 4px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 0.85rem;
+}
+.summary-chip.chip-broken { border-color: rgba(255, 107, 107, 0.5); }
+.summary-type {
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  background: rgba(255, 255, 255, 0.08);
+}
+.summary-type.plex { color: #e5a00d; background: rgba(229, 160, 13, 0.14); }
+.summary-type.jellyfin { color: #aa5cc3; background: rgba(170, 92, 195, 0.14); }
+.summary-type.emby { color: #52b54b; background: rgba(82, 181, 75, 0.14); }
+.summary-muted { color: var(--text-secondary); font-size: 0.85rem; }
+.summary-text {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  color: var(--text-secondary);
+  font-size: 0.83rem;
+}
+.summary-warn { color: #ffb86b; }
+.labels-section {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.labels-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+.link-btn:disabled { opacity: 0.5; cursor: default; }
+.labels-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 6px;
+}
+.label-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 0.85rem;
+  cursor: pointer;
+  min-width: 0;
+}
+.label-checkbox span { overflow: hidden; text-overflow: ellipsis; }
+.label-checkbox.locked { opacity: 0.75; cursor: default; }
 
 .linked-card {
   border: 1px solid rgba(255, 255, 255, 0.05);
@@ -710,6 +970,28 @@ function removeGroup() {
 }
 .merge-toggle-section .help-text { margin-left: 24px; margin-top: 4px; }
 
+.arr-link {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.arr-link label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.arr-link select {
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+  font-size: 13px;
+  max-width: 360px;
+}
+
 .auto-gen-section {
   margin-top: 14px;
   padding-top: 14px;
@@ -743,31 +1025,6 @@ function removeGroup() {
   vertical-align: middle;
   margin-left: 4px;
 }
-
-.webhook-ignore-section {
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
-}
-.webhook-ignore-section > label { margin-bottom: 10px; }
-.ignore-labels-grid { display: flex; flex-wrap: wrap; gap: 8px; }
-.ignore-label-checkbox {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  background: rgba(255, 107, 107, 0.08);
-  border: 1px solid rgba(255, 107, 107, 0.2);
-  padding: 4px 10px;
-  border-radius: 6px;
-  font-size: 12px;
-  transition: all 0.2s;
-  cursor: pointer;
-}
-.ignore-label-checkbox:has(input:checked) {
-  background: rgba(255, 107, 107, 0.2);
-  border-color: rgba(255, 107, 107, 0.5);
-}
-.ignore-label-checkbox:hover { border-color: rgba(255, 107, 107, 0.4); }
 
 .no-labels-hint {
   font-size: 12px;
@@ -821,4 +1078,38 @@ function removeGroup() {
   margin: 0;
   padding: 0 12px 10px;
 }
+
+.group-status {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 10px 0 4px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 0.8rem;
+}
+.group-status-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.group-status-name {
+  flex: 0 0 110px;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.group-status-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-secondary, #9aa4b2);
+}
+.group-status-link {
+  color: var(--accent, #3dd6b7);
+  text-decoration: none;
+  font-weight: 600;
+}
+.group-status-link:hover { text-decoration: underline; }
 </style>

@@ -3,8 +3,10 @@ import { useSettingsStore, type Theme } from '../stores/settings'
 import { APP_VERSION } from '@/version'
 import { useMovies } from '../composables/useMovies'
 import { ref, onMounted, watch, computed, onBeforeUnmount, nextTick } from 'vue'
+import { reevaluatePosterModes, ruleMatchCounts } from '@/services/posterModes'
 import { getApiBase } from '@/services/apiBase'
 import { useScanStore } from '@/stores/scan'
+import { useServerless } from '@/composables/useServerless'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { setSessionStorage, getSessionStorage } from '../composables/useSessionStorage'
 import { onboardingJustSaved } from '@/composables/useOnboardingLauncher'
@@ -28,7 +30,6 @@ interface LibraryMapping {
   autoGenerateEnabled?: boolean
   autoGeneratePresetId?: string | null
   autoGenerateTemplateId?: string | null
-  webhookIgnoreLabels?: string[]
 }
 
 interface PlexLibrary {
@@ -43,6 +44,7 @@ interface Movie {
 }
 
 const settings = useSettingsStore()
+const { serverless } = useServerless()
 const saved = ref('')
 const allLibraryLabels = ref<Record<string, { type: 'movie' | 'show'; name: string; labels: string[] }>>({})
 const labelsLoading = ref(false)
@@ -52,7 +54,7 @@ const route = useRoute()
 const router = useRouter()
 
 // Active tab state - initialize from URL or default to 'general'
-const activeTab = ref<'general' | 'libraries' | 'media-servers' | 'output' | 'performance' | 'automation' | 'notifications' | 'advanced' | 'cleanup'>(
+const activeTab = ref<'general' | 'ratings' | 'libraries' | 'media-servers' | 'output' | 'performance' | 'automation' | 'notifications' | 'advanced' | 'cleanup'>(
   (route.query.tab as any) || 'general'
 )
 
@@ -86,7 +88,20 @@ const sectionsWithChanges = ref({
   // the untouched Plex/Emby sections too.
   mediaServersPlex: false,
   mediaServersJellyfin: false,
-  mediaServersEmby: false
+  mediaServersEmby: false,
+  arrRadarr: false,
+  arrSonarr: false,
+  // One flag per Settings section, all computed in checkForChanges() from the
+  // saved snapshot (so a value changed back to what's saved clears it again).
+  libraryDisplay: false,
+  ratings: false,
+  logoDefaults: false,
+  labels: false,
+  discord: false,
+  apprise: false,
+  cleanupSchedule: false,
+  rateLimits: false,
+  posterApi: false,
 })
 
 // Cooldown state to prevent rapid clicking
@@ -190,6 +205,7 @@ const localDiscordNotifyManual = ref(true)
 const localDiscordNotifyWebhook = ref(true)
 const localDiscordNotifyAutoGenerate = ref(true)
 const localDiscordNotifyMediaMirror = ref(true)
+const localDiscordNotifyAppUpdates = ref(true)
 const localDiscordNotifyOverlayRefresh = ref(true)
 const localAppriseEnabled = ref(false)
 const localAppriseUrls = ref<string[]>([])
@@ -199,6 +215,7 @@ const localAppriseNotifyManual = ref(true)
 const localAppriseNotifyWebhook = ref(true)
 const localAppriseNotifyAutoGenerate = ref(true)
 const localAppriseNotifyMediaMirror = ref(true)
+const localAppriseNotifyAppUpdates = ref(true)
 const localAppriseNotifyOverlayRefresh = ref(true)
 
 // API key testing
@@ -352,6 +369,7 @@ const loadLocalSettings = async () => {
   localDiscordNotifyWebhook.value = settings.notifications?.value?.discordNotifyWebhook ?? true
   localDiscordNotifyAutoGenerate.value = settings.notifications?.value?.discordNotifyAutoGenerate ?? true
   localDiscordNotifyMediaMirror.value = settings.notifications?.value?.discordNotifyMediaMirror ?? true
+  localDiscordNotifyAppUpdates.value = settings.notifications?.value?.discordNotifyAppUpdates ?? true
   localDiscordNotifyOverlayRefresh.value = settings.notifications?.value?.discordNotifyOverlayRefresh ?? true
   localAppriseEnabled.value = settings.notifications?.value?.appriseEnabled ?? false
   localAppriseUrls.value = settings.notifications?.value?.appriseUrls ?? []
@@ -361,6 +379,7 @@ const loadLocalSettings = async () => {
   localAppriseNotifyWebhook.value = settings.notifications?.value?.appriseNotifyWebhook ?? true
   localAppriseNotifyAutoGenerate.value = settings.notifications?.value?.appriseNotifyAutoGenerate ?? true
   localAppriseNotifyMediaMirror.value = settings.notifications?.value?.appriseNotifyMediaMirror ?? true
+  localAppriseNotifyAppUpdates.value = settings.notifications?.value?.appriseNotifyAppUpdates ?? true
   localAppriseNotifyOverlayRefresh.value = settings.notifications?.value?.appriseNotifyOverlayRefresh ?? true
 
   await nextTick()
@@ -417,6 +436,7 @@ const captureSettingsSnapshot = () => {
     retryIntervalHours: localRetryIntervalHours.value,
     retryMaxAttempts: localRetryMaxAttempts.value,
     reuseCachedPosterDays: localReuseCachedPosterDays.value,
+    sendLogosToPlex: localSendLogosToPlex.value,
     discordEnabled: localDiscordEnabled.value,
     discordWebhookUrl: localDiscordWebhookUrl.value,
     discordNotifyLibraries: localDiscordNotifyLibraries.value,
@@ -425,6 +445,7 @@ const captureSettingsSnapshot = () => {
     discordNotifyWebhook: localDiscordNotifyWebhook.value,
     discordNotifyAutoGenerate: localDiscordNotifyAutoGenerate.value,
     discordNotifyMediaMirror: localDiscordNotifyMediaMirror.value,
+    discordNotifyAppUpdates: localDiscordNotifyAppUpdates.value,
     discordNotifyOverlayRefresh: localDiscordNotifyOverlayRefresh.value,
     appriseEnabled: localAppriseEnabled.value,
     appriseUrls: localAppriseUrls.value,
@@ -434,6 +455,7 @@ const captureSettingsSnapshot = () => {
     appriseNotifyWebhook: localAppriseNotifyWebhook.value,
     appriseNotifyAutoGenerate: localAppriseNotifyAutoGenerate.value,
     appriseNotifyMediaMirror: localAppriseNotifyMediaMirror.value,
+    appriseNotifyAppUpdates: localAppriseNotifyAppUpdates.value,
     appriseNotifyOverlayRefresh: localAppriseNotifyOverlayRefresh.value,
     // mediaServers/preferredPosterServer/libraryGroups are bound directly to
     // the store (no local staging ref, unlike everything else here -- Quirk
@@ -442,12 +464,16 @@ const captureSettingsSnapshot = () => {
     mediaServers: JSON.parse(JSON.stringify(settings.mediaServers.value)),
     preferredPosterServer: settings.automation.value.preferredPosterServer,
     libraryGroups: JSON.parse(JSON.stringify(settings.libraryGroups.value)),
+    arrInstances: JSON.parse(JSON.stringify(settings.arrInstances.value)),
     // MDBList (GeneralTab) is bound directly to the store too.
     mdblist: JSON.parse(JSON.stringify(settings.mdblist.value)),
     // WeTrakr / SIMKL / Floppy list sources (GeneralTab), also bound to the store.
     wetrakr: JSON.parse(JSON.stringify(settings.wetrakr.value)),
     simkl: JSON.parse(JSON.stringify(settings.simkl.value)),
-    floppy: JSON.parse(JSON.stringify(settings.floppy.value))
+    floppy: JSON.parse(JSON.stringify(settings.floppy.value)),
+    maintainerr: JSON.parse(JSON.stringify(settings.maintainerr.value)),
+    // Poster API on/off (MediaServersTab), bound to the store.
+    posterApiEnabled: !!settings.posterApi.value.enabled
   })
   hasUnsavedChanges.value = false
 
@@ -465,6 +491,11 @@ const captureSettingsSnapshot = () => {
   sectionsWithChanges.value.mediaServersPlex = false
   sectionsWithChanges.value.mediaServersJellyfin = false
   sectionsWithChanges.value.mediaServersEmby = false
+  sectionsWithChanges.value.arrRadarr = false
+  sectionsWithChanges.value.arrSonarr = false
+  for (const key of Object.keys(sectionsWithChanges.value) as Array<keyof typeof sectionsWithChanges.value>) {
+    sectionsWithChanges.value[key] = false
+  }
 
   setTimeout(() => {
     watchersEnabled.value = true
@@ -522,6 +553,7 @@ const checkForChanges = () => {
     retryIntervalHours: localRetryIntervalHours.value,
     retryMaxAttempts: localRetryMaxAttempts.value,
     reuseCachedPosterDays: localReuseCachedPosterDays.value,
+    sendLogosToPlex: localSendLogosToPlex.value,
     discordEnabled: localDiscordEnabled.value,
     discordWebhookUrl: localDiscordWebhookUrl.value,
     discordNotifyLibraries: localDiscordNotifyLibraries.value,
@@ -530,6 +562,7 @@ const checkForChanges = () => {
     discordNotifyWebhook: localDiscordNotifyWebhook.value,
     discordNotifyAutoGenerate: localDiscordNotifyAutoGenerate.value,
     discordNotifyMediaMirror: localDiscordNotifyMediaMirror.value,
+    discordNotifyAppUpdates: localDiscordNotifyAppUpdates.value,
     discordNotifyOverlayRefresh: localDiscordNotifyOverlayRefresh.value,
     appriseEnabled: localAppriseEnabled.value,
     appriseUrls: localAppriseUrls.value,
@@ -539,14 +572,18 @@ const checkForChanges = () => {
     appriseNotifyWebhook: localAppriseNotifyWebhook.value,
     appriseNotifyAutoGenerate: localAppriseNotifyAutoGenerate.value,
     appriseNotifyMediaMirror: localAppriseNotifyMediaMirror.value,
+    appriseNotifyAppUpdates: localAppriseNotifyAppUpdates.value,
     appriseNotifyOverlayRefresh: localAppriseNotifyOverlayRefresh.value,
     mediaServers: settings.mediaServers.value,
     preferredPosterServer: settings.automation.value.preferredPosterServer,
     libraryGroups: settings.libraryGroups.value,
+    arrInstances: settings.arrInstances.value,
     mdblist: settings.mdblist.value,
     wetrakr: settings.wetrakr.value,
     simkl: settings.simkl.value,
-    floppy: settings.floppy.value
+    floppy: settings.floppy.value,
+    maintainerr: settings.maintainerr.value,
+    posterApiEnabled: !!settings.posterApi.value.enabled
   })
   hasUnsavedChanges.value = currentSnapshot !== initialSettingsSnapshot.value
 
@@ -598,6 +635,11 @@ const checkForChanges = () => {
     JSON.stringify(byType(settings.mediaServers.value, 'jellyfin')) !== JSON.stringify(byType(initialMediaServers, 'jellyfin'))
   sectionsWithChanges.value.mediaServersEmby =
     JSON.stringify(byType(settings.mediaServers.value, 'emby')) !== JSON.stringify(byType(initialMediaServers, 'emby'))
+  const initialArr: any[] = initial.arrInstances || []
+  sectionsWithChanges.value.arrRadarr =
+    JSON.stringify(byType(settings.arrInstances.value, 'radarr')) !== JSON.stringify(byType(initialArr, 'radarr'))
+  sectionsWithChanges.value.arrSonarr =
+    JSON.stringify(byType(settings.arrInstances.value, 'sonarr')) !== JSON.stringify(byType(initialArr, 'sonarr'))
 
   sectionsWithChanges.value.performance =
     localConcurrentRenders.value !== initial.concurrentRenders ||
@@ -612,7 +654,42 @@ const checkForChanges = () => {
     JSON.stringify(localCleanupScheduleCategories.value) !== JSON.stringify(initial.cleanupScheduleCategories) ||
     localCleanupScheduleHistoryDays.value !== initial.cleanupScheduleHistoryDays
 
-
+  // Every remaining section is computed from the snapshot too, so its yellow
+  // highlight clears again when a value is changed back.
+  const differs = (keys: string[]) => {
+    const now = JSON.parse(currentSnapshot)
+    return keys.some(k => JSON.stringify(now[k]) !== JSON.stringify(initial[k]))
+  }
+  sectionsWithChanges.value.appearance = differs(['theme', 'posterDensity', 'timezone'])
+  sectionsWithChanges.value.libraryDisplay = differs(['deduplicateMovies', 'defaultSort'])
+  sectionsWithChanges.value.apiKeys = differs(['tmdbApiKey', 'tvdbApiKey', 'fanartApiKey', 'apiOrder'])
+  sectionsWithChanges.value.ratings = differs(['mdblist', 'wetrakr', 'simkl', 'floppy', 'maintainerr'])
+  sectionsWithChanges.value.posterApi = differs(['posterApiEnabled'])
+  sectionsWithChanges.value.imageQuality = differs(['outputFormat', 'jpgQuality', 'pngCompression', 'webpQuality'])
+  sectionsWithChanges.value.performance = differs(['concurrentRenders', 'useOverlayCache', 'memoryLimit'])
+  sectionsWithChanges.value.rateLimits = differs(['tmdbRateLimit', 'tvdbRateLimit'])
+  sectionsWithChanges.value.automation = differs([
+    'webhookAutoSend', 'webhookAutoLabels', 'labelToAdd', 'webhookAlwaysRegenerateSeason', 'webhookSecret',
+    'existingContentMode', 'retryUntilTemplateMet', 'retryIntervalHours', 'retryMaxAttempts', 'reuseCachedPosterDays',
+  ])
+  sectionsWithChanges.value.logoDefaults = differs(['sendLogosToPlex'])
+  sectionsWithChanges.value.labels = differs(['defaultLabelsToRemove', 'defaultTvLabelsToRemove', 'kometaCompatibility'])
+  sectionsWithChanges.value.discord = differs([
+    'discordEnabled', 'discordWebhookUrl', 'discordNotifyLibraries', 'discordNotifyBatch', 'discordNotifyManual',
+    'discordNotifyWebhook', 'discordNotifyAutoGenerate', 'discordNotifyMediaMirror', 'discordNotifyAppUpdates',
+    'discordNotifyOverlayRefresh',
+  ])
+  sectionsWithChanges.value.apprise = differs([
+    'appriseEnabled', 'appriseUrls', 'appriseNotifyLibraries', 'appriseNotifyBatch', 'appriseNotifyManual',
+    'appriseNotifyWebhook', 'appriseNotifyAutoGenerate', 'appriseNotifyMediaMirror', 'appriseNotifyAppUpdates',
+    'appriseNotifyOverlayRefresh',
+  ])
+  sectionsWithChanges.value.cleanupSchedule = differs([
+    'cleanupScheduleEnabled', 'cleanupScheduleCronExpression', 'cleanupScheduleCategories', 'cleanupScheduleHistoryDays',
+  ])
+  // Scheduled Scans (Libraries tab) only covers the scan schedule; the
+  // cleanup schedule has its own flag above.
+  sectionsWithChanges.value.scheduler = differs(['schedulerEnabled', 'schedulerCronExpression', 'schedulerLibraryIds'])
 }
 
 const saveSettings = async () => {
@@ -645,7 +722,6 @@ const saveSettings = async () => {
       autoGenerateEnabled: l.autoGenerateEnabled || false,
       autoGeneratePresetId: l.autoGeneratePresetId || null,
       autoGenerateTemplateId: l.autoGenerateTemplateId || null,
-      webhookIgnoreLabels: l.webhookIgnoreLabels || [],
     })),
     tvShowLibraryName: tvShowLibs[0]?.id || '',
     tvShowLibraryNames: tvShowLibs.length > 0 ? tvShowLibs.map(l => l.id) : undefined,
@@ -656,7 +732,6 @@ const saveSettings = async () => {
       autoGenerateEnabled: l.autoGenerateEnabled || false,
       autoGeneratePresetId: l.autoGeneratePresetId || null,
       autoGenerateTemplateId: l.autoGenerateTemplateId || null,
-      webhookIgnoreLabels: l.webhookIgnoreLabels || [],
     })),
     sendLogosToPlex: localSendLogosToPlex.value,
   }
@@ -707,6 +782,7 @@ const saveSettings = async () => {
     discordNotifyWebhook: localDiscordNotifyWebhook.value,
     discordNotifyAutoGenerate: localDiscordNotifyAutoGenerate.value,
     discordNotifyMediaMirror: localDiscordNotifyMediaMirror.value,
+    discordNotifyAppUpdates: localDiscordNotifyAppUpdates.value,
     discordNotifyOverlayRefresh: localDiscordNotifyOverlayRefresh.value,
     appriseEnabled: localAppriseEnabled.value,
     appriseUrls: localAppriseUrls.value,
@@ -716,6 +792,7 @@ const saveSettings = async () => {
     appriseNotifyWebhook: localAppriseNotifyWebhook.value,
     appriseNotifyAutoGenerate: localAppriseNotifyAutoGenerate.value,
     appriseNotifyMediaMirror: localAppriseNotifyMediaMirror.value,
+    appriseNotifyAppUpdates: localAppriseNotifyAppUpdates.value,
     appriseNotifyOverlayRefresh: localAppriseNotifyOverlayRefresh.value
   }
 
@@ -726,30 +803,32 @@ const saveSettings = async () => {
   const newlyAddedTvLibraryIds = localTvShowLibraries.value.filter(l => l.id && !savedTvShowLibraryIds.value.has(String(l.id))).map(l => String(l.id))
   const newlyAddedLibraryIds = [...newlyAddedMovieLibraryIds, ...newlyAddedTvLibraryIds]
 
-  // Kometa Compatibility: auto-check "Overlay" for any library added since the last save
-  // (settings.defaultLabelsToRemove/defaultTvLabelsToRemove.value already hold what's about
-  // to be saved, assigned above from localDefaultLabelsToRemove/localDefaultTvLabelsToRemove).
-  // Mirrors what the startup wizard's "Using Kometa?" toggle does for libraries selected
-  // during onboarding — this covers the same thing for libraries added afterward.
-  if (localKometaCompatibility.value) {
-    for (const id of newlyAddedMovieLibraryIds) {
-      const current = settings.defaultLabelsToRemove.value[id] || []
-      if (!current.includes('Overlay')) {
-        settings.defaultLabelsToRemove.value = { ...settings.defaultLabelsToRemove.value, [id]: [...current, 'Overlay'] }
-      }
-    }
-    for (const id of newlyAddedTvLibraryIds) {
-      const current = settings.defaultTvLabelsToRemove.value[id] || []
-      if (!current.includes('Overlay')) {
-        settings.defaultTvLabelsToRemove.value = { ...settings.defaultTvLabelsToRemove.value, [id]: [...current, 'Overlay'] }
-      }
-    }
-  }
+  // Kometa compatibility needs nothing here: "Overlay" is added when labels are
+  // read (services/labelsToRemove.ts, webhooks._get_default_remove_labels()).
+
+  // Poster mode rules that changed since the last save (compared with the last-saved
+  // groups); re-applied to the library cache right after the save succeeds.
+  const rulesOf = (g: any) => JSON.stringify([g?.posterModeRules || [], g?.arrInstanceId || null])
+  const savedGroupById = new Map<string, any>((initialLibraryGroups.value || []).map((g: any) => [String(g.id), g]))
+  const groupsWithChangedRules = settings.libraryGroups.value
+    .filter(g => rulesOf(g) !== rulesOf(savedGroupById.get(String(g.id))))
+    .map(g => String(g.id))
 
   await settings.save({ allowEmptyMediaServers: pendingServerCachePurge.value.size > 0 })
+  // The save drops a masked Plex token whose address changed; the field follows.
+  if (!settings.error.value && localPlexToken.value !== settings.plex.value.token) {
+    localPlexToken.value = settings.plex.value.token
+  }
 
   if (!settings.error.value) {
     await updateScheduler()
+  }
+
+  if (!settings.error.value && groupsWithChangedRules.length > 0) {
+    for (const groupId of groupsWithChangedRules) {
+      const res = await reevaluatePosterModes(groupId)
+      if (res) ruleMatchCounts.value = { ...ruleMatchCounts.value, [groupId]: res.per_rule }
+    }
   }
 
   // Now that the settings save itself succeeded, purge cache/DB references for any
@@ -1345,6 +1424,25 @@ watch([
   localMovieSaveLocation,
   localTvShowSaveLocation,
   localCollectionSaveLocation,
+  localTvShowSaveMode,
+  localSendLogosToPlex,
+  localKometaCompatibility,
+  localWebhookAutoSend,
+  localWebhookAutoLabels,
+  localLabelToAdd,
+  localWebhookSecret,
+  localExistingContentMode,
+  localRetryUntilTemplateMet,
+  localRetryIntervalHours,
+  localRetryMaxAttempts,
+  localReuseCachedPosterDays,
+  localAppriseEnabled,
+  localAppriseUrls,
+  localAppriseNotifyLibraries,
+  localAppriseNotifyBatch,
+  localAppriseNotifyManual,
+  localAppriseNotifyWebhook,
+  localAppriseNotifyAutoGenerate,
   localSaveBatch,
   localSaveToAssetFolderOnSend,
   localDefaultLabelsToRemove,
@@ -1381,8 +1479,10 @@ watch([
   localDiscordNotifyWebhook,
   localDiscordNotifyAutoGenerate,
   localDiscordNotifyMediaMirror,
+  localDiscordNotifyAppUpdates,
   localDiscordNotifyOverlayRefresh,
   localAppriseNotifyMediaMirror,
+  localAppriseNotifyAppUpdates,
   localAppriseNotifyOverlayRefresh,
   localWebhookAlwaysRegenerateSeason,
   // mediaServers/preferredPosterServer are bound directly to the store
@@ -1398,10 +1498,13 @@ watch([
   // so adding/removing/editing a group there needs to be watched off the
   // store itself too, or it silently never flips the unsaved-changes flag.
   () => settings.libraryGroups.value,
+  () => settings.arrInstances.value,
   () => settings.mdblist.value,
   () => settings.wetrakr.value,
   () => settings.simkl.value,
-  () => settings.floppy.value
+  () => settings.floppy.value,
+  () => settings.maintainerr.value,
+  () => settings.posterApi.value.enabled
 ], () => {
   if (watchersEnabled.value) {
     checkForChanges()
@@ -1422,6 +1525,14 @@ watch(() => route.query.tab, (newTab) => {
     activeTab.value = newTab as any
   }
 })
+
+// With no media server, Libraries / Output / Automation are hidden (they only
+// configure server libraries, saving to disk and webhooks). A link or a
+// remembered ?tab= pointing at one lands on General instead.
+const SERVER_ONLY_TABS = new Set(['libraries', 'output', 'automation'])
+watch([serverless, activeTab], ([isServerless, tab]) => {
+  if (isServerless && SERVER_ONLY_TABS.has(tab)) activeTab.value = 'general'
+}, { immediate: true })
 
 // libraryGroups/mediaServers/automation.preferredPosterServer are bound
 // directly to the store with no local staging ref (Quirk #79/#119/#120),
@@ -1493,6 +1604,13 @@ onMounted(() => {
           General
         </button>
         <button
+          :class="['tab', { active: activeTab === 'ratings' }]"
+          @click="activeTab = 'ratings'"
+        >
+          Ratings &amp; Lists
+        </button>
+        <button
+          v-if="!serverless"
           :class="['tab', { active: activeTab === 'libraries' }]"
           @click="activeTab = 'libraries'"
         >
@@ -1506,6 +1624,7 @@ onMounted(() => {
           Media Servers
         </button>
         <button
+          v-if="!serverless"
           :class="['tab', { active: activeTab === 'output' }]"
           @click="activeTab = 'output'"
         >
@@ -1518,6 +1637,7 @@ onMounted(() => {
           Performance
         </button>
         <button
+          v-if="!serverless"
           :class="['tab', { active: activeTab === 'automation' }]"
           @click="activeTab = 'automation'"
         >
@@ -1547,6 +1667,7 @@ onMounted(() => {
     <!-- Tab Content -->
     <div class="tab-content-wrapper">
       <GeneralTab
+        :changed="sectionsWithChanges"
         v-if="activeTab === 'general'"
         :theme="localTheme"
         :posterDensity="localPosterDensity"
@@ -1571,8 +1692,36 @@ onMounted(() => {
         @save="saveSettings"
       />
 
+      <GeneralTab
+        :changed="sectionsWithChanges"
+        v-if="activeTab === 'ratings'"
+        part="ratings"
+        :theme="localTheme"
+        :posterDensity="localPosterDensity"
+        :deduplicateMovies="localDeduplicateMovies"
+        :defaultSort="localDefaultSort"
+        :timezone="localTimezone"
+        :tmdbApiKey="localTmdbApiKey"
+        :tvdbApiKey="localTvdbApiKey"
+        :fanartApiKey="localFanartApiKey"
+        :testingKeys="testingApiKeys"
+        :apiKeyTestResults="apiKeyTestResults"
+        :unsavedChanges="hasUnsavedChanges"
+        @update:theme="localTheme = $event as Theme"
+        @update:posterDensity="localPosterDensity = $event"
+        @update:deduplicateMovies="localDeduplicateMovies = $event"
+        @update:defaultSort="localDefaultSort = $event"
+        @update:timezone="localTimezone = $event"
+        @update:tmdbApiKey="localTmdbApiKey = $event"
+        @update:tvdbApiKey="localTvdbApiKey = $event"
+        @update:fanartApiKey="localFanartApiKey = $event"
+        @test-api-key="testSingleApiKey"
+        @save="saveSettings"
+      />
+
       <LibrariesTab
-        v-if="activeTab === 'libraries'"
+        :changed="sectionsWithChanges"
+        v-if="activeTab === 'libraries' && !serverless"
         :plexUrl="localPlexUrl"
         :plexToken="localPlexToken"
         :libraries="localLibraries"
@@ -1593,9 +1742,7 @@ onMounted(() => {
         :movieLibrariesChanged="sectionsWithChanges.movieLibraries"
         :tvLibrariesChanged="sectionsWithChanges.tvLibraries"
         :initialLibraryGroups="initialLibraryGroups"
-        :sendLogosToPlex="localSendLogosToPlex"
         :kometaCompatibility="localKometaCompatibility"
-        @update:sendLogosToPlex="localSendLogosToPlex = $event; hasUnsavedChanges = true"
         @update:kometaCompatibility="localKometaCompatibility = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @update:libraries="localLibraries = $event; hasUnsavedChanges = true"
         @update:tvShowLibraries="localTvShowLibraries = $event; hasUnsavedChanges = true"
@@ -1621,6 +1768,9 @@ onMounted(() => {
         :plexServersChanged="sectionsWithChanges.mediaServersPlex"
         :jellyfinServersChanged="sectionsWithChanges.mediaServersJellyfin"
         :embyServersChanged="sectionsWithChanges.mediaServersEmby"
+        :radarrChanged="sectionsWithChanges.arrRadarr"
+        :sonarrChanged="sectionsWithChanges.arrSonarr"
+        :posterApiChanged="sectionsWithChanges.posterApi"
         @update:plexUrl="localPlexUrl = $event"
         @update:plexToken="localPlexToken = $event"
         @test-connection="testPlexConnection"
@@ -1630,6 +1780,7 @@ onMounted(() => {
       />
 
       <OutputTab
+        :changed="sectionsWithChanges"
         v-if="activeTab === 'output'"
         :movieSaveLocation="localMovieSaveLocation"
         :tvShowSaveLocation="localTvShowSaveLocation"
@@ -1657,6 +1808,7 @@ onMounted(() => {
       />
 
       <PerformanceTab
+        :changed="sectionsWithChanges"
         v-if="activeTab === 'performance'"
         :concurrentRenders="localConcurrentRenders"
         :useOverlayCache="localUseOverlayCache"
@@ -1677,7 +1829,7 @@ onMounted(() => {
       />
 
       <AutomationTab
-        v-if="activeTab === 'automation'"
+        v-if="activeTab === 'automation' && !serverless"
         :webhookAutoSend="localWebhookAutoSend"
         :webhookAutoLabels="localWebhookAutoLabels"
         :labelToAdd="localLabelToAdd"
@@ -1688,6 +1840,8 @@ onMounted(() => {
         :retryIntervalHours="localRetryIntervalHours"
         :retryMaxAttempts="localRetryMaxAttempts"
         :reuseCachedPosterDays="localReuseCachedPosterDays"
+        :sendLogosToPlex="localSendLogosToPlex"
+        :logoDefaultsChanged="sectionsWithChanges.logoDefaults"
         :automationChanged="sectionsWithChanges.automation"
         :unsavedChanges="hasUnsavedChanges"
         @update:webhookAutoSend="localWebhookAutoSend = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
@@ -1700,10 +1854,12 @@ onMounted(() => {
         @update:retryIntervalHours="localRetryIntervalHours = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @update:retryMaxAttempts="localRetryMaxAttempts = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @update:reuseCachedPosterDays="localReuseCachedPosterDays = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
+        @update:sendLogosToPlex="localSendLogosToPlex = $event; hasUnsavedChanges = true"
         @save="saveSettings"
       />
 
       <NotificationsTab
+        :changed="sectionsWithChanges"
         v-if="activeTab === 'notifications'"
         :discordEnabled="localDiscordEnabled"
         :discordWebhookUrl="localDiscordWebhookUrl"
@@ -1713,6 +1869,7 @@ onMounted(() => {
         :discordNotifyWebhook="localDiscordNotifyWebhook"
         :discordNotifyAutoGenerate="localDiscordNotifyAutoGenerate"
         :discordNotifyMediaMirror="localDiscordNotifyMediaMirror"
+        :discordNotifyAppUpdates="localDiscordNotifyAppUpdates"
         :discordNotifyOverlayRefresh="localDiscordNotifyOverlayRefresh"
         :appriseEnabled="localAppriseEnabled"
         :appriseUrls="localAppriseUrls"
@@ -1722,6 +1879,7 @@ onMounted(() => {
         :appriseNotifyWebhook="localAppriseNotifyWebhook"
         :appriseNotifyAutoGenerate="localAppriseNotifyAutoGenerate"
         :appriseNotifyMediaMirror="localAppriseNotifyMediaMirror"
+        :appriseNotifyAppUpdates="localAppriseNotifyAppUpdates"
         :appriseNotifyOverlayRefresh="localAppriseNotifyOverlayRefresh"
         :libraries="localLibraries"
         :tvShowLibraries="localTvShowLibraries"
@@ -1734,6 +1892,7 @@ onMounted(() => {
         @update:discordNotifyWebhook="localDiscordNotifyWebhook = $event; hasUnsavedChanges = true"
         @update:discordNotifyAutoGenerate="localDiscordNotifyAutoGenerate = $event; hasUnsavedChanges = true"
         @update:discordNotifyMediaMirror="localDiscordNotifyMediaMirror = $event; hasUnsavedChanges = true"
+        @update:discordNotifyAppUpdates="localDiscordNotifyAppUpdates = $event; hasUnsavedChanges = true"
         @update:discordNotifyOverlayRefresh="localDiscordNotifyOverlayRefresh = $event; hasUnsavedChanges = true"
         @update:appriseEnabled="localAppriseEnabled = $event; hasUnsavedChanges = true"
         @update:appriseUrls="localAppriseUrls = $event; hasUnsavedChanges = true"
@@ -1743,11 +1902,13 @@ onMounted(() => {
         @update:appriseNotifyWebhook="localAppriseNotifyWebhook = $event; hasUnsavedChanges = true"
         @update:appriseNotifyAutoGenerate="localAppriseNotifyAutoGenerate = $event; hasUnsavedChanges = true"
         @update:appriseNotifyMediaMirror="localAppriseNotifyMediaMirror = $event; hasUnsavedChanges = true"
+        @update:appriseNotifyAppUpdates="localAppriseNotifyAppUpdates = $event; hasUnsavedChanges = true"
         @update:appriseNotifyOverlayRefresh="localAppriseNotifyOverlayRefresh = $event; hasUnsavedChanges = true"
         @save="saveSettings"
       />
 
       <AdvancedTab
+        :changed="sectionsWithChanges"
         v-if="activeTab === 'advanced'"
         :dbExporting="dbExporting"
         :dbImporting="dbImporting"
@@ -1765,6 +1926,7 @@ onMounted(() => {
         @save="saveSettings"
       />
       <CleanupTab
+        :changed="sectionsWithChanges"
         v-if="activeTab === 'cleanup'"
         :scheduleEnabled="localCleanupScheduleEnabled"
         :scheduleCronExpression="localCleanupScheduleCronExpression"
@@ -1782,6 +1944,10 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.serverless-note {
+  padding: 16px 0;
+  color: var(--text-secondary, inherit);
+}
 .view {
   display: flex;
   flex-direction: column;
@@ -1973,6 +2139,18 @@ onMounted(() => {
   .tab {
     padding: 10px 12px;
     font-size: 12px;
+  }
+}
+
+/* Phones: the tab pages nest padded boxes three deep; trim the padding so
+   the fields get the width. :deep() because each tab has its own styles. */
+@media (max-width: 600px) {
+  .tab-content-wrapper :deep(.tab-content) {
+    padding: 12px 2px;
+  }
+
+  .tab-content-wrapper :deep(.section) {
+    padding: 14px 12px;
   }
 }
 </style>

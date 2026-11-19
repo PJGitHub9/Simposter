@@ -570,4 +570,11 @@ watch(defaultLibraryId, (val, oldVal) => {
 .cancel:hover {
   color: var(--fg, #fff);
 }
+
+/* Phones: title on its own line, controls below it */
+@media (max-width: 600px) {
+  .view { padding: 4px; }
+  .header { flex-direction: column; align-items: stretch; gap: 10px; }
+  .header-actions .search-input { flex: 1 1 100%; }
+}
 </style>

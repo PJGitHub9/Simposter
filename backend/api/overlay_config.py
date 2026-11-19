@@ -17,7 +17,6 @@ from ..schemas import (
     OverlayConfigDeleteRequest,
     OverlayAssetUploadRequest,
     OverlayAssetDeleteRequest,
-    PresetOverlayLinkRequest,
 )
 
 router = APIRouter()
@@ -66,7 +65,7 @@ def api_save_overlay_config(req: OverlayConfigSaveRequest):
     try:
         elements = [elem.model_dump() for elem in req.elements]
         db.save_overlay_config(req.id, req.name, elements, streaming_region=req.streaming_region,
-                               conditions=req.conditions)
+                               conditions=req.conditions, notes=req.notes)
         return {"status": "ok", "id": req.id}
     except Exception as e:
         logger.error(f"[OVERLAY] Error saving overlay config {req.id}: {e}")
@@ -360,38 +359,24 @@ def api_font_file(name: str):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Preset-Overlay Linking Endpoint
-# ═══════════════════════════════════════════════════════════════════════════
-
-@router.post("/presets/link-overlay")
-def api_link_preset_to_overlay(req: PresetOverlayLinkRequest):
-    """Link a preset to an overlay configuration."""
-    try:
-        # Verify preset exists
-        preset = db.get_preset(req.template_id, req.preset_id)
-        if not preset:
-            raise HTTPException(404, f"Preset {req.preset_id} not found in template {req.template_id}")
-
-        # Verify overlay config exists (if provided)
-        if req.overlay_config_id:
-            overlay_config = db.get_overlay_config(req.overlay_config_id)
-            if not overlay_config:
-                raise HTTPException(404, f"Overlay config {req.overlay_config_id} not found")
-
-        # Link preset to overlay config
-        db.link_preset_to_overlay_config(req.template_id, req.preset_id, req.overlay_config_id)
-
-        return {"status": "ok"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"[OVERLAY] Error linking preset to overlay config: {e}")
-        raise HTTPException(500, "Failed to link preset to overlay configuration")
-
-
-# ═══════════════════════════════════════════════════════════════════════════
 # Image Proxy (for CORS-free canvas preview of URL badge images)
 # ═══════════════════════════════════════════════════════════════════════════
+
+# Item data the preview fills on request (overlay_engine.build_context derives them).
+_PREVIEW_ITEM_FIELDS = {"days_since_added", "added_date", "release_date", "days_since_release", "show_status",
+                        "network", "removal_date", "days_until_removal", "maintainerr_collection",
+                        "leaving", "leaving_date", "leaving_day", "leaving_days"}
+# Per-country fields, requested as "content_rating@GB" / "streaming@US".
+_PREVIEW_REGIONAL_FIELDS = {"content_rating", "streaming"}
+
+
+def _preview_field_ok(name: str) -> bool:
+    import re as _re
+    if name in _PREVIEW_ITEM_FIELDS:
+        return True
+    base, _, region = name.partition("@")
+    return base in _PREVIEW_REGIONAL_FIELDS and bool(_re.fullmatch(r"[A-Z]{2}", region))
+
 
 @router.get("/overlay-preview-metadata")
 def api_overlay_preview_metadata(
@@ -500,19 +485,26 @@ def api_overlay_preview_metadata(
                     lists_out = ctx.get("lists") or []
             except Exception as mdb_err:
                 logger.debug(f"[OVERLAY] Preview MDBList error: {mdb_err}")
-        # Date added and show status, when the layers' rules use them.
+        # Date added, release date and show status, when the layers use them.
         wanted = {f.strip() for f in (fields or "").split(",") if f.strip()}
         if saved_cfg:
             for e in saved_cfg.get("elements", []):
                 for c in (e.get("conditions") or []) if isinstance(e, dict) else []:
-                    if isinstance(c, dict) and c.get("field") in ("days_since_added", "show_status"):
+                    if isinstance(c, dict) and c.get("field") in _PREVIEW_ITEM_FIELDS:
                         wanted.add(c["field"])
-        wanted &= {"days_since_added", "show_status"}
+                    elif isinstance(c, dict) and c.get("field") in _PREVIEW_REGIONAL_FIELDS:
+                        from .. import overlay_engine as _oe
+                        wanted.add(_oe.regional_key(c["field"], _oe.condition_region(c)))
+        wanted = {f for f in wanted if _preview_field_ok(f)}
         if wanted:
             try:
                 from .. import overlay_engine
                 tmdb_id, tvdb_id = db.get_ids_for_rating_key(rating_key)
-                stand_in = [{"type": "text_label", "conditions": [{"field": f, "op": "exists"} for f in wanted]}]
+                conds = []
+                for f in wanted:
+                    base, _, region = f.partition("@")
+                    conds.append({"field": base, "op": "exists", **({"region": region} if region else {})})
+                stand_in = [{"type": "text_label", "conditions": conds}]
                 ctx = overlay_engine.build_context(
                     {"rating_key": rating_key, "tmdb_id": tmdb_id, "tvdb_id": tvdb_id, "media_type": media_type},
                     elements=stand_in,

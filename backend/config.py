@@ -52,7 +52,9 @@ SECRET_FIELD_PATHS = (
     ("wetrakr", "clientId"),
     ("simkl", "clientId"),
     ("floppy", "token"),
+    ("maintainerr", "apiKey"),
     ("automation", "webhookSecret"),
+    ("posterApi", "key"),
 )
 
 # Headers to send when fetching an arbitrary, user-supplied external image URL
@@ -344,6 +346,9 @@ settings.LOG_FILE = str(preferred_log)
 _SECRET_PARAM_RE = re.compile(
     r"(?i)((?:api_?key|apikey|api_token|x-plex-token|plex-token|token|secret)=)[^&\s'\"<>,;)]+"
 )
+# A bare "key=" query parameter (the Poster API key, ?key=...). Only after ? or &,
+# so words ending in "key=" elsewhere aren't touched.
+_KEY_PARAM_RE = re.compile(r"(?i)([?&]key=)[^&\s'\"<>,;)]+")
 _SECRET_HEADER_RE = re.compile(r'(?i)(token=")[^"]*(")')
 _SECRET_BEARER_RE = re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{8,}")
 
@@ -361,9 +366,10 @@ def _media_server_secrets() -> list:
         conn = sqlite3.connect(str(db_path), timeout=2)
         try:
             row = conn.execute("SELECT value FROM settings WHERE key = 'mediaServers' LIMIT 1").fetchone()
+            arr_row = conn.execute("SELECT value FROM settings WHERE key = 'arrInstances' LIMIT 1").fetchone()
             # List-source keys and sign-in tokens (backend/list_sources.py).
             extra = [r[0] for r in conn.execute(
-                "SELECT value FROM settings WHERE key IN ('wetrakr.clientId', 'simkl.clientId', 'floppy.token')"
+                "SELECT value FROM settings WHERE key IN ('wetrakr.clientId', 'simkl.clientId', 'floppy.token', 'posterApi.key', 'maintainerr.apiKey')"
             ).fetchall()]
             try:
                 for (data_json,) in conn.execute("SELECT data_json FROM list_source_auth").fetchall():
@@ -374,6 +380,11 @@ def _media_server_secrets() -> list:
         finally:
             conn.close()
         servers = json.loads(row[0]) if row and row[0] else []
+        try:
+            arr = json.loads(arr_row[0]) if arr_row and arr_row[0] else []
+            servers = (servers if isinstance(servers, list) else []) + (arr if isinstance(arr, list) else [])
+        except ValueError:
+            pass
         out = [str(v) for v in extra if v]
         for s in servers if isinstance(servers, list) else []:
             if isinstance(s, dict):
@@ -402,6 +413,33 @@ def _known_secrets() -> tuple:
     return values
 
 
+def url_origin(url) -> tuple:
+    """(scheme, host, port) of a server address, lower-cased, default port filled
+    in, path ignored. "plex.local:32400" (no scheme) counts as http."""
+    from urllib.parse import urlparse
+    s = str(url or "").strip()
+    if not s:
+        return ("", "", None)
+    if "://" not in s:
+        s = "http://" + s
+    p = urlparse(s)
+    scheme = (p.scheme or "").lower()
+    try:
+        port = p.port
+    except ValueError:
+        port = None
+    if port is None:
+        port = {"http": 80, "https": 443}.get(scheme)
+    return (scheme, (p.hostname or "").lower(), port)
+
+
+def same_origin(a, b) -> bool:
+    """True when two server addresses point at the same server. A saved API key
+    or token may only be reused for the address it was saved with; anything else
+    must ask for the key again, so a stored key is never sent to another host."""
+    return url_origin(a) == url_origin(b)
+
+
 def redact_secrets(text) -> str:
     """Hide API keys, tokens and secrets in a string before it is logged or
     returned to the browser."""
@@ -411,6 +449,7 @@ def redact_secrets(text) -> str:
     if not s:
         return s
     s = _SECRET_PARAM_RE.sub(r"\1***", s)
+    s = _KEY_PARAM_RE.sub(r"\1***", s)
     s = _SECRET_HEADER_RE.sub(r"\1***\2", s)
     s = _SECRET_BEARER_RE.sub(r"\1***", s)
     for secret in _known_secrets():
@@ -439,6 +478,9 @@ _NOISY_POLL_PATHS = (
     "/api/batch-progress",
     "/api/backup/progress",
     "/api/scan-progress",
+    # The top bar's server status, every minute per open tab: half of a DEBUG log.
+    "/api/plex-status",
+    "/api/media-server/status",
 )
 
 class APILogDowngradeFilter(logging.Filter):
@@ -688,6 +730,9 @@ def resolve_library_id(name) -> str:
     if name_str.isdigit():
         return name_str
 
+    if not settings.PLEX_URL:
+        # No Plex configured (server-less, or Jellyfin/Emby only): nothing to ask.
+        return "1"
     url = f"{settings.PLEX_URL}/library/sections"
     try:
         r = plex_session.get(url, headers=plex_headers(), timeout=8)
@@ -1614,9 +1659,10 @@ def _render_cache_path(rating_key: str) -> Path:
 def save_render_cache(rating_key: str, img_bytes: bytes) -> None:
     """Persist rendered poster bytes so they can be resent later."""
     try:
+        from .cache_images import shrink_render  # PNG -> full-size JPEG 95
         p = _render_cache_path(rating_key)
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_bytes(img_bytes)
+        p.write_bytes(shrink_render(img_bytes))
     except Exception as e:
         logger.debug("[RENDER_CACHE] Failed to save for %s: %s", rating_key, e)
 
@@ -1669,9 +1715,10 @@ def save_render_cache_by_tmdb(media_type: str, tmdb_id: Optional[int], img_bytes
     if not tmdb_id:
         return
     try:
+        from .cache_images import shrink_render  # PNG -> full-size JPEG 95
         p = _render_cache_path_by_tmdb(media_type, tmdb_id, season_index)
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_bytes(img_bytes)
+        p.write_bytes(shrink_render(img_bytes))
     except Exception as e:
         logger.debug("[RENDER_CACHE] Failed to save by-tmdb cache for %s tmdb_id=%s: %s", media_type, tmdb_id, e)
 

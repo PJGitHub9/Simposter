@@ -26,6 +26,7 @@ Placement (render_kometa_element), used when element["placement"] == "kometa":
 from __future__ import annotations
 
 import re
+from datetime import date as _date, datetime as _datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -34,7 +35,8 @@ from PIL import Image, ImageDraw, ImageFont
 KOMETA_W = 1000
 KOMETA_H = 1500
 
-_VAR_RE = re.compile(r"\{([A-Za-z0-9_.]+)\}")
+# {name} or {name%} / {name#} / {name/} (Kometa's number formats, see _format_value).
+_VAR_RE = re.compile(r"\{([A-Za-z0-9_.]+)([%#/]?)\}")
 
 
 # --------------------------------------------------------------------------
@@ -66,12 +68,52 @@ def _rating_field_names() -> set:
     return set(RATING_FIELDS) | {"user_rating"}
 
 
+# Maintainerr removal dates (backend/maintainerr_data.py): Show when fields and
+# text values. The fields use "removal_*" names, the text values "leaving_*", so
+# {leaving_date} ("Nov 12") never collides with the removal_date field (ISO).
+MAINTAINERR_FIELDS = {"removal_date", "days_until_removal", "maintainerr_collection"}
+MAINTAINERR_TEXT_KEYS = {"leaving", "leaving_date", "leaving_day", "leaving_days"} | MAINTAINERR_FIELDS
+
+
+def _fill_maintainerr(ctx: Dict[str, Any], notes: Dict[str, str]) -> None:
+    """Removal date and leaving values for the item, from the Maintainerr snapshot.
+    Values already in ctx (the preview's example values) win."""
+    if ctx.get("removal_date") not in (None, "") or ctx.get("leaving") not in (None, ""):
+        return
+    from . import maintainerr_client as mc
+    if not mc.is_configured():
+        notes["removal_date"] = "Maintainerr not set up (Settings → Ratings & Lists)"
+        return
+    from . import maintainerr_data as md
+    try:
+        md.ensure_fresh()
+        tmdb_id, tvdb_id, media_type = _item_ids(ctx)
+        if tvdb_id in (None, "") and ctx.get("tvdb_id"):
+            tvdb_id = ctx.get("tvdb_id")
+        match = md.lookup(ctx.get("rating_key"), tmdb_id, tvdb_id, media_type)
+    except Exception as e:
+        notes["removal_date"] = f"Maintainerr lookup failed: {e}"
+        return
+    if not match:
+        why = "not in any Maintainerr collection"
+        err = md.status().get("last_error")
+        if err:
+            why += f" (Maintainerr not reachable: {err})"
+        notes["removal_date"] = why
+        return
+    today = _parse_date(ctx.get("today")) or _date.today()
+    ctx.update(md.format_leaving(md.local_date(match["deletion"]), today))
+    ctx["maintainerr_collection"] = list(match["collections"])
+
+
 def needed_data(elements: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Which lazily-loaded data the elements use: stored file paths, MDBList
     ratings (conditions or text variables), and list membership (conditions;
     MDBList, WeTrakr, SIMKL or Floppy, see list_sources.py)."""
     rating_fields = _rating_field_names()
-    needs = {"paths": False, "ratings": False, "lists": [], "ids": False, "added": False, "status": False}
+    needs = {"paths": False, "ratings": False, "lists": [], "ids": False, "added": False, "status": False,
+             "release": False, "rating_fields": [], "network": False, "content_ratings": [], "streaming": [],
+             "maintainerr": False}
     for element in elements:
         for cond in element.get("conditions") or []:
             if not isinstance(cond, dict):
@@ -81,12 +123,25 @@ def needed_data(elements: List[Dict[str, Any]]) -> Dict[str, Any]:
                 needs["paths"] = True
             elif field in rating_fields:
                 needs["ratings"] = True
+                if field not in needs["rating_fields"]:
+                    needs["rating_fields"].append(field)
             elif field in ("tmdb_id", "tvdb_id"):
                 needs["ids"] = True
-            elif field in ("days_since_added", "added"):
+            elif field in ("days_since_added", "added", "added_date"):
                 needs["added"] = True
+            elif field in ("release_date", "days_since_release"):
+                needs["release"] = True
             elif field == "show_status":
                 needs["status"] = True
+            elif field in MAINTAINERR_FIELDS:
+                needs["maintainerr"] = True
+            elif field == "network":
+                needs["network"] = True
+            elif field in _REGIONAL_FIELDS:
+                bucket = needs["content_ratings" if field == "content_rating" else "streaming"]
+                region = condition_region(cond)
+                if region not in bucket:
+                    bucket.append(region)
             elif field in _LIST_FIELDS:
                 for value in (cond.get("value") if isinstance(cond.get("value"), list) else [cond.get("value")]):
                     if value and str(value) not in needs["lists"]:
@@ -96,11 +151,109 @@ def needed_data(elements: List[Dict[str, Any]]) -> Dict[str, Any]:
             names = {m.group(1) for m in _VAR_RE.finditer(str(text))}
             if names & rating_fields:
                 needs["ratings"] = True
-            if "days_since_added" in names:
+                for name in sorted(names & rating_fields):
+                    if name not in needs["rating_fields"]:
+                        needs["rating_fields"].append(name)
+            if names & {"days_since_added", "added_date"}:
                 needs["added"] = True
+            if names & {"release_date", "days_since_release"}:
+                needs["release"] = True
             if "show_status" in names:
                 needs["status"] = True
+            if names & MAINTAINERR_TEXT_KEYS:
+                needs["maintainerr"] = True
     return needs
+
+
+# Fields whose value depends on a country: the content rating (certification)
+# and the streaming services. A condition says which country in "region" (US by
+# default); the context holds one value list per country as "<field>@<REGION>".
+_REGIONAL_FIELDS = ("content_rating", "streaming")
+
+
+def condition_region(cond: Dict[str, Any]) -> str:
+    region = re.sub(r"[^A-Za-z]", "", str(cond.get("region") or "")).upper()[:2]
+    return region or "US"
+
+
+def regional_key(field: str, region: str) -> str:
+    return f"{field}@{(region or 'US').upper()}"
+
+
+_FACTS_REFRESH_DAYS = 30
+
+
+def _tmdb_facts(media_type: str, tmdb_id: Any) -> Tuple[Dict[str, Any], str]:
+    """TMDb certifications for every country and (shows) the networks, kept in the
+    database for 30 days so overlay checks don't ask TMDb on every render.
+    Returns ({"content_ratings": {"US": "PG-13", ...}, "networks": [...]}, why-missing)."""
+    import json
+    from . import database as db
+    kind = "show" if media_type == "show" else "movie"
+    key = str(tmdb_id)
+    row = None
+    try:
+        with db.get_db() as conn:
+            conn.execute("CREATE TABLE IF NOT EXISTS tmdb_item_facts (media_type TEXT NOT NULL, tmdb_id TEXT NOT NULL, "
+                         "facts_json TEXT, fetched_at TEXT NOT NULL, PRIMARY KEY (media_type, tmdb_id))")
+            row = conn.execute("SELECT facts_json, fetched_at FROM tmdb_item_facts WHERE media_type = ? AND tmdb_id = ?",
+                               (kind, key)).fetchone()
+    except Exception:
+        row = None
+    cached = None
+    if row:
+        try:
+            cached = json.loads(row["facts_json"] or "{}")
+        except ValueError:
+            cached = None
+        fetched = _parse_date(row["fetched_at"])
+        if cached is not None and fetched and (_date.today() - fetched).days < _FACTS_REFRESH_DAYS:
+            return cached, ""
+    try:
+        from . import tmdb_client
+        facts: Dict[str, Any] = {"content_ratings": {}, "networks": []}
+        if kind == "show":
+            data = tmdb_client._cached_tmdb_get(f"/tv/{int(tmdb_id)}/content_ratings", {})
+            for r in data.get("results") or []:
+                country, rating = str(r.get("iso_3166_1") or "").upper(), str(r.get("rating") or "").strip()
+                if country and rating:
+                    facts["content_ratings"][country] = rating
+            details = tmdb_client._cached_tmdb_get(f"/tv/{int(tmdb_id)}", {})  # get_tv_show_details() drops networks
+            facts["networks"] = [str(n.get("name")).strip() for n in (details.get("networks") or [])
+                                 if isinstance(n, dict) and n.get("name")]
+        else:
+            data = tmdb_client._cached_tmdb_get(f"/movie/{int(tmdb_id)}/release_dates", {})
+            for r in data.get("results") or []:
+                country = str(r.get("iso_3166_1") or "").upper()
+                dates = [d for d in (r.get("release_dates") or []) if str(d.get("certification") or "").strip()]
+                # Theatrical first, then limited, digital, physical, TV, premiere.
+                order = {3: 0, 2: 1, 4: 2, 5: 3, 6: 4, 1: 5}
+                dates.sort(key=lambda d: order.get(d.get("type"), 9))
+                if country and dates:
+                    facts["content_ratings"][country] = str(dates[0]["certification"]).strip()
+    except Exception as e:
+        if cached is not None:
+            return cached, ""
+        return {}, f"TMDb lookup failed: {e}"
+    try:
+        with db.get_db() as conn:
+            conn.execute("INSERT OR REPLACE INTO tmdb_item_facts (media_type, tmdb_id, facts_json, fetched_at) "
+                         "VALUES (?, ?, ?, ?)", (kind, key, json.dumps(facts), _date.today().isoformat()))
+            conn.commit()
+    except Exception:
+        pass
+    return facts, ""
+
+
+def content_rating_values(rating: Optional[str], region: str) -> List[str]:
+    """A certification as Kometa's lists spell it: the bare value ("12A") and
+    Plex's country-prefixed form ("gb/12A")."""
+    if not rating:
+        return []
+    out = [rating]
+    if "/" not in rating:
+        out.append(f"{(region or 'US').lower()}/{rating}")
+    return out
 
 
 # TMDb show status -> the words Kometa's tvdb_status filter uses (plus canceled,
@@ -127,6 +280,30 @@ def _item_ids(ctx: Dict[str, Any]) -> Tuple[Optional[Any], Optional[Any], str]:
     return tmdb_id, tvdb_id, media_type
 
 
+_RATING_SOURCE_NAMES = {
+    "imdb": "IMDb", "tmdb": "TMDb", "trakt": "Trakt", "tomatoes": "Rotten Tomatoes (critics)",
+    "tomatoesaudience": "Rotten Tomatoes (audience)", "metacritic": "Metacritic",
+    "metacriticuser": "Metacritic (users)", "letterboxd": "Letterboxd", "myanimelist": "MyAnimeList",
+}
+
+
+def _rating_source_name(field: str, sources: Dict[str, str]) -> str:
+    """Which service a rating field reads from, for log notes."""
+    if field in ("audience_rating", "critic_rating"):
+        from . import server_ratings
+        src = sources.get(field, "")
+        src = server_ratings.mdblist_fallback_source(field, src) or src
+        return _RATING_SOURCE_NAMES.get(src, src or field)
+    if field == "mdb_rating":
+        return "MDBList score"
+    if field == "mdb_average_rating":
+        return "MDBList average"
+    if field.startswith("mdb_") and field.endswith("_rating"):
+        src = field[4:-7]
+        return _RATING_SOURCE_NAMES.get(src, src)
+    return field
+
+
 def build_context(meta: Dict[str, Any], needs_paths: bool = False,
                   elements: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """Data context for conditions and text variables. Starts from the overlay
@@ -136,12 +313,21 @@ def build_context(meta: Dict[str, Any], needs_paths: bool = False,
     needs = needed_data(elements) if elements else {"paths": False, "ratings": False, "lists": []}
     needs.setdefault("added", False)
     needs.setdefault("status", False)
+    needs.setdefault("release", False)
+    needs.setdefault("network", False)
+    needs.setdefault("content_ratings", [])
+    needs.setdefault("streaming", [])
+    needs.setdefault("maintainerr", False)
     needs_paths = needs_paths or needs["paths"]
     ctx = dict(meta or {})
     # Why data a rule needs is missing (shown in the render log by data_summary()).
     notes: Dict[str, str] = {}
     ctx["_notes"] = notes
     ctx["resolution"] = normalize_resolution(ctx.get("video_resolution"))
+    # Today's date (the server's local time zone), for seasonal rules.
+    # The preview may pass its own to test a season.
+    if not _parse_date(ctx.get("today")):
+        ctx["today"] = _date.today().isoformat()
     if ctx.get("year") is None and ctx.get("movie_year") not in (None, ""):
         ctx["year"] = ctx.get("movie_year")
     if ctx.get("title") is None and ctx.get("movie_title"):
@@ -170,7 +356,7 @@ def build_context(meta: Dict[str, Any], needs_paths: bool = False,
                 ctx["tvdb_id"] = cached_tvdb
         except Exception:
             pass
-    if needs["added"] and ctx.get("days_since_added") in (None, ""):
+    if needs["added"] and (ctx.get("days_since_added") in (None, "") or ctx.get("added_date") in (None, "")):
         added_at = ctx.get("added_at") or ctx.get("addedAt")
         if not added_at and ctx.get("rating_key"):
             try:
@@ -181,11 +367,35 @@ def build_context(meta: Dict[str, Any], needs_paths: bool = False,
         try:
             if added_at:
                 import time
-                ctx["days_since_added"] = max(0, int((time.time() - float(added_at)) // 86400))
-        except (TypeError, ValueError):
+                if ctx.get("days_since_added") in (None, ""):
+                    ctx["days_since_added"] = max(0, int((time.time() - float(added_at)) // 86400))
+                if ctx.get("added_date") in (None, ""):
+                    ctx["added_date"] = _datetime.fromtimestamp(float(added_at)).date().isoformat()
+        except (TypeError, ValueError, OverflowError, OSError):
             pass
         if ctx.get("days_since_added") in (None, ""):
             notes["days_since_added"] = "no date added stored yet, scan the library"
+        if ctx.get("added_date") in (None, ""):
+            notes["added_date"] = "no date added stored yet, scan the library"
+    if needs["maintainerr"]:
+        _fill_maintainerr(ctx, notes)
+    if needs["release"] and ctx.get("release_date") in (None, ""):
+        tmdb_id, _tvdb, media_type = _item_ids(ctx)
+        if not tmdb_id:
+            notes["release_date"] = "this item has no TMDb ID"
+        else:
+            released, why = _release_date(media_type, tmdb_id)
+            if released:
+                ctx["release_date"] = released
+            else:
+                notes["release_date"] = why
+    if needs["release"] and ctx.get("days_since_release") in (None, ""):
+        rd = _parse_date(ctx.get("release_date"))
+        if rd:
+            # Negative before release: "is below 0" = not out yet.
+            ctx["days_since_release"] = (_parse_date(ctx["today"]) - rd).days
+        else:
+            notes.setdefault("days_since_release", notes.get("release_date") or "no release date")
     if needs["status"] and ctx.get("show_status") in (None, ""):
         if not _is_tv(ctx):
             notes["show_status"] = "only TV shows have a status"
@@ -203,22 +413,90 @@ def build_context(meta: Dict[str, Any], needs_paths: bool = False,
                         notes["show_status"] = "TMDb has no status for this show"
                 except Exception as e:
                     notes["show_status"] = f"TMDb lookup failed: {e}"
+    if needs["network"] or needs["content_ratings"]:
+        tmdb_id, _tvdb, media_type = _item_ids(ctx)
+        facts, why = _tmdb_facts(media_type, tmdb_id) if tmdb_id else ({}, "this item has no TMDb ID")
+        if needs["network"] and ctx.get("network") in (None, "", []):
+            if media_type != "show":
+                notes["network"] = "only TV shows have a network"
+            elif facts.get("networks"):
+                ctx["network"] = list(facts["networks"])
+            else:
+                notes["network"] = why or "TMDb lists no network for this show"
+        for region in needs["content_ratings"]:
+            key = regional_key("content_rating", region)
+            if ctx.get(key) in (None, "", []):
+                rating = (facts.get("content_ratings") or {}).get(region)
+                if rating:
+                    ctx[key] = content_rating_values(rating, region)
+                else:
+                    notes[key] = why or f"TMDb has no {region} content rating for it"
+    if needs["streaming"]:
+        tmdb_id, _tvdb, media_type = _item_ids(ctx)
+        for region in needs["streaming"]:
+            key = regional_key("streaming", region)
+            if ctx.get(key) not in (None, "", []):
+                continue
+            if not tmdb_id:
+                notes[key] = "this item has no TMDb ID"
+                continue
+            try:
+                from .tmdb_client import get_watch_providers
+                providers = get_watch_providers(int(tmdb_id), "tv" if media_type == "show" else "movie", region)
+            except Exception as e:
+                providers = []
+                notes[key] = f"TMDb lookup failed: {e}"
+            values: List[str] = []
+            for prov in providers or []:
+                if prov.get("provider_id") is not None:
+                    values.append(str(prov["provider_id"]))
+                if prov.get("provider_name"):
+                    values.append(str(prov["provider_name"]))
+            ctx[key] = values
+            if not values:
+                notes.setdefault(key, f"TMDb lists no {region} streaming service for it")
     if needs["ratings"]:
         tmdb_id, tvdb_id, media_type = _item_ids(ctx)
         try:
             from . import mdblist_client as mdb
-            if not mdb.has_key():
-                notes["ratings"] = "no MDBList API key in Settings > General"
+            from . import server_ratings
+            # Audience/critic rating from the media server when that's the
+            # chosen source (or MDBList can't be used); MDBList for the rest.
+            used = server_ratings.fill(ctx, media_type, tmdb_id, mdb.has_key())
+            if used:
+                ctx["_rating_sources"] = used
+            wanted = set(needs.get("rating_fields") or [])
+            still_needed = {f for f in wanted if ctx.get(f) in (None, "")}
+            if wanted and not still_needed:
+                pass  # everything came from the media server
+            elif not mdb.has_key():
+                if still_needed & {"audience_rating", "critic_rating"}:
+                    notes["ratings"] = ("no rating for this item from the media server or TMDb (TMDb has no critic "
+                                        "score), and no MDBList API key")
+                else:
+                    notes["ratings"] = "no MDBList API key in Settings > Ratings & Lists"
             else:
                 if not tmdb_id and not tvdb_id:
                     notes["ratings"] = "this item has no TMDb/TVDB ID"
                 data = mdb.get_ratings(media_type, tmdb_id=tmdb_id, tvdb_id=tvdb_id) if (tmdb_id or tvdb_id) else None
                 fields = mdb.rating_fields(data or {})
+                sources = server_ratings._sources()
                 for key, value in fields.items():
                     if ctx.get(key) in (None, ""):  # values from the media server win
                         ctx[key] = value
-                if (tmdb_id or tvdb_id) and not fields:
+                        if server_ratings.mdblist_fallback_source(key, sources.get(key, "")):
+                            used[key] = server_ratings.fallback_label(key)
+                # A media-server source neither the server nor MDBList had: TMDb.
+                used.update(server_ratings.fill_after_mdblist(ctx, media_type, tmdb_id))
+                if used:
+                    ctx["_rating_sources"] = used
+                if (tmdb_id or tvdb_id) and not fields and not used:
                     notes["ratings"] = "MDBList has no ratings for this item"
+                elif fields:
+                    missing = [f for f in wanted if ctx.get(f) in (None, "")]
+                    if missing:
+                        names = sorted({_rating_source_name(f, sources) for f in missing})
+                        notes["ratings"] = f"MDBList has no {' or '.join(names)} score for this item"
         except Exception as e:  # never fail a render over ratings
             from .config import logger
             logger.debug("[OVERLAY] MDBList lookup failed: %s", e)
@@ -241,6 +519,142 @@ def build_context(meta: Dict[str, Any], needs_paths: bool = False,
             ctx.setdefault("lists", [])
             notes.setdefault("lists", f"list lookup failed: {e}")
     return ctx
+
+
+# --------------------------------------------------------------------------
+# Dates
+# --------------------------------------------------------------------------
+
+_RELEASE_REFRESH_DAYS = 30
+
+
+def _parse_date(value: Any) -> Optional[_date]:
+    """A YYYY-MM-DD date (anything after the date, like a time, is ignored)."""
+    if isinstance(value, _datetime):
+        return value.date()
+    if isinstance(value, _date):
+        return value
+    text = str(value or "").strip()[:10]
+    try:
+        return _date.fromisoformat(text) if len(text) == 10 else None
+    except ValueError:
+        return None
+
+
+def _month_day(value: Any) -> Optional[Tuple[int, int]]:
+    """A yearly date, MM-DD (e.g. 12-25)."""
+    m = re.fullmatch(r"\s*(\d{1,2})-(\d{1,2})\s*", str(value or ""))
+    if not m:
+        return None
+    month, day = int(m.group(1)), int(m.group(2))
+    if not (1 <= month <= 12 and 1 <= day <= 31):
+        return None
+    return month, day
+
+
+def countdown_days(target: Any, today: _date) -> Optional[int]:
+    """Whole days from `today` to the {countdown} date: YYYY-MM-DD (fixed; None
+    once it has passed) or MM-DD (yearly; after the day it counts to next
+    year's). 0 on the day. A yearly 02-29 means 03-01 in other years."""
+    text = str(target or "").strip()
+    if re.fullmatch(r"\d{4}-\d{1,2}-\d{1,2}", text):
+        y, mo, dd = (int(x) for x in text.split("-"))
+        when = _parse_date(f"{y:04d}-{mo:02d}-{dd:02d}")
+        if not when or when < today:
+            return None
+        return (when - today).days
+    md = _month_day(text)
+    if not md:
+        return None
+
+    def in_year(year: int) -> Optional[_date]:
+        try:
+            return _date(year, md[0], md[1])
+        except ValueError:
+            return _date(year, 3, 1) if md == (2, 29) else None
+
+    when = in_year(today.year)
+    if when is None:
+        return None
+    if when < today:
+        when = in_year(today.year + 1)
+    return (when - today).days if when else None
+
+
+def _range_bounds(target: Any) -> Optional[Tuple[str, str]]:
+    """A 'between' value: [start, end], or 'start..end' / 'start~end'."""
+    if isinstance(target, (list, tuple)):
+        parts = [str(t).strip() for t in target]
+    else:
+        parts = [p.strip() for p in re.split(r"\.\.|~", str(target or ""))]
+    parts = [p for p in parts if p]
+    return (parts[0], parts[1]) if len(parts) == 2 else None
+
+
+def date_in_range(value: Any, target: Any) -> Optional[bool]:
+    """Is the date `value` within the range `target` (both ends included)?
+    MM-DD ends make a yearly range that may wrap past New Year (12-20..01-05);
+    YYYY-MM-DD ends make a fixed range. None when either can't be read."""
+    when = _parse_date(value)
+    bounds = _range_bounds(target)
+    if not when or not bounds:
+        return None
+    start_md, end_md = _month_day(bounds[0]), _month_day(bounds[1])
+    if start_md and end_md:
+        md = (when.month, when.day)
+        if start_md <= end_md:
+            return start_md <= md <= end_md
+        return md >= start_md or md <= end_md
+    start, end = _parse_date(bounds[0]), _parse_date(bounds[1])
+    if not start or not end:
+        return None
+    if start > end:
+        start, end = end, start
+    return start <= when <= end
+
+
+def _release_date(media_type: str, tmdb_id: Any) -> Tuple[Optional[str], str]:
+    """Release date (movie) or first air date (show) from TMDb, kept in the
+    database so overlay checks don't ask TMDb on every render. Re-asked after
+    30 days, or daily while TMDb has no date yet. Returns (date, why-missing)."""
+    from . import database as db
+    kind = "show" if media_type == "show" else "movie"
+    key = str(tmdb_id)
+    row = None
+    try:
+        with db.get_db() as conn:
+            conn.execute("CREATE TABLE IF NOT EXISTS release_dates (media_type TEXT NOT NULL, tmdb_id TEXT NOT NULL, "
+                         "release_date TEXT, fetched_at TEXT NOT NULL, PRIMARY KEY (media_type, tmdb_id))")
+            row = conn.execute("SELECT release_date, fetched_at FROM release_dates WHERE media_type = ? AND tmdb_id = ?",
+                               (kind, key)).fetchone()
+    except Exception:
+        row = None
+    if row:
+        fetched = _parse_date(row["fetched_at"])
+        age = (_date.today() - fetched).days if fetched else 999
+        if row["release_date"] and age < _RELEASE_REFRESH_DAYS:
+            return row["release_date"], ""
+        if not row["release_date"] and age < 1:
+            return None, "TMDb has no release date for it yet"
+    try:
+        from . import tmdb_client
+        if kind == "show":
+            released = str(tmdb_client.get_tv_show_details(int(tmdb_id)).get("first_air_date") or "")[:10]
+        else:
+            released = str(tmdb_client.get_movie_details(int(tmdb_id)).get("release_date") or "")[:10]
+    except Exception as e:
+        if row and row["release_date"]:
+            return row["release_date"], ""
+        return None, f"TMDb lookup failed: {e}"
+    released = released if _parse_date(released) else None
+    try:
+        with db.get_db() as conn:
+            conn.execute("INSERT OR REPLACE INTO release_dates (media_type, tmdb_id, release_date, fetched_at) "
+                         "VALUES (?, ?, ?, ?)", (kind, key, released, _date.today().isoformat()))
+            conn.commit()
+    except Exception:
+        pass
+    return released, ("" if released else "TMDb has no release date for it yet")
 
 
 # --------------------------------------------------------------------------
@@ -275,13 +689,22 @@ def _field_values(field: str, ctx: Dict[str, Any]) -> List[Any]:
     return [value]
 
 
+def _condition_values(cond: Dict[str, Any], ctx: Dict[str, Any]) -> List[Any]:
+    """The item's values for a condition's field (regional fields per its region)."""
+    field = str(cond.get("field") or "").strip().lower()
+    if field in _REGIONAL_FIELDS:
+        raw = ctx.get(regional_key(field, condition_region(cond)))
+        return list(raw) if isinstance(raw, (list, tuple)) else ([] if raw in (None, "") else [raw])
+    return _field_values(field, ctx)
+
+
 def check_condition(cond: Dict[str, Any], ctx: Dict[str, Any]) -> bool:
     """One condition. Unknown ops fail closed (the element doesn't render), so a
     typo never shows a badge on every poster."""
     op = str(cond.get("op") or "eq").strip().lower()
     target = cond.get("value")
-    values = _field_values(str(cond.get("field") or ""), ctx)
     field = str(cond.get("field") or "").strip().lower()
+    values = _condition_values(cond, ctx)
     if field == "resolution":
         target = normalize_resolution(target) if not isinstance(target, list) else [normalize_resolution(t) for t in target]
     if field in _LIST_FIELDS:
@@ -301,6 +724,21 @@ def check_condition(cond: Dict[str, Any], ctx: Dict[str, Any]) -> bool:
             return False
         hit = any(p.search(str(v)) for p in patterns for v in values)
         return hit if op == "regex" else not hit
+
+    if op in ("between", "not_between"):
+        hits = [date_in_range(v, target) for v in values]
+        if not any(h is not None for h in hits):
+            return False
+        hit = any(h for h in hits)
+        return hit if op == "between" else not hit
+
+    if op in _NUMERIC_OPS and _parse_date(target):
+        # Dates: gt = after, lt = before.
+        when = next((d for d in (_parse_date(v) for v in values) if d), None)
+        if not when:
+            return False
+        limit = _parse_date(target)
+        return {"gt": when > limit, "gte": when >= limit, "lt": when < limit, "lte": when <= limit}[op]
 
     if op in _NUMERIC_OPS:
         threshold = _as_number(target)
@@ -391,16 +829,32 @@ def select_elements(elements: List[Dict[str, Any]], ctx: Dict[str, Any]) -> List
 # Text variables
 # --------------------------------------------------------------------------
 
-def _format_value(value: Any) -> str:
+def _format_value(value: Any, fmt: str = "") -> str:
+    """fmt is Kometa's text modifier (modules/overlays.py): "%" = value x 10 as a
+    whole number (7.6 -> 76), "#" = one decimal without a trailing ".0", "/" = half,
+    one decimal. Non-numbers ignore it."""
+    if fmt:
+        try:
+            num = float(value)
+        except (TypeError, ValueError):
+            return str(value)
+        if fmt == "%":
+            return str(int(num * 10))
+        if fmt == "#":
+            text = f"{num:.1f}"
+            return text[:-2] if text.endswith(".0") else text
+        if fmt == "/":
+            return f"{num / 2:.1f}"
     if isinstance(value, float):
         return f"{value:.1f}"
     return str(value)
 
 
-def fill_text(template: str, ctx: Dict[str, Any]) -> Optional[str]:
+def fill_text(template: str, ctx: Dict[str, Any], element: Optional[Dict[str, Any]] = None) -> Optional[str]:
     """Replace {variable} placeholders. Returns None when a referenced variable
     is missing or blank, so the element is skipped rather than drawing an empty
-    pill (Kometa's ignore_blank_results)."""
+    pill (Kometa's ignore_blank_results). {countdown} comes from the layer's own
+    `countdown_to` date, so it needs `element`."""
     missing = False
 
     def repl(match: "re.Match[str]") -> str:
@@ -410,12 +864,16 @@ def fill_text(template: str, ctx: Dict[str, Any]) -> Optional[str]:
             value = ctx.get("movie_title") or ctx.get("title")
         elif key in ("year", "movie_year"):
             value = ctx.get("movie_year") or ctx.get("year")
+        elif key == "countdown":
+            value = None
+            if element is not None:
+                value = countdown_days(element.get("countdown_to"), _parse_date(ctx.get("today")) or _date.today())
         else:
             value = ctx.get(key)
         if value is None or str(value).strip() == "":
             missing = True
             return ""
-        return _format_value(value)
+        return _format_value(value, match.group(2))
 
     out = _VAR_RE.sub(repl, template or "")
     return None if missing else out
@@ -542,7 +1000,7 @@ def _render_content(element: Dict[str, Any], ctx: Dict[str, Any], s: float) -> O
     """The element's content as a transparent RGBA image, sized for the canvas."""
     text_template = element.get("text")
     if text_template:
-        text = fill_text(str(text_template), ctx)
+        text = fill_text(str(text_template), ctx, element)
         if not text:
             return None
         size = max(1, int(round((_as_number(element.get("font_size")) or 40) * s)))
@@ -582,23 +1040,35 @@ def _load_addon_image(element: Dict[str, Any], s: float) -> Optional[Image.Image
     return img
 
 
+def _addon_cross(total: int, size: int, align: str) -> int:
+    """Offset of one item across the layout's other axis."""
+    if align == "start":
+        return 0
+    if align == "end":
+        return total - size
+    return (total - size) // 2
+
+
 def _with_addon(text_img: Image.Image, addon: Image.Image, element: Dict[str, Any], s: float) -> Image.Image:
     """Text and its addon image in one box, laid out like Kometa's get_backdrop:
-    left/right put them side by side (top-aligned), top/bottom stack them
-    (the narrower one centered)."""
+    left/right put them side by side, top/bottom stack them. Across the other
+    axis the smaller one is centered (Kometa), or put at the start/end with
+    addon_align."""
     off = int(round((_as_number(element.get("addon_offset")) or 0) * s))
     pos = str(element.get("addon_position") or "left").lower()
+    align = str(element.get("addon_align") or "center").lower()
     tw, th = text_img.size
     iw, ih = addon.size
     if pos in ("left", "right"):
         bw, bh = tw + iw + off, max(th, ih)
+        ty, ay = _addon_cross(bh, th, align), _addon_cross(bh, ih, align)
         if pos == "left":
-            tx, ty, ax, ay = iw + off, 0, 0, 0
+            tx, ax = iw + off, 0
         else:
-            tx, ty, ax, ay = 0, 0, tw + off, 0
+            tx, ax = 0, tw + off
     else:
         bw, bh = max(tw, iw), th + ih + off
-        tx, ax = (bw - tw) // 2, (bw - iw) // 2
+        tx, ax = _addon_cross(bw, tw, align), _addon_cross(bw, iw, align)
         if pos == "top":
             ty, ay = ih + off, 0
         else:
@@ -719,12 +1189,18 @@ FIELD_LABELS = {
     "mdb_trakt_rating": "Trakt rating", "mdb_letterboxd_rating": "Letterboxd rating",
     "mdb_myanimelist_rating": "MyAnimeList score",
     "days_since_added": "Days since added", "show_status": "Show status",
+    "today": "Today's date", "added_date": "Date added", "release_date": "Release date",
+    "days_since_release": "Days since release",
+    "removal_date": "Removal date", "days_until_removal": "Days until removal",
+    "maintainerr_collection": "Maintainerr collection",
+    "content_rating": "Content rating", "network": "Network", "streaming": "Streaming service",
 }
 _OP_WORDS = {
     "eq": "is", "is": "is", "ne": "is not", "not": "is not", "in": "is one of", "not_in": "is none of",
     "contains": "contains", "not_contains": "doesn't contain", "regex": "matches", "not_regex": "doesn't match",
     "gt": "is above", "gte": "is at least", "lt": "is below", "lte": "is at most",
     "exists": "is set", "not_exists": "is empty",
+    "between": "is between", "not_between": "is not between",
 }
 
 
@@ -756,10 +1232,13 @@ def describe_failure(cond: Dict[str, Any], ctx: Dict[str, Any]) -> str:
     op = str(cond.get("op") or "eq").strip().lower()
     want = "" if op in ("exists", "not_exists") else " " + _short(cond.get("value"))
     needs = f"needs: {_OP_WORDS.get(op, op)}{want}"
-    values = _field_values(field, ctx)
+    values = _condition_values(cond, ctx)
+    if field in _REGIONAL_FIELDS:
+        label = f"{label} ({condition_region(cond)})"
     if not values:
         notes = ctx.get("_notes") or {}
-        key = "ratings" if field in _rating_field_names() else "lists" if field in _LIST_FIELDS else field
+        key = ("ratings" if field in _rating_field_names() else "lists" if field in _LIST_FIELDS
+               else regional_key(field, condition_region(cond)) if field in _REGIONAL_FIELDS else field)
         why = notes.get(key) or notes.get("filepath" if key in ("file_path", "filename") else key)
         if key == "lists" and not why:
             # The lists were checked; the item just isn't on any of them.
@@ -796,8 +1275,14 @@ def prefetch_ratings_for_render(template_id: Optional[str], preset_id: Optional[
             elements += [e for e in cfg.get("elements") or [] if isinstance(e, dict)]
             if cfg.get("conditions"):
                 elements.append({"conditions": cfg["conditions"]})
-        if not elements or not needed_data(elements)["ratings"]:
+        needs = needed_data(elements) if elements else {"ratings": False}
+        if not needs["ratings"]:
             return 0
+        from .server_ratings import mdblist_fields_wanted
+        wanted = set(needs.get("rating_fields") or [])
+        server_only = {"audience_rating", "critic_rating"} - mdblist_fields_wanted()
+        if wanted and wanted <= server_only:
+            return 0  # every rating these overlays use comes from the media server
         tmdb_ids = []
         for rk in rating_keys:
             tmdb_id, _tvdb = db.get_ids_for_rating_key(str(rk))
@@ -822,12 +1307,16 @@ def condition_facts(elements: List[Dict[str, Any]], ctx: Dict[str, Any]) -> Dict
     {field: [values]} (file paths as file names, lists as list keys). Stored
     with a tracked poster so Overlay Refresh can say what changed."""
     fields = []
+    facts: Dict[str, List[str]] = {}
     for element in elements or []:
         for cond in element.get("conditions") or []:
             field = str((cond or {}).get("field") or "").strip().lower() if isinstance(cond, dict) else ""
-            if field and not field.startswith("_") and field not in fields:
+            if field in _REGIONAL_FIELDS:
+                key = regional_key(field, condition_region(cond))
+                if key not in facts:
+                    facts[key] = sorted({str(v) for v in _condition_values(cond, ctx) if v not in (None, "")})
+            elif field and not field.startswith("_") and field not in fields:
                 fields.append(field)
-    facts: Dict[str, List[str]] = {}
     for field in fields:
         key = "list" if field in _LIST_FIELDS else "label" if field == "labels" else (
             "filepath" if field in ("file_path", "filename") else field)
@@ -850,6 +1339,8 @@ def _ctx_from_facts(facts: Dict[str, Any]) -> Dict[str, Any]:
             ctx["labels"] = values
         elif field == "filepath":
             ctx["file_paths"] = values
+        elif "@" in field or field == "network":
+            ctx[field] = values
         else:
             nums = [_as_number(v) for v in values]
             ctx[field] = (nums[0] if nums and nums[0] is not None else values[0]) if len(values) == 1 else (values or None)
@@ -867,7 +1358,8 @@ def fields_that_flipped(conditions: List[Dict[str, Any]], old: Dict[str, Any], n
             continue
         field = str(cond.get("field") or "").strip().lower()
         key = "list" if field in _LIST_FIELDS else "label" if field == "labels" else (
-            "filepath" if field in ("file_path", "filename") else field)
+            "filepath" if field in ("file_path", "filename") else
+            regional_key(field, condition_region(cond)) if field in _REGIONAL_FIELDS else field)
         if key in flipped or key not in old or key not in new:
             continue
         if check_condition(cond, old_ctx) != check_condition(cond, new_ctx):
@@ -952,15 +1444,32 @@ def data_summary(ctx: Dict[str, Any], elements: List[Dict[str, Any]]) -> str:
                        if isinstance(c, dict) and str(c.get("field") or "").lower() in _rating_field_names()}
                       | {m.group(1) for e in elements for m in _VAR_RE.finditer(str(e.get("text") or ""))
                          if m.group(1) in _rating_field_names()})
-        shown = [f"{FIELD_LABELS.get(k, k)} {_format_value(ctx[k])}" for k in used if ctx.get(k) not in (None, "")]
+        sources = ctx.get("_rating_sources") or {}
+        shown = [f"{FIELD_LABELS.get(k, k)} {_format_value(ctx[k])}" + (f" (from {sources[k]})" if k in sources else "")
+                 for k in used if ctx.get(k) not in (None, "")]
         parts.append("ratings: " + (", ".join(shown) if shown else notes.get("ratings") or "none found"))
     if needs["lists"]:
         parts.append("on lists: " + (_short(ctx.get("lists") or [], 3) if ctx.get("lists") else notes.get("lists") or "none"))
     if needs.get("added"):
         parts.append(f"added {ctx['days_since_added']} days ago" if ctx.get("days_since_added") not in (None, "")
                      else "date added: " + (notes.get("days_since_added") or "unknown"))
+    if any(isinstance(c, dict) and str(c.get("field") or "").lower() == "today"
+           for e in elements for c in (e.get("conditions") or [])):
+        parts.append(f"today {ctx.get('today')}")
+    if needs.get("release"):
+        parts.append("released " + str(ctx.get("release_date") or notes.get("release_date") or "unknown"))
     if needs.get("status"):
         parts.append("status " + str(ctx.get("show_status") or notes.get("show_status") or "unknown"))
+    if needs.get("network"):
+        parts.append("network " + (_short(ctx.get("network"), 3) if ctx.get("network") else notes.get("network") or "unknown"))
+    for region in needs.get("content_ratings") or []:
+        key = regional_key("content_rating", region)
+        vals = ctx.get(key) or []
+        parts.append(f"rated {vals[0]} ({region})" if vals else f"{region} rating: {notes.get(key) or 'unknown'}")
+    for region in needs.get("streaming") or []:
+        key = regional_key("streaming", region)
+        names = [v for v in (ctx.get(key) or []) if not str(v).isdigit()]
+        parts.append(f"streaming ({region}): " + (_short(names, 3) if names else notes.get(key) or "none"))
     if needs["paths"] and notes.get("filepath"):
         parts.append("file: " + notes["filepath"])
     return ", ".join(parts) or "no media info"

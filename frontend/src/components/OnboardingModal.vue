@@ -1,12 +1,25 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
+import { copyToClipboard } from '@/services/clipboard'
 import { getApiBase } from '@/services/apiBase'
-import { useSettingsStore, type MediaServerEntry } from '@/stores/settings'
+import { useSettingsStore, type MediaServerEntry, type LibraryGroup } from '@/stores/settings'
 import { mediaServerId } from '@/services/mediaServerId'
+import { keyNeedsReentry, sameOrigin } from '@/services/serverOrigin'
+import { useServerless } from '@/composables/useServerless'
+import LookStep from '@/components/onboarding/LookStep.vue'
+import ArrStep from '@/components/onboarding/ArrStep.vue'
+import ExtrasStep from '@/components/onboarding/ExtrasStep.vue'
+import GroupsStep from '@/components/onboarding/GroupsStep.vue'
+import GroupRulesStep from '@/components/onboarding/GroupRulesStep.vue'
+import { reevaluatePosterModes } from '@/services/posterModes'
+import { proposeGroups, finalizeGroups, groupsChanged, memberKey, type LibCandidate } from '@/components/onboarding/groupProposals'
 
 const emit = defineEmits<{ (e: 'done'): void }>()
 
 const settings = useSettingsStore()
+const { anyServerConfigured } = useServerless()
+const router = useRouter()
 const apiBase = getApiBase()
 
 // Captured once, at mount, before anything in this run could change it --
@@ -32,7 +45,7 @@ const isRerun = settings.onboardingCompleted.value
 // 'servers' picks any combination of Plex/Jellyfin/Emby; 'connect' then shows
 // one identical section per picked server (all three treated the same), and
 // 'libraries' lists every connected server's libraries together.
-const STEPS = ['welcome', 'servers', 'connect', 'libraries', 'apikeys', 'automation', 'performance', 'notifications', 'finish'] as const
+const STEPS = ['welcome', 'servers', 'connect', 'libraries', 'groups', 'apikeys', 'look', 'arr', 'grouprules', 'extras', 'posterapi', 'automation', 'performance', 'notifications', 'finish'] as const
 type Step = typeof STEPS[number]
 const step = ref<Step>('welcome')
 
@@ -43,13 +56,24 @@ const step = ref<Step>('welcome')
 const wantsPlex = ref(true)
 const wantsJellyfinServer = ref(false)
 const wantsEmbyServer = ref(false)
-const canAdvanceServers = computed(() => wantsPlex.value || wantsJellyfinServer.value || wantsEmbyServer.value)
+// 'connect' (default) is the original flow. 'none' = no media server: Simposter runs as a
+// Poster API provider (welcome -> servers -> apikeys -> posterapi -> finish). On a re-run
+// with servers already configured this never removes them -- it only configures the Poster API.
+const connectMode = ref<'connect' | 'none'>('connect')
+const noServer = computed(() => connectMode.value === 'none')
+const canAdvanceServers = computed(() => noServer.value || wantsPlex.value || wantsJellyfinServer.value || wantsEmbyServer.value)
 
 // visibleSteps -- the step sequence for this run. Every step currently always
 // shows (the per-server choice lives inside 'connect'), but goNext()/goBack()
 // still navigate through this list so a future conditional step only needs a
 // filter rule here.
-const visibleSteps = computed<Step[]>(() => [...STEPS])
+const NO_SERVER_STEPS: Step[] = ['welcome', 'servers', 'apikeys', 'look', 'extras', 'posterapi', 'finish']
+const visibleSteps = computed<Step[]>(() =>
+  noServer.value
+    ? NO_SERVER_STEPS
+    : STEPS.filter(s => s !== 'posterapi'
+      && (s !== 'groups' || groupDraft.value.length > 0)
+      && (s !== 'grouprules' || showGroupRules.value)))
 const stepIndex = computed(() => visibleSteps.value.indexOf(step.value))
 
 // ── Plex step ──────────────────────────────────────────────────────────────
@@ -102,30 +126,47 @@ const embyError = ref('')
 const embyOk = ref(false)
 const addedEmbyServer = ref<MediaServerEntry | null>(null)
 
+// On a re-run: the saved Jellyfin/Emby server. Its key comes back masked; a
+// test sends the server's id so Simposter uses the saved key, which only
+// works with the saved address (sameOrigin). Changing the address clears it.
+type SavedServer = { id: string; url: string } | null
+const savedJellyfin = ref<SavedServer>(null)
+const savedEmby = ref<SavedServer>(null)
+// Takes the type, not the refs: refs passed from the template arrive unwrapped.
+const onServerUrlInput = (type: 'jellyfin' | 'emby') => {
+  const [saved, url, keyRef, okRef] = type === 'jellyfin'
+    ? [savedJellyfin.value, jellyfinUrl.value, jellyfinApiKey, jellyfinOk]
+    : [savedEmby.value, embyUrl.value, embyApiKey, embyOk]
+  okRef.value = false
+  if (saved && keyNeedsReentry(url, keyRef.value, saved.url)) keyRef.value = ''
+}
+
 // Shared test logic for both forms above -- the two are otherwise fully
 // independent state (separate url/key/status per type), this just avoids two
 // copies of the same fetch-and-interpret-the-response block.
 async function testMediaServerGeneric(
   type: 'jellyfin' | 'emby', url: string, apiKey: string,
   testingRef: typeof testingJellyfin, errorRef: typeof jellyfinError,
-  okRef: typeof jellyfinOk, addedRef: typeof addedJellyfinServer,
+  okRef: typeof jellyfinOk, addedRef: typeof addedJellyfinServer, saved: SavedServer,
 ) {
   testingRef.value = true
   errorRef.value = ''
   okRef.value = false
   addedRef.value = null
+  // Same saved server (same address): keep its id, so its stored key is used.
+  const sameServer = !!saved && sameOrigin(url, saved.url)
   try {
     const res = await fetch(`${apiBase}/api/media-server/test-connection`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type, url: url.trim(), apiKey: apiKey.trim() }),
+      body: JSON.stringify({ type, url: url.trim(), apiKey: apiKey.trim(), server_id: sameServer ? saved!.id : undefined }),
     })
     const data = await res.json()
     if (data.connected) {
       okRef.value = true
-      addedRef.value = { id: mediaServerId(type, url), type, url: url.trim(), apiKey: apiKey.trim(), enabled: true }
+      addedRef.value = { id: sameServer ? saved!.id : mediaServerId(type, url), type, url: url.trim(), apiKey: apiKey.trim(), enabled: true }
     } else {
-      errorRef.value = 'Could not connect — check the URL and API key'
+      errorRef.value = data.error || 'Could not connect — check the URL and API key'
     }
   } catch (e) {
     errorRef.value = e instanceof Error ? e.message : 'Connection failed'
@@ -133,8 +174,8 @@ async function testMediaServerGeneric(
     testingRef.value = false
   }
 }
-const testJellyfin = () => testMediaServerGeneric('jellyfin', jellyfinUrl.value, jellyfinApiKey.value, testingJellyfin, jellyfinError, jellyfinOk, addedJellyfinServer)
-const testEmby = () => testMediaServerGeneric('emby', embyUrl.value, embyApiKey.value, testingEmby, embyError, embyOk, addedEmbyServer)
+const testJellyfin = () => testMediaServerGeneric('jellyfin', jellyfinUrl.value, jellyfinApiKey.value, testingJellyfin, jellyfinError, jellyfinOk, addedJellyfinServer, savedJellyfin.value)
+const testEmby = () => testMediaServerGeneric('emby', embyUrl.value, embyApiKey.value, testingEmby, embyError, embyOk, addedEmbyServer, savedEmby.value)
 
 // ── Libraries step ─────────────────────────────────────────────────────────
 const movieLibSections = computed(() => plexSections.value.filter(s => s.type === 'movie'))
@@ -152,9 +193,21 @@ const toggleTvLib = (key: string) => {
   else selectedTvLibs.value.add(key)
 }
 
+// Keeps a library's existing per-library settings (auto-generate, webhook
+// ignore labels, display name) when the wizard re-saves the Plex library list.
+const withExistingMapping = (m: { id: string; title: string; displayName: string }, existing: any[] | undefined) => {
+  const prev = (existing || []).find((e: any) => String(e?.id) === String(m.id))
+  return prev ? { ...prev, ...m, displayName: prev.displayName || m.displayName } : m
+}
+
 const initLibraries = () => {
-  selectedMovieLibs.value = new Set(movieLibSections.value.map(s => s.key))
-  selectedTvLibs.value = new Set(tvLibSections.value.map(s => s.key))
+  // A re-run starts from the libraries already added, not every library on the server.
+  const mapped = (list: any[] | undefined) => new Set((list || []).map(m => String(m?.id)))
+  const movieIds = mapped(settings.plex.value.libraryMappings)
+  const tvIds = mapped(settings.plex.value.tvShowLibraryMappings)
+  const useMapped = isRerun && (movieIds.size > 0 || tvIds.size > 0)
+  selectedMovieLibs.value = new Set(movieLibSections.value.map(s => s.key).filter(k => !useMapped || movieIds.has(String(k))))
+  selectedTvLibs.value = new Set(tvLibSections.value.map(s => s.key).filter(k => !useMapped || tvIds.has(String(k))))
 }
 
 // Jellyfin/Emby libraries -- fetched (GET /api/media-server/libraries, already
@@ -185,8 +238,8 @@ async function fetchNonPlexLibraries() {
 const nonPlexMovieLibs = computed(() => nonPlexDiscovered.value.filter(d => d.mediaType === 'movie'))
 const nonPlexTvLibs = computed(() => nonPlexDiscovered.value.filter(d => d.mediaType === 'tv'))
 const hasTvLibs = computed(() =>
-  selectedTvLibs.value.size > 0 ||
-  nonPlexTvLibs.value.some(d => selectedNonPlexLibs.value.has(nonPlexKey(d)))
+  !noServer.value && (selectedTvLibs.value.size > 0 ||
+  nonPlexTvLibs.value.some(d => selectedNonPlexLibs.value.has(nonPlexKey(d))))
 )
 
 // ── API Keys step ──────────────────────────────────────────────────────────
@@ -286,6 +339,27 @@ const sendLogosToPlex = ref(false)
 const sendLabel = ref(true)
 const labelName = ref('Simposter')
 
+// Overlay Refresh (every library group): off on a first run. A re-run starts
+// from the groups' current setting and only writes it when changed here.
+const orEnabled = ref(false)
+const orHour = ref(4)
+const orLabel = ref('Simposter-Overlay')
+let orInitial = ''
+const orState = () => JSON.stringify([orEnabled.value, orHour.value, orLabel.value.trim()])
+const saveOverlayRefresh = async () => {
+  if (isRerun ? orState() === orInitial : !orEnabled.value) return
+  const config = { enabled: orEnabled.value, scheduleCron: `0 ${orHour.value} * * *`, plexLabel: orLabel.value.trim() }
+  for (const g of settings.libraryGroups.value.filter(x => x.members.length > 0)) {
+    try {
+      await fetch(`${apiBase}/api/overlay-refresh/config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ group_id: g.id, config }),
+      })
+    } catch { /* set it later on the Overlay Refresh page */ }
+  }
+}
+
 // Scan schedule
 type ScanFreq = 'never' | 'daily' | 'weekly' | 'custom'
 const scanFrequency = ref<ScanFreq>('daily')
@@ -312,6 +386,146 @@ const appriseUrls = ref('')  // one URL per line
 const saving = ref(false)
 const settingsSaved = ref(false)
 
+// ── Look step (default preset + starter overlays) ──────────────────────────
+// The default preset is used for auto-generate on every library group (and the
+// Poster API without a server). Ticked starter overlays are installed when
+// leaving the step and added to the preset at Finish, for movies and series only.
+const lookRef = ref<InstanceType<typeof LookStep> | null>(null)
+const defaultPresetId = ref('')
+const initialDefaultPresetId = ref('')
+const lookOverlayIds = ref<string[]>([])
+const installedOverlayConfigIds = ref<string[]>([])
+const lookWarned = ref(false)
+const lookInstallFailed = ref(false)
+const lookPresetChanged = ref(false)
+let overlaysAdded = false
+
+// ── Radarr & Sonarr step ───────────────────────────────────────────────────
+// Connections save themselves when they test fine. The step is unmounted once
+// left, so its group links are read on leaving and applied at Finish.
+const arrRef = ref<InstanceType<typeof ArrStep> | null>(null)
+
+// ── Library groups step ─────────────────────────────────────────────────────
+// The draft holds the saved groups that take part (renamable, can receive new
+// libraries) plus proposed new ones. Built when leaving Libraries.
+const groupDraft = ref<LibraryGroup[]>([])
+const groupExistingIds = ref<string[]>([])
+const groupLockedMembers = ref<string[]>([])
+// Groups saved by this wizard run: still editable after going Back to Libraries.
+let wizardGroupIds = new Set<string>()
+
+const pickedCandidates = (): LibCandidate[] => {
+  const out: LibCandidate[] = []
+  if (wantsPlex.value) {
+    movieLibSections.value.filter(s => selectedMovieLibs.value.has(s.key))
+      .forEach(s => out.push({ serverId: 'plex-1', libraryId: String(s.key), libraryName: s.title, mediaType: 'movie' }))
+    tvLibSections.value.filter(s => selectedTvLibs.value.has(s.key))
+      .forEach(s => out.push({ serverId: 'plex-1', libraryId: String(s.key), libraryName: s.title, mediaType: 'tv' }))
+  }
+  nonPlexDiscovered.value
+    .filter(d => selectedNonPlexLibs.value.has(nonPlexKey(d)))
+    .forEach(d => out.push({ serverId: d.serverId, libraryId: d.libraryId, libraryName: d.libraryName, mediaType: d.mediaType as 'movie' | 'tv' }))
+  return out
+}
+
+const buildGroupDraft = () => {
+  const saved = settings.libraryGroups.value.filter(g => !wizardGroupIds.has(g.id))
+  const candidates = pickedCandidates()
+  const picked = new Set(candidates.map(memberKey))
+  // Saved groups shown: those holding a picked library (all on a re-run: so new
+  // libraries can join them). Their own members can't be moved here.
+  const shown = saved.filter(g => isRerun || g.members.some(m => picked.has(memberKey(m))))
+  groupExistingIds.value = shown.map(g => g.id)
+  groupLockedMembers.value = shown.flatMap(g => g.members.map(memberKey))
+  // Groups this run already saved keep their arrangement (minus libraries no
+  // longer picked); only newly picked libraries get proposed.
+  const kept = (JSON.parse(JSON.stringify(settings.libraryGroups.value.filter(g => wizardGroupIds.has(g.id)))) as LibraryGroup[])
+    .map(g => ({ ...g, members: g.members.filter(m => picked.has(memberKey(m))) }))
+    .filter(g => g.members.length > 0)
+  groupDraft.value = [
+    ...JSON.parse(JSON.stringify(shown)) as LibraryGroup[],
+    ...kept,
+    ...proposeGroups(candidates, [...saved, ...kept]),
+  ]
+}
+
+const saveGroups = async () => {
+  const all = settings.libraryGroups.value
+  const before = all.filter(g => wizardGroupIds.has(g.id))
+  const saved = all.filter(g => !wizardGroupIds.has(g.id))
+  const shownIds = new Set(groupExistingIds.value)
+  const shown = saved.filter(g => shownIds.has(g.id))
+  const final = finalizeGroups(groupDraft.value, shown)
+  const created = final.filter(g => !shownIds.has(g.id))
+  if (!groupsChanged(final, [...shown, ...before])) return
+  const byId = new Map(final.map(g => [g.id, g]))
+  settings.libraryGroups.value = [...saved.map(g => byId.get(g.id) || g), ...created]
+  wizardGroupIds = new Set(created.map(g => g.id))
+  await settings.save()
+}
+const extrasRef = ref<InstanceType<typeof ExtrasStep> | null>(null)
+// The Radarr/Sonarr picked on the arr step: the starting choice per group on
+// the group rules step.
+const arrLinks = ref<{ radarr: string | null; sonarr: string | null }>({ radarr: null, sonarr: null })
+const groupRulesRef = ref<InstanceType<typeof GroupRulesStep> | null>(null)
+// Shown when there's a group and something to link or match on: a Radarr/
+// Sonarr instance, or a Plex library (label rules).
+const showGroupRules = computed(() => {
+  const groups = settings.libraryGroups.value.filter(g => g.members.length > 0)
+  return groups.length > 0 && (
+    settings.arrInstances.value.length > 0 || groups.some(g => g.members.some(m => m.serverId === 'plex-1')))
+})
+const saveGroupRules = async () => {
+  const r = groupRulesRef.value
+  if (!r || !r.changed()) return
+  const ruleIds = r.apply()
+  await settings.save()
+  if (settings.error.value) return
+  for (const id of ruleIds) await reevaluatePosterModes(id)
+}
+
+// On a re-run, the preset the groups already use (auto-generate), so stepping
+// through without changing it leaves every group as it is.
+const currentAutoGeneratePreset = (): string => {
+  const all: any[] = [
+    ...(settings.plex.value.libraryMappings || []),
+    ...(settings.plex.value.tvShowLibraryMappings || []),
+    ...settings.libraryGroups.value,
+  ]
+  return String(all.find(x => x?.autoGeneratePresetId)?.autoGeneratePresetId || '')
+}
+
+// Turn on auto-generate with the default preset. Plex libraries keep their
+// settings on the Plex library mapping (what automation reads, Quirk #119);
+// a group without Plex keeps them on the group.
+const applyAutoGenerate = () => {
+  const preset = defaultPresetId.value
+  // A re-run leaves auto-generate alone unless a different preset was picked.
+  if (!preset || (isRerun && !lookPresetChanged.value)) return
+  const on = (o: any) => ({ ...o, autoGenerateEnabled: true, autoGeneratePresetId: preset, autoGenerateTemplateId: 'uniformlogo' })
+  settings.plex.value = {
+    ...settings.plex.value,
+    libraryMappings: (settings.plex.value.libraryMappings || []).map(on),
+    tvShowLibraryMappings: (settings.plex.value.tvShowLibraryMappings || []).map(on),
+  }
+  settings.libraryGroups.value = settings.libraryGroups.value.map(g =>
+    (g.members || []).some(m => m.serverId === 'plex-1') ? g : on(g))
+}
+
+// Add the installed starter overlays to the default preset (movies and series
+// only; the backend gives seasons empty lists). Once per wizard run.
+const addOverlaysToDefaultPreset = async () => {
+  if (overlaysAdded || !defaultPresetId.value || !installedOverlayConfigIds.value.length) return
+  overlaysAdded = true
+  try {
+    await fetch(`${apiBase}/api/presets/add-overlays`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ template_id: 'uniformlogo', preset_id: defaultPresetId.value, config_ids: installedOverlayConfigIds.value }),
+    })
+  } catch { /* the overlays are installed; they can be ticked in the editor */ }
+}
+
 const saveSettings = async () => {
   if (settingsSaved.value) return
   saving.value = true
@@ -333,16 +547,18 @@ const saveSettings = async () => {
     // written -- but the rest of this object (url/token/library mappings) is
     // Plex-specific and only overwritten when Plex was actually chosen this run, so
     // re-running the wizard without Plex can't blank out a real prior Plex connection.
-    settings.plex.value = wantsPlex.value ? {
+    // Only when Plex was actually connected this run: otherwise the library
+    // lists are empty and saving them would wipe the existing Plex libraries.
+    settings.plex.value = wantsPlex.value && plexOk.value ? {
       ...settings.plex.value,
       url: plexUrl.value,
       token: plexToken.value,
       movieLibraryName: movieMappings[0]?.title || '',
       movieLibraryNames: movieMappings.map(m => m.title),
-      libraryMappings: movieMappings.map(m => ({ ...m })),
+      libraryMappings: movieMappings.map(m => withExistingMapping(m, settings.plex.value.libraryMappings)),
       tvShowLibraryName: tvMappings[0]?.title || '',
       tvShowLibraryNames: tvMappings.map(m => m.title),
-      tvShowLibraryMappings: tvMappings.map(m => ({ ...m })),
+      tvShowLibraryMappings: tvMappings.map(m => withExistingMapping(m, settings.plex.value.tvShowLibraryMappings)),
       sendLogosToPlex: sendLogosToPlex.value,
     } : {
       ...settings.plex.value,
@@ -365,7 +581,8 @@ const saveSettings = async () => {
     settings.automation.value = {
       ...settings.automation.value,
       existingContentMode: existingContentMode.value,
-      webhookAutoSend: true,
+      // First run only: a re-run keeps what's set in Settings → Automation.
+      ...(isRerun ? {} : { webhookAutoSend: true }),
       // "Apply a label after sending" (this step's toggle) tags an item with a label
       // once Simposter sends its poster — that's labelToAdd, not webhookAutoLabels
       // (which instead strips a pre-existing label, e.g. one Kometa/Radarr/Sonarr
@@ -373,8 +590,7 @@ const saveSettings = async () => {
       // defaultLabelsToRemove/usingKometa). Previously this toggle was wired to
       // webhookAutoLabels by mistake, which meant "apply a label" silently did
       // nothing (removing a label that was never there is a no-op) — see CLAUDE.md.
-      webhookAlwaysRegenerateSeason: false,
-      retryUntilTemplateMet: true,
+      ...(isRerun ? {} : { webhookAlwaysRegenerateSeason: false, retryUntilTemplateMet: true }),
       // labelToAdd/kometaCompatibility are Plex-only (Quirk #93) -- only include them
       // (overwriting whatever's already there) when Plex was actually chosen this run,
       // matching this step's controls being hidden entirely otherwise.
@@ -395,100 +611,27 @@ const saveSettings = async () => {
       enabled: scanFrequency.value !== 'never',
       cronExpression: scanCronExpression.value || '0 1 * * *',
       // Empty = every library on every server (narrow it later in Settings -> Libraries).
-      libraryIds: [],
+      // A re-run keeps the selection made in Settings.
+      libraryIds: isRerun ? (settings.scheduler.value.libraryIds || []) : [],
     }
     // defaultLabelsToRemove keyed by library ID so SettingsView renders correctly --
     // Plex-only concept, skipped entirely when Plex wasn't chosen.
-    if (wantsPlex.value) {
-      const labelsRecord: Record<string, string[]> = {}
+    // First run only: a re-run keeps each library's own list (Kometa compatibility
+    // adds "Overlay" when the lists are read anyway, Quirk #227).
+    if (!isRerun && wantsPlex.value && plexOk.value) {
+      // Merge, so libraries not picked this run keep their own label lists.
+      const labelsRecord: Record<string, string[]> = { ...settings.defaultLabelsToRemove.value }
       allLibIds.forEach(id => { labelsRecord[id] = labelsToRemove })
       settings.defaultLabelsToRemove.value = labelsRecord
     }
 
-    // Auto-matched Library Group creation -- FIRST-TIME ONBOARDING ONLY
-    // (isRerun guard below). Covers every library selected across every
-    // server (not just standalone Jellyfin/Emby ones) -- every selection
-    // becomes ITS OWN group unless another selection of the SAME media type has
-    // the exact same name (case/whitespace-insensitive), in which case they're
-    // merged into one shared group instead. This is the "auto-match" design the
-    // user picked directly (over a manual-pairing step) after being asked: pick
-    // 3 Plex libraries and 2 Jellyfin libraries whose names each match one of
-    // those 3, and you get exactly 3 groups (2 linked, 1 Plex-only) -- no name
-    // match anywhere still yields one group per selection, same as the plain
-    // standalone-group behavior this replaces. Every group gets a real sidebar
-    // tab immediately (App.vue's nonPlexGroupTabs(), Quirk #116) with no separate
-    // trip to Settings required; a user can always add/remove members or split a
-    // wrongly-matched group apart afterward via Settings -> Libraries -> Linked
-    // Libraries (LinkedServerLibraries.vue), exactly as they already can today.
-    //
-    // Skipped entirely on a re-run (a real, reported bug): movieMappings/
-    // tvMappings/nonPlexDiscovered are built from whatever's CURRENTLY
-    // configured, not just what changed this run -- on an already-onboarded
-    // install, that includes the user's existing, already-deliberately-
-    // arranged libraries too. A newly-added Plex library whose name happens
-    // to match an existing Jellyfin-only group's name would then bucket
-    // together with it, but existingGroupIds.has(g.id) never recognizes the
-    // match: the bucket's computed id uses the PLEX-anchored scheme
-    // (group-{mediaType}-{plexLibraryId}) while the existing group was
-    // created under the standalone scheme (group-{mediaType}-{serverId}-
-    // {libraryId}) -- two different ids for what should be one group, so
-    // this created a brand-new, DUPLICATE group instead of linking into the
-    // existing one, on every wizard re-run. A re-run should only ever touch
-    // groups the user explicitly edits in Settings -> Libraries and saves.
-    if (!isRerun) {
-      interface LibCandidate { serverId: string; libraryId: string; libraryName: string; mediaType: 'movie' | 'tv' }
-      const candidates: LibCandidate[] = []
-      if (wantsPlex.value) {
-        movieMappings.forEach(m => candidates.push({ serverId: 'plex-1', libraryId: String(m.id), libraryName: m.title, mediaType: 'movie' }))
-        tvMappings.forEach(m => candidates.push({ serverId: 'plex-1', libraryId: String(m.id), libraryName: m.title, mediaType: 'tv' }))
-      }
-      nonPlexDiscovered.value
-        .filter(d => selectedNonPlexLibs.value.has(nonPlexKey(d)))
-        .forEach(d => candidates.push({ serverId: d.serverId, libraryId: d.libraryId, libraryName: d.libraryName, mediaType: d.mediaType as 'movie' | 'tv' }))
+    // Library groups are created on the 'groups' step (groupProposals.ts).
 
-      if (candidates.length) {
-        // Bucket by (mediaType, normalized name) -- exact match only (no fuzzy/
-        // substring matching), so "Movies" and "4K Movies" are deliberately kept
-        // separate rather than risking a false-positive merge.
-        const buckets = new Map<string, LibCandidate[]>()
-        for (const c of candidates) {
-          const key = `${c.mediaType}:${c.libraryName.trim().toLowerCase()}`
-          if (!buckets.has(key)) buckets.set(key, [])
-          buckets.get(key)!.push(c)
-        }
-        const existingGroupIds = new Set(settings.libraryGroups.value.map(g => g.id))
-        const newGroups = Array.from(buckets.values())
-          .map(members => {
-            const plexMember = members.find(m => m.serverId === 'plex-1')
-            const anchor = plexMember || members[0]!
-            // Matches the id scheme ensureGroup()/the startup migration already use
-            // for a Plex-anchored group (LinkedServerLibraries.vue, Quirk #62), and
-            // StandaloneServerLibraries.vue's scheme for a server-only one (Quirk
-            // #116) -- so a later manual link/unlink in Settings resolves the SAME
-            // group instead of creating a duplicate.
-            const id = plexMember
-              ? `group-${anchor.mediaType}-${anchor.libraryId}`
-              : `group-${anchor.mediaType}-${anchor.serverId}-${anchor.libraryId}`
-            return {
-              id,
-              name: anchor.libraryName || anchor.libraryId,
-              mediaType: anchor.mediaType,
-              members: members.map(m => ({ serverId: m.serverId, libraryId: m.libraryId, libraryName: m.libraryName })),
-              autoGenerateEnabled: false,
-              autoGeneratePresetId: null,
-              autoGenerateTemplateId: null,
-              labelsToRemove: [] as string[],
-            }
-          })
-          .filter(g => !existingGroupIds.has(g.id))
-        if (newGroups.length) {
-          settings.libraryGroups.value = [...settings.libraryGroups.value, ...newGroups]
-        }
-      }
-    }
-
+    applyAutoGenerate()
     await settings.save()
     settingsSaved.value = true
+    await addOverlaysToDefaultPreset()
+    await saveOverlayRefresh()
   } catch { /* still advance */ }
   finally { saving.value = false }
 }
@@ -502,7 +645,7 @@ const importDefaultPreset = async () => {
   importingPreset.value = true
   presetError.value = ''
   try {
-    const res = await fetch(`${apiBase}/api/presets/default-template`)
+    const res = await fetch(`${apiBase}/api/presets/default-template?refresh=true`)
     if (!res.ok) throw new Error('Failed to fetch default preset')
     const data = await res.json()
     const importRes = await fetch(`${apiBase}/api/presets/import`, {
@@ -533,28 +676,136 @@ const savePlexEarly = async () => {
     token: plexToken.value,
     movieLibraryName: movieMappings[0]?.title || '',
     movieLibraryNames: movieMappings.map(m => m.title),
-    libraryMappings: movieMappings,
+    libraryMappings: movieMappings.map(m => withExistingMapping(m, settings.plex.value.libraryMappings)),
     tvShowLibraryName: tvMappings[0]?.title || '',
     tvShowLibraryNames: tvMappings.map(m => m.title),
-    tvShowLibraryMappings: tvMappings,
+    tvShowLibraryMappings: tvMappings.map(m => withExistingMapping(m, settings.plex.value.tvShowLibraryMappings)),
   }
   await settings.save()
 }
 
+// ── Poster API step (no-media-server path only) ───────────────────────────
+type PaPreset = { id: string; name?: string }
+const paEnabled = ref(true)
+const paKey = ref('')            // plaintext only while newly generated; SECRET_MASK when one already exists
+const paKeyIsNew = ref(false)
+const paMoviePreset = ref('')
+const paTvPreset = ref('')
+const paWaitSeconds = ref(10)
+const paRetentionDays = ref(90)
+const paPresets = ref<PaPreset[]>([])
+const paSaving = ref(false)
+const paError = ref('')
+const paKeyEmpty = computed(() => !paKey.value)
+// With a freshly generated key the URLs carry the real key, ready to copy into
+// another app; a key that already existed comes back masked, so YOUR_KEY is shown.
+const paKeyForUrl = computed(() => (paKeyIsNew.value ? encodeURIComponent(paKey.value) : 'YOUR_KEY'))
+const paTemplates = computed(() => {
+  const base = apiBase.replace(/\/$/, '')
+  const q = paKey.value ? `&key=${paKeyForUrl.value}` : ''
+  return [
+    { label: 'Movies', value: `${base}/poster?tmdb_id={tmdb_id}&type=movie${q}` },
+    { label: 'TV shows', value: `${base}/poster?tmdb_id={tmdb_id}&type=tv${q}` },
+  ]
+})
+
+const loadPosterApiStep = async () => {
+  try {
+    const res = await fetch(`${apiBase}/api/presets`)
+    if (res.ok) paPresets.value = (await res.json())?.uniformlogo?.presets || []
+  } catch { /* selects fall back to the "(default)" option */ }
+  try {
+    const res = await fetch(`${apiBase}/api/poster-api/settings`)
+    if (res.ok) {
+      const d = await res.json()
+      paKey.value = d.key || ''
+      // Default to the starter preset simposter-main when nothing is chosen yet.
+      const starter = paPresets.value.some(p => p.id === 'simposter-main') ? 'simposter-main' : ''
+      paMoviePreset.value = d.defaultMoviePreset || starter
+      paTvPreset.value = d.defaultTvPreset || starter
+      paWaitSeconds.value = d.waitSeconds ?? 10
+      paRetentionDays.value = d.retentionDays ?? 90
+    }
+  } catch { /* defaults */ }
+}
+
+const paGenerateKey = async () => {
+  try {
+    const res = await fetch(`${apiBase}/api/poster-api/generate-key`, { method: 'POST' })
+    if (!res.ok) throw new Error(String(res.status))
+    paKey.value = (await res.json()).key
+    paKeyIsNew.value = true
+  } catch { paError.value = 'Failed to generate a key' }
+}
+const paCopy = async (text: string) => { await copyToClipboard(text) }
+
+// Saves the Poster API settings and the API keys entered earlier. Servers are never touched.
+const savePosterApiStep = async (): Promise<boolean> => {
+  paSaving.value = true
+  paError.value = ''
+  try {
+    const res = await fetch(`${apiBase}/api/poster-api/settings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        enabled: paEnabled.value,
+        key: paKey.value,
+        defaultMoviePreset: paMoviePreset.value,
+        defaultTvPreset: paTvPreset.value,
+        waitSeconds: paWaitSeconds.value,
+        retentionDays: paRetentionDays.value,
+      }),
+    })
+    if (!res.ok) {
+      let msg = `Save failed (${res.status})`
+      try { const j = await res.json(); if (j?.detail) msg = String(j.detail) } catch { /* ignore */ }
+      paError.value = msg
+      return false
+    }
+    // Keep the store in step (R9) so the settings save below can't send a stale posterApi.
+    settings.posterApi.value = { ...(await res.json()) }
+    settings.tmdb.value = { apiKey: tmdbApiKey.value.trim() }
+    settings.tvdb.value = { ...settings.tvdb.value, apiKey: tvdbApiKey.value.trim() }
+    settings.fanart.value = { apiKey: fanartApiKey.value.trim() }
+    // No media server: audience ratings come from TMDb (the "server" default
+    // would fall back to it anyway; this makes Settings show what's used).
+    // Only when there really is no server (a re-run on an install with servers keeps its choice).
+    if (!anyServerConfigured.value && ['server', 'plex', 'jellyfin'].includes(settings.mdblist.value.audienceRatingSource)) {
+      settings.mdblist.value = { ...settings.mdblist.value, audienceRatingSource: 'tmdb' }
+    }
+    await settings.save()
+    return true
+  } catch (e) {
+    paError.value = e instanceof Error ? e.message : 'Save failed'
+    return false
+  } finally {
+    paSaving.value = false
+  }
+}
+
 // ── Navigation ─────────────────────────────────────────────────────────────
-// Plex, Jellyfin and Emby are treated the same on the 'connect' step: Next is
-// enabled once at least one picked server has connected. Picked servers that
-// weren't tested are dropped from this run (they can be added later in
+// Plex, Jellyfin and Emby are treated the same on the 'connect' step. Next tests
+// every picked server that's filled in but not tested yet (an unchanged saved
+// server on a re-run needs no click); one that fails stops here with its error.
+// A picked server left empty is skipped for this run (add it later in
 // Settings -> Media Servers).
 const connectedCount = computed(() =>
   (wantsPlex.value && plexOk.value ? 1 : 0) +
   (wantsJellyfinServer.value && jellyfinOk.value ? 1 : 0) +
   (wantsEmbyServer.value && embyOk.value ? 1 : 0)
 )
+const untestedServers = () => [
+  wantsPlex.value && !plexOk.value && plexUrl.value.trim() && plexToken.value.trim() ? testPlex : null,
+  wantsJellyfinServer.value && !jellyfinOk.value && jellyfinUrl.value.trim() && jellyfinApiKey.value.trim() ? testJellyfin : null,
+  wantsEmbyServer.value && !embyOk.value && embyUrl.value.trim() && embyApiKey.value.trim() ? testEmby : null,
+].filter((t): t is () => Promise<void> => !!t)
+const canAdvanceConnect = computed(() => connectedCount.value > 0 || untestedServers().length > 0)
 
 const canAdvance = computed(() => {
+  if (advancing.value) return false
+  if (step.value === 'posterapi') return !paSaving.value
   if (step.value === 'servers') return canAdvanceServers.value
-  if (step.value === 'connect') return connectedCount.value > 0
+  if (step.value === 'connect') return canAdvanceConnect.value
   if (step.value === 'apikeys') return canAdvanceApiKeys.value
   return true
 })
@@ -562,9 +813,58 @@ const canAdvance = computed(() => {
 // Navigate by scanning forward/backward through the FULL step list for the next
 // one that's in visibleSteps, rather than indexing into visibleSteps -- safe even
 // if a handler changes what's visible in the same tick it calls goNext().
+// True while a Next click is still working (saving, importing presets...), so
+// the button can show a spinner and can't be clicked twice.
+const advancing = ref(false)
 const goNext = async () => {
+  if (advancing.value) return
+  advancing.value = true
+  try {
+    await goNextInner()
+  } finally {
+    advancing.value = false
+  }
+}
+
+const goNextInner = async () => {
+  if (step.value === 'apikeys') {
+    // Import the starter presets now (not at the end) so the look step can list them.
+    if (!presetImported.value) await importDefaultPreset()
+    if (noServer.value) await loadPosterApiStep()
+  }
+  if (step.value === 'look') {
+    lookPresetChanged.value = !!lookRef.value?.presetChanged()
+    installedOverlayConfigIds.value = lookRef.value ? await lookRef.value.installTicked() : []
+    lookInstallFailed.value = installedOverlayConfigIds.value.length < lookOverlayIds.value.length
+    // Show failed installs once; the next click moves on with what installed.
+    if (lookInstallFailed.value && !lookWarned.value) { lookWarned.value = true; return }
+    if (noServer.value && defaultPresetId.value && (!isRerun || lookPresetChanged.value)) {
+      paMoviePreset.value = defaultPresetId.value
+      paTvPreset.value = defaultPresetId.value
+    }
+  }
+  if (step.value === 'arr' && arrRef.value) {
+    arrLinks.value = arrRef.value.defaultLinks()
+  }
+  if (step.value === 'grouprules') await saveGroupRules()
+  if (step.value === 'extras' && extrasRef.value?.changed()) {
+    extrasRef.value.apply()
+    try { await settings.save() } catch { /* the save at Finish sends it too */ }
+  }
+  if (noServer.value) {
+    if (step.value === 'posterapi' && !(await savePosterApiStep())) return
+  }
   if (step.value === 'connect') {
-    // A picked server that wasn't connected is skipped for this run.
+    // Test what's filled in but untested; a failure stays on this step (each
+    // form shows its own error).
+    const pending = untestedServers()
+    if (pending.length) {
+      await Promise.all(pending.map(t => t()))
+      if ((wantsPlex.value && !plexOk.value && plexError.value)
+        || (wantsJellyfinServer.value && !jellyfinOk.value && jellyfinError.value)
+        || (wantsEmbyServer.value && !embyOk.value && embyError.value)) return
+    }
+    // A picked server left empty is skipped for this run.
     if (wantsPlex.value && !plexOk.value) wantsPlex.value = false
     if (wantsJellyfinServer.value && !jellyfinOk.value) wantsJellyfinServer.value = false
     if (wantsEmbyServer.value && !embyOk.value) wantsEmbyServer.value = false
@@ -597,33 +897,20 @@ const goNext = async () => {
       // re-run still needs this persisted so the wizard doesn't lose it if
       // closed early. Only the SCAN itself (below) is skipped on a re-run.
       await savePlexEarly()
-      if (!isRerun) {
-        // Fire-and-forget — scan runs in the background while user completes setup.
-        // First-time onboarding only: a re-run's own auto-scan-on-save (Quirk #33,
-        // triggered by the normal Settings -> Libraries save path once the wizard
-        // finishes) already covers whatever the user actually changed, scoped to
-        // just that -- firing this too would additionally rescan every
-        // already-configured library the user didn't touch this run.
-        fetch(`${apiBase}/api/scan-library`, { method: 'POST' }).catch(() => {})
-      }
     }
-    // Same fire-and-forget pattern for whichever Jellyfin/Emby libraries were
-    // selected -- POST /api/media-server/{server_id}/scan (Quirk #66's scoped
-    // scan), the exact same call StandaloneServerLibraries.vue's own "Scan"
-    // button makes. The LibraryGroups these libraries belong to are created
-    // later in saveSettings() (called from the 'performance' step below) --
-    // scanning doesn't need the group to exist first (Quirk #116: a standalone
-    // library's rows filter correctly by library_id alone). First-time only,
-    // same reasoning as the Plex scan above.
-    if (!isRerun) {
-      nonPlexDiscovered.value
+    // First-time onboarding only: scan everything picked, in the background
+    // while the user finishes setup. A re-run doesn't (its normal Settings ->
+    // Libraries save scans just what changed, Quirk #33).
+    if (!isRerun && !initialScansStarted) {
+      initialScansStarted = true
+      const nonPlexScans = nonPlexDiscovered.value
         .filter(d => selectedNonPlexLibs.value.has(nonPlexKey(d)))
-        .forEach(d => {
-          const params = new URLSearchParams({ library_id: d.libraryId, media_type: d.mediaType })
-          fetch(`${apiBase}/api/media-server/${d.serverId}/scan?${params.toString()}`, { method: 'POST' }).catch(() => {})
-        })
+        .map(d => `${apiBase}/api/media-server/${d.serverId}/scan?${new URLSearchParams({ library_id: d.libraryId, media_type: d.mediaType }).toString()}`)
+      void runInitialScans(wantsPlex.value ? [`${apiBase}/api/scan-library`, ...nonPlexScans] : nonPlexScans)
     }
   }
+  if (step.value === 'libraries') buildGroupDraft()
+  if (step.value === 'groups') await saveGroups()
   if (step.value === 'performance') await saveSettings()
   if (step.value === 'notifications') {
     // Save notification prefs, then auto-import the default preset in the background
@@ -642,6 +929,25 @@ const goNext = async () => {
   if (nextIdx < STEPS.length) step.value = STEPS[nextIdx]!
 }
 
+// Simposter runs one scan at a time (a second one gets 409), and each scan
+// request only returns once that scan is done, so the wizard's scans run one
+// after another. Starting them all at once left every library but one
+// unscanned. A 409 (another scan is running) waits and tries again.
+let initialScansStarted = false  // once per wizard, even if the user steps back
+const runInitialScans = async (urls: string[]) => {
+  for (const url of urls) {
+    for (let attempt = 0; attempt < 60; attempt++) {
+      try {
+        const res = await fetch(url, { method: 'POST' })
+        if (res.status !== 409) break
+      } catch {
+        break
+      }
+      await new Promise(r => setTimeout(r, 5000))
+    }
+  }
+}
+
 const goBack = () => {
   let idx = STEPS.indexOf(step.value) - 1
   while (idx >= 0 && !visibleSteps.value.includes(STEPS[idx]!)) idx--
@@ -649,7 +955,7 @@ const goBack = () => {
 }
 
 // ── Close ──────────────────────────────────────────────────────────────────
-const markOnboardingDone = async () => {
+const markOnboardingDone = async (saveWizardSettings = true) => {
   try {
     // Defense-in-depth: saveSettings() (above) is only ever triggered from
     // ONE specific step-transition (`if (step.value === 'performance')` in
@@ -665,13 +971,30 @@ const markOnboardingDone = async () => {
     // no-op in the normal case (its own settingsSaved guard already fired),
     // and the real save in the bug case -- either way, this function is the
     // ONE path guaranteed to run on every close/skip.
-    await saveSettings()
+    // Skip (saveWizardSettings=false) only marks setup as done: the wizard's
+    // fields still hold their defaults then, and saving them would overwrite
+    // the real settings (timezone, performance, automation, scan schedule...).
+    if (saveWizardSettings) await saveSettings()
     settings.onboardingCompleted.value = true
     await settings.save()
   } catch { /* non-fatal */ }
 }
 
 const close = async () => {
+  if (noServer.value) {
+    // Poster-provider path: the keys and Poster API were already saved on the previous step.
+    // Skip the full wizard save (it would write library/scan/performance defaults over a real
+    // install's settings on a re-run) and only mark onboarding complete.
+    try {
+      settings.onboardingCompleted.value = true
+      await settings.save()
+    } catch { /* non-fatal */ }
+    await addOverlaysToDefaultPreset()
+    await settings.load()
+    emit('done')
+    router.push('/poster-api')
+    return
+  }
   await markOnboardingDone()
   await settings.load()
   emit('done')
@@ -680,36 +1003,86 @@ const close = async () => {
   ;(window as any).startScanPolling?.()
 }
 
+// Finish → Batch Edit for the first movie library (or TV when there's none),
+// for users who want their existing posters made by Simposter too.
+const goToBatchEdit = async () => {
+  await close()
+  const plexMovie = settings.plex.value.libraryMappings?.[0]?.id
+  const plexTv = settings.plex.value.tvShowLibraryMappings?.[0]?.id
+  const group = (type: 'movie' | 'tv') => settings.libraryGroups.value.find(g => g.mediaType === type && (g.members || []).length)
+  if (plexMovie) return router.push({ name: 'batch-edit', query: { library: String(plexMovie) } })
+  const gm = group('movie')
+  if (gm) return router.push({ name: 'batch-edit', query: { library: gm.members[0]!.libraryId, server: gm.members[0]!.serverId } })
+  if (plexTv) return router.push({ name: 'tv-batch-edit', query: { library: String(plexTv) } })
+  const gt = group('tv')
+  if (gt) return router.push({ name: 'tv-batch-edit', query: { library: gt.members[0]!.libraryId, server: gt.members[0]!.serverId } })
+  return router.push({ name: 'batch-edit' })
+}
+
 const skip = async () => {
-  await markOnboardingDone()
+  await markOnboardingDone(false)
   await settings.load()
   emit('done')
 }
 
 onMounted(() => {
+  initialDefaultPresetId.value = isRerun ? currentAutoGeneratePreset() : ''
+  defaultPresetId.value = initialDefaultPresetId.value
+  // A re-run starts from the current settings, not the wizard's defaults, so
+  // stepping through it doesn't silently reset anything that isn't changed.
+  if (isRerun) {
+    if (settings.timezone.value) timezone.value = settings.timezone.value
+    concurrentRenders.value = settings.performance.value.concurrentRenders ?? concurrentRenders.value
+    outputFormat.value = (settings.imageQuality.value.outputFormat as any) || outputFormat.value
+    jpgQuality.value = settings.imageQuality.value.jpgQuality ?? jpgQuality.value
+    webpQuality.value = settings.imageQuality.value.webpQuality ?? webpQuality.value
+    existingContentMode.value = (settings.automation.value.existingContentMode as any) || existingContentMode.value
+    sendLogosToPlex.value = !!settings.plex.value.sendLogosToPlex
+    usingKometa.value = !!settings.automation.value.kometaCompatibility
+    sendLabel.value = !!settings.automation.value.labelToAdd
+    if (settings.automation.value.labelToAdd) labelName.value = settings.automation.value.labelToAdd
+    const orGroup = settings.libraryGroups.value.find(g => g.overlayRefresh?.enabled)
+    if (orGroup) {
+      orEnabled.value = true
+      const hour = /^0 (\d{1,2}) \* \* \*$/.exec(orGroup.overlayRefresh?.scheduleCron || '')
+      if (hour) orHour.value = Number(hour[1])
+      if (orGroup.overlayRefresh?.plexLabel != null) orLabel.value = orGroup.overlayRefresh.plexLabel
+    }
+    const sched = settings.scheduler.value
+    if (!sched.enabled) scanFrequency.value = 'never'
+    else if (sched.cronExpression === '0 1 * * *') scanFrequency.value = 'daily'
+    else if (sched.cronExpression === '0 1 * * 0') scanFrequency.value = 'weekly'
+    else { scanFrequency.value = 'custom'; customCron.value = sched.cronExpression || customCron.value }
+    const urls = settings.notifications.value.appriseUrls || []
+    wantsNotifications.value = !!settings.notifications.value.appriseEnabled && urls.length > 0
+    appriseUrls.value = urls.join('\n')
+  }
+  orInitial = orState()
   if (settings.plex.value.url) plexUrl.value = settings.plex.value.url
   if (settings.plex.value.token) plexToken.value = settings.plex.value.token
   if (settings.tmdb.value.apiKey) tmdbApiKey.value = settings.tmdb.value.apiKey
   if (settings.tvdb.value.apiKey) tvdbApiKey.value = settings.tvdb.value.apiKey
   if (settings.fanart.value.apiKey) fanartApiKey.value = settings.fanart.value.apiKey
   // Re-running the wizard (Settings → Advanced → Run Startup Wizard) with servers
-  // already configured: pre-check/prefill for context, but deliberately leave API
-  // keys/tokens blank rather than the masked placeholder GET /api/ui-settings
-  // returns (Quirk #60's secret masking) — sending that placeholder straight into
-  // Test Connection would just fail, since restore-if-unchanged only applies on
-  // save, not on this endpoint. Plex defaults to checked either way (matches this
-  // step's own default for a fresh install); Jellyfin/Emby only pre-check if a
-  // real entry of that type already exists.
+  // already configured: pre-check and prefill. Saved keys come back masked; the
+  // test sends the saved server's id so the backend uses the stored key (only
+  // for the stored address, Quirk #81), and the saved id is kept so saving
+  // restores the key. Plex defaults to checked either way; Jellyfin/Emby only
+  // pre-check if an entry of that type already exists.
   wantsPlex.value = true
   const existingJellyfin = settings.mediaServers.value.find(s => s.type === 'jellyfin')
   if (existingJellyfin) {
     wantsJellyfinServer.value = true
     jellyfinUrl.value = existingJellyfin.url
+    savedJellyfin.value = { id: existingJellyfin.id, url: existingJellyfin.url }
+    if (existingJellyfin.apiKey) jellyfinApiKey.value = existingJellyfin.apiKey  // masked
   }
   const existingEmby = settings.mediaServers.value.find(s => s.type === 'emby')
   if (existingEmby) {
     wantsEmbyServer.value = true
     embyUrl.value = existingEmby.url
+    savedEmby.value = { id: existingEmby.id, url: existingEmby.url }
+    if (existingEmby.apiKey) embyApiKey.value = existingEmby.apiKey  // masked
   }
 })
 </script>
@@ -743,6 +1116,16 @@ onMounted(() => {
         <template v-else-if="step === 'servers'">
           <div class="ob-icon">🖥️</div>
           <h2 class="ob-title">Which media server(s) do you use?</h2>
+          <label class="ob-lib-row" :class="{ selected: !noServer }" @click="connectMode = 'connect'">
+            <span class="ob-checkbox" :class="{ checked: !noServer }" style="border-radius: 50%;"></span>
+            Connect a media server (recommended)
+          </label>
+          <label class="ob-lib-row" :class="{ selected: noServer }" @click="connectMode = 'none'">
+            <span class="ob-checkbox" :class="{ checked: noServer }" style="border-radius: 50%;"></span>
+            No media server — use Simposter as a poster provider (Poster API)
+          </label>
+          <p v-if="noServer" class="ob-sub">Simposter will serve posters by TMDb id to other apps. Any media servers you already connected stay as they are.</p>
+          <template v-if="!noServer">
           <p class="ob-sub">Pick any combination — Simposter can send posters to more than one server at once.</p>
           <label class="ob-lib-row" :class="{ selected: wantsPlex }" @click="wantsPlex = !wantsPlex">
             <span class="ob-checkbox" :class="{ checked: wantsPlex }">
@@ -765,6 +1148,7 @@ onMounted(() => {
             <img src="/icons/emby.svg" class="ob-server-icon" alt="" />
             Emby
           </label>
+          </template>
           <div class="ob-actions">
             <button class="ob-btn-ghost" @click="goBack">Back</button>
             <button class="ob-btn-primary" :disabled="!canAdvance" @click="goNext">Next</button>
@@ -798,7 +1182,7 @@ onMounted(() => {
           <div v-if="wantsJellyfinServer" class="ob-form ob-server-form">
             <div class="ob-server-heading"><img src="/icons/jellyfin.svg" class="ob-server-icon" alt="" /> Jellyfin</div>
             <label class="ob-label">Server URL</label>
-            <input v-model="jellyfinUrl" class="ob-input" type="url" placeholder="http://192.168.1.100:8096" @keyup.enter="testJellyfin" @input="jellyfinOk = false" />
+            <input v-model="jellyfinUrl" class="ob-input" type="url" placeholder="http://192.168.1.100:8096" @keyup.enter="testJellyfin" @input="onServerUrlInput('jellyfin')" />
             <label class="ob-label">API Key</label>
             <input v-model="jellyfinApiKey" class="ob-input" type="password" placeholder="Dashboard → API Keys" @keyup.enter="testJellyfin" @input="jellyfinOk = false" />
             <div v-if="jellyfinError" class="ob-error">{{ jellyfinError }}</div>
@@ -814,7 +1198,7 @@ onMounted(() => {
           <div v-if="wantsEmbyServer" class="ob-form ob-server-form">
             <div class="ob-server-heading"><img src="/icons/emby.svg" class="ob-server-icon" alt="" /> Emby</div>
             <label class="ob-label">Server URL</label>
-            <input v-model="embyUrl" class="ob-input" type="url" placeholder="http://192.168.1.100:8096" @keyup.enter="testEmby" @input="embyOk = false" />
+            <input v-model="embyUrl" class="ob-input" type="url" placeholder="http://192.168.1.100:8096" @keyup.enter="testEmby" @input="onServerUrlInput('emby')" />
             <label class="ob-label">API Key</label>
             <input v-model="embyApiKey" class="ob-input" type="password" placeholder="Dashboard → API Keys" @keyup.enter="testEmby" @input="embyOk = false" />
             <div v-if="embyError" class="ob-error">{{ embyError }}</div>
@@ -885,6 +1269,25 @@ onMounted(() => {
           </div>
         </template>
 
+        <!-- ── Library groups ── -->
+        <template v-else-if="step === 'groups'">
+          <div class="ob-icon">🗂️</div>
+          <h2 class="ob-title">Library groups</h2>
+          <p class="ob-sub">Check how your libraries are grouped. Rename a group or move a library if it's in the wrong one.</p>
+          <GroupsStep
+            v-model:groups="groupDraft"
+            :existing-ids="groupExistingIds"
+            :locked-members="groupLockedMembers"
+          />
+          <div class="ob-actions">
+            <button class="ob-btn-ghost" :disabled="advancing" @click="goBack">Back</button>
+            <button class="ob-btn-primary" :disabled="!canAdvance || advancing" @click="goNext">
+              <span v-if="advancing" class="ob-spinner" />
+              {{ advancing ? 'Saving…' : 'Next' }}
+            </button>
+          </div>
+        </template>
+
         <!-- ── API Keys ── -->
         <template v-else-if="step === 'apikeys'">
           <div class="ob-icon">🔑</div>
@@ -941,9 +1344,136 @@ onMounted(() => {
               <div class="ob-hint-text">Recommended if you plan to make posters for Plex Collections — it's the only source of franchise/collection logos (TMDb has none).</div>
             </div>
           </div>
+          <div v-if="advancing" class="ob-hint-text">Importing the starter presets — this can take a few seconds…</div>
+          <div class="ob-actions">
+            <button class="ob-btn-ghost" :disabled="advancing" @click="goBack">Back</button>
+            <button class="ob-btn-primary" :disabled="!canAdvance" @click="goNext">
+              <span v-if="advancing" class="ob-spinner" />
+              {{ advancing ? 'Importing presets…' : 'Next' }}
+            </button>
+          </div>
+        </template>
+
+        <!-- ── Look: default preset + starter overlays ── -->
+        <template v-else-if="step === 'look'">
+          <div class="ob-icon">🎨</div>
+          <h2 class="ob-title">Your poster look</h2>
+          <p class="ob-sub">Pick the preset new posters use, and any starter overlays you want on them.</p>
+          <LookStep
+            ref="lookRef"
+            v-model:preset-id="defaultPresetId"
+            v-model:overlay-ids="lookOverlayIds"
+            :presets-ready="presetImported || !!presetError"
+          />
+          <div v-if="lookWarned && lookInstallFailed" class="ob-error">
+            Some overlays couldn't be added. Click Next to continue without them, or add them later in Overlays.
+          </div>
+          <div class="ob-actions">
+            <button class="ob-btn-ghost" :disabled="advancing" @click="goBack">Back</button>
+            <button class="ob-btn-primary" :disabled="!canAdvance" @click="goNext">
+              <span v-if="advancing" class="ob-spinner" />
+              {{ advancing ? 'Adding overlays…' : 'Next' }}
+            </button>
+          </div>
+        </template>
+
+        <!-- ── Radarr & Sonarr ── -->
+        <template v-else-if="step === 'arr'">
+          <div class="ob-icon">📡</div>
+          <h2 class="ob-title">Radarr &amp; Sonarr</h2>
+          <p class="ob-sub">Optional. Connect them so new movies and episodes get their poster as soon as they're imported.</p>
+          <ArrStep ref="arrRef" :preset-id="defaultPresetId" />
+          <div class="ob-actions">
+            <button class="ob-btn-ghost" :disabled="advancing" @click="goBack">Back</button>
+            <button class="ob-btn-primary" :disabled="!canAdvance" @click="goNext">Next</button>
+          </div>
+        </template>
+
+        <!-- ── Group rules: Radarr/Sonarr per group, poster mode rules ── -->
+        <template v-else-if="step === 'grouprules'">
+          <div class="ob-icon">🧩</div>
+          <h2 class="ob-title">Group settings</h2>
+          <p class="ob-sub">Optional. Pick each group's Radarr or Sonarr, and set rules for posters another app manages.</p>
+          <GroupRulesStep ref="groupRulesRef" :defaults="arrLinks" />
+          <div class="ob-actions">
+            <button class="ob-btn-ghost" :disabled="advancing" @click="goBack">Back</button>
+            <button class="ob-btn-primary" :disabled="!canAdvance || advancing" @click="goNext">
+              <span v-if="advancing" class="ob-spinner" />
+              {{ advancing ? 'Saving…' : 'Next' }}
+            </button>
+          </div>
+        </template>
+
+        <!-- ── Extras: Maintainerr, ratings and lists ── -->
+        <template v-else-if="step === 'extras'">
+          <div class="ob-icon">⭐</div>
+          <h2 class="ob-title">Extras</h2>
+          <p class="ob-sub">Optional connections for overlays: "leaving soon" dates, ratings and lists. Skip any you don't use.</p>
+          <ExtrasStep ref="extrasRef" />
+          <div class="ob-actions">
+            <button class="ob-btn-ghost" :disabled="advancing" @click="goBack">Back</button>
+            <button class="ob-btn-primary" :disabled="!canAdvance" @click="goNext">
+              <span v-if="advancing" class="ob-spinner" />
+              {{ advancing ? 'Saving…' : 'Next' }}
+            </button>
+          </div>
+        </template>
+
+        <!-- ── Poster API (no media server) ── -->
+        <template v-else-if="step === 'posterapi'">
+          <div class="ob-icon">🔌</div>
+          <h2 class="ob-title">Poster API</h2>
+          <p class="ob-sub">Other apps can request a poster by TMDb id and get it rendered with your preset.</p>
+          <div class="ob-form">
+            <label class="ob-lib-row" :class="{ selected: paEnabled }" @click="paEnabled = !paEnabled">
+              <span class="ob-checkbox" :class="{ checked: paEnabled }">
+                <svg v-if="paEnabled" width="12" height="12" viewBox="0 0 12 12" fill="none"><polyline points="2,6 5,9 10,3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </span>
+              Enable Poster API
+            </label>
+            <div class="ob-key-row">
+              <label class="ob-label">API key</label>
+              <div class="ob-key-input-row">
+                <input class="ob-input ob-input-mono" type="text" :value="paKey" readonly placeholder="No key set" />
+                <button v-if="paKeyIsNew" class="ob-btn-test" @click="paCopy(paKey)">Copy</button>
+                <button class="ob-btn-test" @click="paGenerateKey">Generate</button>
+              </div>
+              <div v-if="paKeyEmpty" class="ob-hint-text">Anyone who can reach Simposter can use your TMDb quota through this API — set a key.</div>
+              <div v-else-if="paKeyIsNew" class="ob-hint-text">Copy it now — it is masked after setup.</div>
+            </div>
+            <div class="ob-key-row">
+              <label class="ob-label">Default movie preset</label>
+              <select class="ob-input" v-model="paMoviePreset">
+                <option value="">simposter-main (default)</option>
+                <option v-for="p in paPresets" :key="p.id" :value="p.id">{{ p.name || p.id }}</option>
+              </select>
+            </div>
+            <div class="ob-key-row">
+              <label class="ob-label">Default TV preset</label>
+              <select class="ob-input" v-model="paTvPreset">
+                <option value="">simposter-main (default)</option>
+                <option v-for="p in paPresets" :key="p.id" :value="p.id">{{ p.name || p.id }}</option>
+              </select>
+            </div>
+            <div class="ob-key-row">
+              <label class="ob-label">URL templates</label>
+              <div v-for="t in paTemplates" :key="t.label" class="ob-hint-text">
+                {{ t.label }}: <code style="word-break: break-all;">{{ t.value }}</code>
+                <button class="ob-btn-test" style="margin-left: 6px;" @click="paCopy(t.value)">Copy</button>
+              </div>
+              <div class="ob-hint-text">
+                {tmdb_id} is the TMDb id.
+                <template v-if="paKeyIsNew"> The URLs include your new key, ready to paste into the other app.</template>
+                <template v-else-if="paKey"> Replace YOUR_KEY with your key.</template>
+              </div>
+            </div>
+            <div v-if="paError" class="ob-key-status error">✗ {{ paError }}</div>
+          </div>
           <div class="ob-actions">
             <button class="ob-btn-ghost" @click="goBack">Back</button>
-            <button class="ob-btn-primary" :disabled="!canAdvance" @click="goNext">Next</button>
+            <button class="ob-btn-primary" :disabled="!canAdvance" @click="goNext">
+              <span v-if="paSaving" class="ob-spinner" /><span v-else>Next</span>
+            </button>
           </div>
         </template>
 
@@ -988,6 +1518,26 @@ onMounted(() => {
               </div>
               <div class="ob-switch" :class="{ on: sendLogosToPlex }"><div class="ob-switch-thumb" /></div>
             </div>
+
+            <!-- Overlay Refresh: every library group (hidden without groups). -->
+            <template v-if="!noServer">
+              <div class="ob-switch-row" @click="orEnabled = !orEnabled">
+                <div class="ob-switch-body">
+                  <div class="ob-switch-label">Keep overlays up to date (Overlay Refresh)?</div>
+                  <div class="ob-switch-desc">Re-checks posters Simposter sent with overlays and re-sends the ones whose overlay now looks different (new ratings, lists, Maintainerr dates).</div>
+                </div>
+                <div class="ob-switch" :class="{ on: orEnabled }"><div class="ob-switch-thumb" /></div>
+              </div>
+              <div v-if="orEnabled" class="ob-indent">
+                <label class="ob-label">Runs daily at</label>
+                <select v-model.number="orHour" class="ob-input ob-select">
+                  <option v-for="h in 24" :key="h - 1" :value="h - 1">{{ String(h - 1).padStart(2, '0') }}:00</option>
+                </select>
+                <label class="ob-label">Plex label for posters with overlays</label>
+                <input v-model="orLabel" class="ob-input" type="text" placeholder="Simposter-Overlay" />
+                <div class="ob-hint-text">Plex only. Leave empty for no label. Separate from the label above, which goes on every poster Simposter sends.</div>
+              </div>
+            </template>
 
             <!-- Timezone -->
             <div class="ob-field-group">
@@ -1118,7 +1668,8 @@ onMounted(() => {
         <template v-else-if="step === 'finish'">
           <div class="ob-icon">🎉</div>
           <h2 class="ob-title">You're all set!</h2>
-          <p class="ob-sub">Simposter is configured and your library scan has started. A set of starter presets is ready to go.</p>
+          <p v-if="noServer" class="ob-sub">The Poster API is configured. A set of starter presets is ready to go.</p>
+          <p v-else class="ob-sub">Simposter is configured and your library scan has started. A set of starter presets is ready to go.</p>
 
           <div class="ob-preset-card" :class="{ imported: presetImported }">
             <div class="ob-preset-card-icon">{{ importingPreset ? '⏳' : presetImported ? '✅' : '🎨' }}</div>
@@ -1137,9 +1688,22 @@ onMounted(() => {
             </div>
           </div>
 
+          <div v-if="defaultPresetId" class="ob-info-box">
+            <div>Default preset: <strong>{{ defaultPresetId }}</strong></div>
+            <div v-if="installedOverlayConfigIds.length">
+              Overlays added to it: {{ installedOverlayConfigIds.length }} (movies and shows, not season posters)
+            </div>
+            <div v-if="!noServer">New movies and shows get their poster automatically.</div>
+          </div>
+
+          <div v-if="!noServer" class="ob-info-box">
+            For your existing posters to be made and managed by Simposter, run a Batch Edit.
+            <button class="ob-link-btn" @click="goToBatchEdit">Open Batch Edit →</button>
+          </div>
+
           <div class="ob-actions">
             <button class="ob-btn-ghost" @click="goBack">Back</button>
-            <button class="ob-btn-primary" @click="close">Go to Simposter</button>
+            <button class="ob-btn-primary" @click="close">{{ noServer ? 'Go to Poster API' : 'Go to Simposter' }}</button>
           </div>
         </template>
       </div>
@@ -1380,6 +1944,11 @@ onMounted(() => {
 .ob-btn-ghost:hover { color: #dbe4ff; }
 
 /* Spinner */
+.ob-link-btn {
+  background: none; border: none; padding: 0; margin-left: 4px;
+  color: var(--accent, #3dd6b7); font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.ob-link-btn:hover { text-decoration: underline; }
 .ob-spinner {
   display: inline-block; width: 14px; height: 14px;
   border: 2px solid rgba(255, 255, 255, 0.25); border-top-color: currentColor;

@@ -118,6 +118,22 @@ def list_log_files():
     return {"files": _list_log_files()}
 
 
+@router.get("/logs/problems")
+def get_log_problems(date: Optional[str] = Query(default=None, description="Log date YYYYMMDD")):
+    """Warnings and errors in one log file, grouped by kind (backend/log_problems.py)."""
+    from ..log_problems import resolve_date, summarize
+    try:
+        path = _resolve_log_path(resolve_date(date))
+    except (ValueError, FileNotFoundError) as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    if not path.exists():
+        return {"total": 0, "groups": [], "date": date or "current"}
+    try:
+        return {**summarize(path), "date": date or "current"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read log: {e}")
+
+
 @router.get("/logs")
 def get_logs(date: Optional[str] = Query(default=None, description="Log date YYYYMMDD"), tail: int = 500):
     try:

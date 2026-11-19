@@ -119,6 +119,12 @@ def api_test_media_server_connection(payload: MediaServerTestRequest):
             None,
         )
         if stored:
+            # The stored credential only goes to the stored address.
+            from ..config import same_origin
+            has_stored = bool(stored.get("token") or stored.get("apiKey"))
+            if has_stored and not same_origin(payload.url, stored.get("url")):
+                return {"connected": False, "sections": [],
+                        "error": "The address changed, so enter the API key again"}
             if token == SECRET_MASK:
                 token = stored.get("token") or ""
             if api_key == SECRET_MASK:
@@ -253,6 +259,14 @@ def _scan_one_library(client, server_id: str, library_id: str, media_type: str, 
         from ..config import logger
         logger.debug("[MEDIA_SERVER_SCAN] Failed to store file paths for %s: %s", library_id, e)
 
+    # The server's own ratings, for overlay audience/critic rating rules.
+    from .. import server_ratings
+    server_ratings.store(
+        server_id, "jellyfin",  # Jellyfin and Emby; Plex has its own scan
+        "movie" if media_type == "movie" else "tv",
+        [(i.id, i.tmdb_id, getattr(i, "audience_rating", None), getattr(i, "critic_rating", None)) for i in items],
+    )
+
     # Fetch poster/logo/backdrop art + video/audio media info for every
     # scanned item -- deliberately a SECOND pass, after the identity rows
     # above already exist (fetch_and_cache_poster()/etc route to the right
@@ -269,6 +283,15 @@ def _scan_one_library(client, server_id: str, library_id: str, media_type: str, 
     # (Quirk #59's remove_label()/add_label() no-ops).
     if items:
         _fetch_art_and_media_info_for_scan(items, media_type, client)
+
+    # Poster mode rules apply to the whole library group; re-apply them now
+    # that this member's rows are current. Never fails the scan.
+    try:
+        from .. import poster_mode
+        poster_mode.evaluate_group(poster_mode.group_id_for(server_id, str(library_id), media_type))
+    except Exception as e:
+        from ..config import logger as _log
+        _log.warning("[MEDIA_SERVER_SCAN] Poster mode rules failed for %s library %s: %s", server_id, library_id, e)
 
     # Auto-generate posters for newly discovered items (background thread --
     # see process_new_media_server_content()). Skipped on a library's very
@@ -949,3 +972,45 @@ def api_set_library_group_merge_items(payload: MergeItemsUpdate):
     if updated is None:
         raise HTTPException(404, "No Library Group found for this library")
     return {"group": updated}
+
+
+@router.get("/library-groups/status")
+def api_library_groups_status():
+    """Media Mirror and Overlay Refresh status per library group, for the
+    summary line on each group card in Settings → Libraries. Both are set on
+    their own pages and saved straight to the DB, so they're read fresh here."""
+    from .. import database as db
+    from .. import scheduler as scheduler_module
+    out = {}
+    for group in (db.get_ui_settings() or {}).get("libraryGroups") or []:
+        gid = group.get("id")
+        if not gid:
+            continue
+        media_type = group.get("mediaType") or "movie"
+        mirror = group.get("mirror") or {}
+        mirror_next = None
+        if mirror.get("enabled") and mirror.get("scheduleEnabled"):
+            # The job is keyed by whichever member the schedule was saved from.
+            for m in group.get("members") or []:
+                sched = scheduler_module.get_media_mirror_schedule(m.get("serverId"), m.get("libraryId"), media_type)
+                if sched and sched.get("next_run_time"):
+                    mirror_next = sched["next_run_time"]
+                    break
+        refresh_cfg = group.get("overlayRefresh") or {}
+        out[gid] = {
+            "mirror": {
+                "enabled": bool(mirror.get("enabled")),
+                "sourceServerId": mirror.get("sourceServerId"),
+                "targetServerIds": mirror.get("targetServerIds") or [],
+                "scheduleEnabled": bool(mirror.get("scheduleEnabled")),
+                "lastRunAt": mirror.get("lastRunAt"),
+                "nextRun": mirror_next,
+            },
+            "overlayRefresh": {
+                "enabled": bool(refresh_cfg.get("enabled")),
+                "scheduleCron": refresh_cfg.get("scheduleCron") or "",
+                "lastRunAt": refresh_cfg.get("lastRunAt"),
+                "nextRun": (scheduler_module.get_overlay_refresh_schedule(gid) or {}).get("next_run_time"),
+            },
+        }
+    return {"groups": out}

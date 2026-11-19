@@ -22,12 +22,8 @@ _rate_requests: List[float] = []
 
 def _apply_rate_limit():
     """Apply rate limiting based on UI settings (requests per 10 seconds)."""
-    try:
-        from .api.ui_settings import _read_settings
-        ui_settings = _read_settings(include_env=False)
-        rate_limit = ui_settings.performance.tvdbRateLimit if ui_settings.performance else 20
-    except Exception:
-        rate_limit = 20
+    from . import database as db
+    rate_limit = db.get_performance_int("tvdbRateLimit", 20)
 
     with _rate_lock:
         now = time.time()

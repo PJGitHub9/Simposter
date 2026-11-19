@@ -28,6 +28,17 @@ _IMAGE_BYTE_CACHE_MAX = 30  # ~30-60 MB for typical JPEG poster/logo bytes
 _IMAGE_BYTE_CACHE_LOCK = threading.Lock()
 
 
+def fetch_logo_for_upload(url: str) -> "tuple[bytes, str]":
+    """PNG bytes of a logo for uploading to a media server. Goes through
+    _download_image(), so the copy the render just downloaded is reused from
+    the byte cache, SVG logos are converted, and a failed download is retried
+    instead of the upload being skipped."""
+    img = _download_image(url)
+    buf = BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue(), "image/png"
+
+
 def _download_image(url: str) -> Image.Image:
     """
     Fetch an image from a URL and return a PIL Image (RGBA).
@@ -56,7 +67,9 @@ def _download_image(url: str) -> Image.Image:
                 _IMAGE_BYTE_CACHE.pop(url, None)
             raw = None  # fall through to re-download
 
-    # Retry logic with exponential backoff for slow TMDB servers
+    # Retry with backoff on timeouts and connection errors. Connection errors
+    # include "Temporary failure in name resolution", which a container's DNS
+    # resolver returns now and then during a busy batch.
     max_retries = 3
     for attempt in range(max_retries):
         try:
@@ -64,15 +77,16 @@ def _download_image(url: str) -> Image.Image:
             resp = safe_get(url, timeout=60, headers=EXTERNAL_IMAGE_FETCH_HEADERS)
             resp.raise_for_status()
             break
-        except requests.exceptions.Timeout:
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
             if attempt < max_retries - 1:
-                wait_time = 2 ** attempt  # 1s, 2s, 4s
-                logger.warning(f"Timeout downloading image (attempt {attempt + 1}/{max_retries}), retrying in {wait_time}s: {url}")
+                wait_time = 2 ** attempt  # 1s, 2s
+                kind = "Timeout" if isinstance(e, requests.exceptions.Timeout) else "Connection error"
+                logger.info("%s downloading image (attempt %d/%d), retrying in %ds: %s", kind, attempt + 1, max_retries, wait_time, url)
                 import time
                 time.sleep(wait_time)
             else:
-                logger.exception("Failed to download image after %d retries: %s", max_retries, url)
-                raise ValueError(f"Failed to download image (timeout after {max_retries} retries): {url}")
+                logger.warning("Failed to download image after %d attempts: %s (%s)", max_retries, url, e)
+                raise ValueError(f"Failed to download image after {max_retries} attempts: {url}") from e
         except Exception as e:
             logger.exception("Failed to download image: %s", url)
             raise ValueError(f"Failed to download image: {url}") from e

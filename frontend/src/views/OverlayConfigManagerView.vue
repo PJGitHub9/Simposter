@@ -2,8 +2,10 @@
 import { ref, computed, onMounted, onUnmounted, watch, nextTick, toRaw, shallowRef, type Ref } from 'vue'
 import { getApiBase } from '@/services/apiBase'
 import OverlayRulesEditor from '@/components/overlay/OverlayRulesEditor.vue'
+import DateRangeInput from '@/components/overlay/DateRangeInput.vue'
 import KometaPlacementEditor from '@/components/overlay/KometaPlacementEditor.vue'
 import KometaImportModal from '@/components/overlay/KometaImportModal.vue'
+import StarterOverlaysModal from '@/components/overlay/StarterOverlaysModal.vue'
 import OverlayPositionEditor from '@/components/overlay/OverlayPositionEditor.vue'
 import OverlayBadgeSets from '@/components/overlay/OverlayBadgeSets.vue'
 import LiveKometaFiles from '@/components/overlay/LiveKometaFiles.vue'
@@ -11,13 +13,17 @@ import OverlayScheduler from '@/components/overlay/OverlayScheduler.vue'
 import OverlayWorkflowGuide from '@/components/overlay/OverlayWorkflowGuide.vue'
 import OverlayRefreshPrompt from '@/components/overlay/OverlayRefreshPrompt.vue'
 import { elementNoun, elementPlace, elementWhen } from '@/services/overlayLabels'
-import { FIELDS, fieldDef, opDef, TEXT_VARIABLES, TEXT_VARIABLE_GROUPS, needsMdblist } from '@/services/overlayFields'
+import { FIELDS, fieldDef, opDef, TEXT_VARIABLES, TEXT_VARIABLE_GROUPS, needsMdblist, needsMaintainerr, MAINTAINERR_KEYS } from '@/services/overlayFields'
 import { useSettingsStore } from '@/stores/settings'
 import { listDisplayName, useListSources } from '@/composables/useListSources'
 import { mediaServerLabel } from '@/services/mediaServerLabel'
+import { fetchTmdbTrending, searchTmdb, isTmdbKey } from '@/services/tmdbPreview'
+import { useServerless } from '@/composables/useServerless'
 import {
   buildContext, selectElementIndices, fillText, placeBox, offsetsFromBox, cssColor, blurAmount, queuePlacements,
   KOMETA_W, KOMETA_H, referencedLists, checkCondition, type OverlayRuleFields, type OverlayCondition,
+  REGIONAL_FIELDS, conditionRegion, regionalKey,
+  usesCountdown as usesCountdownText, countdownWarning, localToday,
 } from '@/services/overlayEngine'
 
 const apiBase = getApiBase()
@@ -61,6 +67,8 @@ interface OverlayConfig {
   /** Conditions for the whole overlay: when any fails, none of its layers draw. */
   conditions?: OverlayCondition[]
   streaming_region?: string
+  /** Free-text notes / credits, e.g. who made the original overlay. */
+  notes?: string
   created_at?: string
   updated_at?: string
 }
@@ -78,6 +86,11 @@ interface OverlayAsset {
 interface SimpleMovie {
   key: string
   title: string
+  // Set for TMDb-sourced items (no library): poster comes from TMDb, no media-server metadata exists.
+  year?: string
+  tmdbId?: number
+  tmdbType?: 'movie' | 'tv'
+  posterUrl?: string
 }
 
 // --- Predefined badge values ---
@@ -174,6 +187,9 @@ const draggingIdx = ref<number | null>(null)
 // Poster search state
 const movies = ref<SimpleMovie[]>([])
 const moviesLoaded = ref(false)
+// No libraries to pick from (server-less, or none scanned): the picker lists TMDb trending + search instead.
+const tmdbMode = ref(false)
+let tmdbSearchTimer: ReturnType<typeof setTimeout> | null = null
 const movieSearchTerm = ref('')
 const showMovieSearch = ref(false)
 const selectedMovie = ref<SimpleMovie | null>(null)
@@ -190,6 +206,7 @@ const previewMode = ref<'item' | 'testing'>('testing')
 const previewItemMetadata = ref<Record<string, string>>({})
 
 const movieSearchResults = computed(() => {
+  if (tmdbMode.value) return movies.value.slice(0, 50)
   const q = movieSearchTerm.value.trim().toLowerCase()
   if (!q) return movies.value.slice(0, 50)
   return movies.value.filter(m => m.title.toLowerCase().includes(q)).slice(0, 50)
@@ -214,6 +231,19 @@ const previewItemLists = ref<string[]>([])
 const previewCriticRating = ref('7.5')
 const previewDaysAdded = ref('3')
 const previewShowStatus = ref('continuing')
+const previewContentRating = ref('PG-13')
+const previewNetwork = ref('HBO')
+const previewStreaming = ref('Netflix, 8')
+// Dates: "today" ('' = the real date) lets you check a seasonal overlay any time of year.
+const previewToday = ref('')
+const previewAddedDate = ref('2026-10-30')
+const previewReleaseDate = ref('2021-10-22')
+// Maintainerr: removal date (default: two days from now, so {leaving} shows a weekday) and a collection.
+const previewRemovalDate = ref((() => {
+  const d = new Date(); d.setDate(d.getDate() + 2)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+})())
+const previewMaintainerrCollection = ref('Leaving Soon')
 // Test mode: lists (by URL) the pretend item is on.
 const previewOnLists = ref<Set<string>>(new Set())
 
@@ -230,6 +260,10 @@ const previewMetadataValues: Record<string, Ref<string>> = {
 
 // Kometa import
 const showKometaImport = ref(false)
+const showStarters = ref(false)
+const onStarterAdded = async () => {
+  await Promise.all([loadConfigs(), loadAssets(), loadFonts()])
+}
 const onKometaImported = async (ids: string[]) => {
   await Promise.all([loadConfigs(), loadAssets(), loadFonts()])
   const first = configs.value.find(c => c.id === ids[0])
@@ -243,8 +277,45 @@ const uploading = ref(false)
 
 // --- API functions ---
 
+// Overlays a live Kometa file keeps in sync (config id -> that file), for the "Live" badge.
+interface LiveSource { path: string; name: string | null; enabled: boolean; interval_hours: number }
+const liveSources = ref<Record<string, LiveSource>>({})
+const loadLiveSources = async () => {
+  try {
+    const res = await fetch(`${apiBase}/api/live-kometa-files`)
+    if (!res.ok) return
+    const data = await res.json()
+    const map: Record<string, LiveSource> = {}
+    for (const f of (data.files || data || []) as Array<LiveSource & { config_id: string | null }>) {
+      if (f.config_id) map[f.config_id] = { path: f.path, name: f.name, enabled: f.enabled, interval_hours: f.interval_hours }
+    }
+    liveSources.value = map
+  } catch { /* the badge is optional */ }
+}
+const liveFileName = (src: LiveSource) => src.path.split(/[\\/]/).pop() || src.path
+const liveTitle = (src: LiveSource) =>
+  `Live Kometa file: ${src.path}. ${src.enabled ? `Checked every ${src.interval_hours} h` : 'Paused'}; its layers are replaced when the file changes.`
+
+/** Notes split into text and http(s) links, so links can be clickable without v-html. */
+const noteParts = (text: string | undefined): Array<{ text: string; href?: string }> => {
+  const out: Array<{ text: string; href?: string }> = []
+  const re = /https?:\/\/[^\s<>"')]+/g
+  const src = text || ''
+  let last = 0
+  for (const m of src.matchAll(re)) {
+    const at = m.index ?? 0
+    if (at > last) out.push({ text: src.slice(last, at) })
+    const url = m[0].replace(/[.,;:!?]+$/, '')
+    out.push({ text: url, href: url })
+    last = at + url.length
+  }
+  if (last < src.length) out.push({ text: src.slice(last) })
+  return out
+}
+
 const loadConfigs = async () => {
   loading.value = true
+  loadLiveSources()
   try {
     const res = await fetch(`${apiBase}/api/overlay-configs`)
     if (res.ok) {
@@ -303,16 +374,38 @@ const loadPreviewLibraries = async () => {
     const res = await fetch(`${apiBase}/api/media-server/libraries`)
     if (res.ok) {
       const data = await res.json()
-      const libs = (data.libraries || []) as Array<{ serverId: string; libraryId: string; libraryName: string; mediaType: string }>
-      const multiServer = new Set(libs.map(l => l.serverId)).size > 1
-      previewLibraries.value = libs
+      const libs = ((data.libraries || []) as Array<{ serverId: string; libraryId: string; libraryName: string; mediaType: string }>)
         .filter(l => l.mediaType === 'movie' || l.mediaType === 'tv')
-        .map(l => ({
+      // One entry per library group (its servers' items come back merged, as on the
+      // library pages), opened through one member: Plex first, else the first one.
+      const grouped = new Set<string>()
+      const entries: Array<{key: string, title: string, type: string, server?: string}> = []
+      for (const g of settingsStore.libraryGroups.value || []) {
+        const members = g.members || []
+        if (!members.length) continue
+        members.forEach(m => grouped.add(`${m.serverId}:${m.libraryId}`))
+        const anchor = members.find(m => m.serverId === 'plex-1') || members[0]!
+        entries.push({
+          key: String(anchor.libraryId),
+          title: g.name || anchor.libraryName || String(anchor.libraryId),
+          type: g.mediaType === 'tv' ? 'show' : 'movie',
+          server: anchor.serverId,
+        })
+      }
+      // Libraries that aren't in any group yet are still listed on their own.
+      const loose = libs.filter(l => !grouped.has(`${l.serverId}:${l.libraryId}`))
+      const multiServer = new Set(libs.map(l => l.serverId)).size > 1
+      for (const l of loose) {
+        entries.push({
           key: String(l.libraryId),
           title: multiServer ? `${l.libraryName} (${mediaServerLabel(l.serverId, settingsStore.mediaServers.value)})` : l.libraryName,
           type: l.mediaType === 'tv' ? 'show' : 'movie',
           server: l.serverId,
-        }))
+        })
+      }
+      // Movies first, then TV, each alphabetical.
+      previewLibraries.value = entries.sort((a, b) =>
+        (a.type === b.type ? 0 : a.type === 'show' ? 1 : -1) || a.title.localeCompare(b.title))
     }
     if (!previewLibraries.value.length) {
       // Older setups without a media server list: Plex's own sections.
@@ -327,7 +420,25 @@ const loadPreviewLibraries = async () => {
   } finally {
     previewLibrariesLoading.value = false
   }
+  tmdbMode.value = previewLibraries.value.length === 0
 }
+
+const loadTmdbItems = async (type: 'movie' | 'tv', q = '') => {
+  moviesLoaded.value = false
+  const list = q.trim().length >= 2 ? await searchTmdb(q, type) : q.trim() ? [] : await fetchTmdbTrending(type)
+  movies.value = list
+  moviesLoaded.value = true
+}
+const setTmdbType = async (type: 'movie' | 'tv') => {
+  previewSelectedLibrary.value = { key: 'tmdb', title: 'TMDb trending / search', type: type === 'tv' ? 'show' : 'movie' }
+  await loadTmdbItems(type, movieSearchTerm.value)
+}
+watch(movieSearchTerm, (term) => {
+  if (!tmdbMode.value || !showMovieSearch.value || !previewSelectedLibrary.value) return
+  if (tmdbSearchTimer) clearTimeout(tmdbSearchTimer)
+  const type = previewSelectedLibrary.value.type === 'show' ? 'tv' : 'movie'
+  tmdbSearchTimer = setTimeout(() => loadTmdbItems(type, term), 300)
+})
 
 const loadMoviesForLibrary = async (lib: {key: string, title: string, type: string, server?: string}) => {
   moviesLoaded.value = false
@@ -350,6 +461,18 @@ const loadMoviesForLibrary = async (lib: {key: string, title: string, type: stri
 // What the open overlay looked like when opened/saved, to warn before throwing edits away.
 let savedSnapshot = ''
 const snapshotOf = (c: OverlayConfig | null) => (c ? JSON.stringify(c) : '')
+// The same, minus what doesn't change a poster: the overlay's name, its notes and layer names
+// (renaming a layer also renames it in hide rules). Decides the refresh prompt.
+let savedRenderSnapshot = ''
+const renderSnapshotOf = (c: OverlayConfig | null) => {
+  if (!c) return ''
+  const { name: _name, notes: _notes, ...rest } = c
+  return JSON.stringify({ ...rest, elements: (c.elements || []).map(({ name: _n, ...el }) => el) })
+}
+const markSaved = (c: OverlayConfig | null) => {
+  savedSnapshot = snapshotOf(c)
+  savedRenderSnapshot = renderSnapshotOf(c)
+}
 const hasUnsavedChanges = () => !!selectedConfig.value && snapshotOf(selectedConfig.value) !== savedSnapshot
 const closeEditor = () => {
   if (hasUnsavedChanges() && !confirm('You have unsaved changes to this overlay. Close without saving?')) return
@@ -368,7 +491,7 @@ const createNewConfig = () => {
     elements: [],
     streaming_region: 'US',
   }
-  savedSnapshot = snapshotOf(selectedConfig.value)
+  markSaved(selectedConfig.value)
   showEditor.value = true
 }
 
@@ -393,7 +516,7 @@ const editConfig = (config: OverlayConfig) => {
   const els = selectedConfig.value?.elements || []
   expandedEls.value = new Set(els.length <= 3 ? els.map(e => toRaw(e)) : [])
   // Taken after the label migration: converting old fields alone isn't an edit worth a warning.
-  savedSnapshot = snapshotOf(selectedConfig.value)
+  markSaved(selectedConfig.value)
   showEditor.value = true
 }
 
@@ -413,7 +536,8 @@ const offerRefresh = async (configId: string, configName: string) => {
 
 const saveConfig = async () => {
   if (!selectedConfig.value) return
-  const changed = hasUnsavedChanges()
+  // Only a change that can alter posters offers a refresh (not a rename).
+  const changed = renderSnapshotOf(selectedConfig.value) !== savedRenderSnapshot
   const savedId = selectedConfig.value.id
   const savedName = selectedConfig.value.name || 'this overlay'
   try {
@@ -425,7 +549,7 @@ const saveConfig = async () => {
     })
     if (res.ok) {
       await loadConfigs()
-      savedSnapshot = snapshotOf(selectedConfig.value)
+      markSaved(selectedConfig.value)
       showEditor.value = false
       selectedConfig.value = null
       if (changed && savedId) offerRefresh(savedId, savedName)
@@ -635,6 +759,14 @@ const ADD_MENU = [
   ] },
 ]
 
+// Video/audio/edition badges read the media file's details (resolution, codec,
+// edition) from a library scan, so with no media server they never draw.
+// Studio/streaming come from TMDb and still work.
+const { serverless } = useServerless()
+const MEDIA_INFO_TYPES = new Set(['video_badge', 'audio_badge', 'edition_badge', 'resolution_badge', 'codec_badge'])
+const NEEDS_SERVER_TITLE = 'Uses the media file details from a library scan. With no media server connected, this layer is never drawn.'
+const needsServerHere = (type: string) => serverless.value && MEDIA_INFO_TYPES.has(type)
+
 const showAddMenu = ref(false)
 const elementFilter = ref('')
 const expandedEls = shallowRef(new Set<object>())
@@ -700,8 +832,12 @@ const BADGE_DEFAULT_FIELD: Record<string, string> = {
 }
 
 /** Problems that make a layer show nothing (or not what was meant). Shown as a warning on its card. */
+const usesCountdown = (el: OverlayElement): boolean => usesCountdownText(el.text)
+
 const layerWarnings = (el: OverlayElement): string[] => {
   const out: string[] = []
+  const cdWarn = countdownWarning(el.text, el.countdown_to, previewToday.value || localToday())
+  if (cdWarn) out.push(cdWarn)
   if (BADGE_DEFAULT_FIELD[el.type]) {
     const keys = [...new Set([...Object.keys(el.badge_modes || {}), '__other__'])]
     const mode = (v: string) => getBadgeMode(el, v)
@@ -715,11 +851,18 @@ const layerWarnings = (el: OverlayElement): string[] => {
   if ((el.type === 'custom_image' || el.type === 'full_cover_image') && !el.asset_id && !el.url) out.push('No image picked yet.')
   if (el.type === 'text_label' && !String(el.text || '').trim() && !el.box_only) out.push('No text entered yet.')
   if (el.box_only && !el.back_color && !(Number(el.back_line_width) > 0)) out.push('This box has no color or border, so it draws nothing.')
+  if (!hasMaintainerr.value && ((el.conditions || []).some(c => MAINTAINERR_KEYS.has(String(c.field || '')))
+    || textKeys(el).some(k => MAINTAINERR_KEYS.has(k)))) {
+    out.push("Uses Maintainerr removal dates, but Maintainerr isn't set up (Settings → Ratings & Lists), so this layer never shows.")
+  }
   for (const c of el.conditions || []) {
     const field = String(c.field || '')
     if (!field) out.push('A "Show when" condition has no field picked.')
     else if (field.startsWith('_')) out.push('A "Show when" condition came from Kometa and can never match, so this layer never shows.')
     else if (!fieldDef(field)) out.push(`"Show when" uses "${field}", which Simposter doesn't know.`)
+    else if (field === 'list' && !hasMdblistKey.value && (Array.isArray(c.value) ? c.value : [c.value]).some(v => String(v || '').includes('mdblist.com/'))) {
+      out.push("Uses an MDBList list, but there's no MDBList API key (Settings → Ratings & Lists), so this layer never shows.")
+    }
     else if (!opDef(String(c.op || 'eq'))?.noValue) {
       const vals = Array.isArray(c.value) ? c.value : [c.value]
       if (!vals.some(v => v !== undefined && v !== null && String(v).trim() !== '')) out.push(`The "${fieldDef(field)?.label}" condition has no value.`)
@@ -974,6 +1117,7 @@ const openMovieSearch = async () => {
   backToLibraries()
   showMovieSearch.value = true
   await loadPreviewLibraries()
+  if (tmdbMode.value) await setTmdbType('movie')
 }
 
 const selectLibrary = async (lib: {key: string, title: string, type: string, server?: string}) => {
@@ -989,8 +1133,10 @@ const RATING_KEYS = new Set([
   ...FIELDS.filter(f => f.group === 'Ratings').map(f => f.value),
   ...TEXT_VARIABLES.filter(v => v.group === 'Ratings').map(v => v.key),
 ])
-const TEXT_VAR_RE = /\{([A-Za-z0-9_.]+)\}/g
+const TEXT_VAR_RE = /\{([A-Za-z0-9_.]+)[%#/]?\}/g
 const textKeys = (el: OverlayElement): string[] => [...String(el.text || '').matchAll(TEXT_VAR_RE)].map(m => m[1] as string)
+
+const ITEM_DATA_FIELDS = new Set(['days_since_added', 'added_date', 'release_date', 'days_since_release', 'show_status', 'network'])
 
 /** What the current layers (saved or not) need from a real item, sent with the metadata request. */
 const itemNeeds = computed(() => {
@@ -999,18 +1145,26 @@ const itemNeeds = computed(() => {
     textKeys(el).some(k => RATING_KEYS.has(k)) || (el.conditions || []).some(c => RATING_KEYS.has(String(c.field || '').toLowerCase())))
     || (selectedConfig.value?.conditions || []).some(c => RATING_KEYS.has(String(c.field || '').toLowerCase()))
   const types = [...new Set(els.map(e => e.type).filter(t => t === 'streaming_platform_badge' || t === 'studio_badge'))].sort()
-  // Item data fields filled on request (date added, show status).
+  // Item data fields filled on request (date added, release date, show status).
   const used = new Set<string>()
   for (const c of [...els.flatMap(el => el.conditions || []), ...(selectedConfig.value?.conditions || [])]) {
     const f = String(c.field || '').toLowerCase()
-    if (f === 'days_since_added' || f === 'show_status') used.add(f)
+    if (ITEM_DATA_FIELDS.has(f)) used.add(f)
+    // Per-country fields go as "content_rating@GB" / "streaming@US".
+    if (REGIONAL_FIELDS.includes(f)) used.add(regionalKey(f, conditionRegion(c)))
   }
-  for (const el of els) for (const k of textKeys(el)) if (k === 'days_since_added' || k === 'show_status') used.add(k)
+  for (const el of els) for (const k of textKeys(el)) if (ITEM_DATA_FIELDS.has(k)) used.add(k)
+  // Maintainerr: the removal date is enough (the {leaving} values are worked out from it here).
+  const mtrUsed = [...els.flatMap(el => [...(el.conditions || []).map(c => String(c.field || '')), ...textKeys(el)]),
+    ...(selectedConfig.value?.conditions || []).map(c => String(c.field || ''))].filter(k => MAINTAINERR_KEYS.has(k))
+  if (mtrUsed.length) used.add('removal_date')
+  if (mtrUsed.includes('maintainerr_collection')) used.add('maintainerr_collection')
   return { ratings, lists: configLists.value, types, fields: [...used].sort() }
 })
 const itemNeedsKey = computed(() => JSON.stringify(itemNeeds.value))
 
 const loadItemData = async (ratingKey: string, mediaType: string): Promise<ItemData | null> => {
+  if (isTmdbKey(ratingKey)) return null // TMDb-sourced item: no media-server metadata to look up
   try {
     const params = new URLSearchParams({ rating_key: ratingKey })
     if (selectedConfig.value?.id) params.set('config_id', selectedConfig.value.id)
@@ -1030,12 +1184,15 @@ const loadItemData = async (ratingKey: string, mediaType: string): Promise<ItemD
   }
 }
 
-const loadPosterImage = (key: string) => new Promise<HTMLImageElement | null>(resolve => {
+const posterUrlFor = (movie: SimpleMovie) =>
+  movie.posterUrl || `${apiBase}/api/movie/${movie.key}/poster?raw=1`
+
+const loadPosterImage = (movie: SimpleMovie) => new Promise<HTMLImageElement | null>(resolve => {
   const img = new Image()
   img.crossOrigin = 'anonymous'
   img.onload = () => resolve(img)
   img.onerror = () => resolve(null)
-  img.src = `${apiBase}/api/movie/${key}/poster?raw=1`
+  img.src = posterUrlFor(movie)
 })
 
 const fetchItemMetadata = async (ratingKey: string) => {
@@ -1061,7 +1218,7 @@ const selectMovie = async (movie: SimpleMovie) => {
   previewItemLists.value = []
   posterLoading.value = true
   try {
-    const url = `${apiBase}/api/movie/${movie.key}/poster?raw=1`
+    const url = posterUrlFor(movie)
     const img = new Image()
     img.crossOrigin = 'anonymous'
     await new Promise<void>((resolve, reject) => {
@@ -1134,6 +1291,7 @@ watch(showHiddenInPreview, v => {
 const itemContext = (d: ItemData, mediaType: string, title?: string) => buildContext({
   ...d.metadata, media_type: mediaType, labels: d.labels, file_paths: d.file_paths, lists: d.lists,
   ...(title ? { movie_title: title } : {}),
+  ...(previewToday.value ? { today: previewToday.value } : {}),
 })
 
 /** Context from the example values, with some fields swapped (used by compare tiles). */
@@ -1146,6 +1304,23 @@ const exampleContext = (overrides: Record<string, string> = {}, title?: string) 
   if (String(previewCriticRating.value).trim() !== '') meta.critic_rating = Number(previewCriticRating.value)
   if (String(previewDaysAdded.value).trim() !== '') meta.days_since_added = Number(previewDaysAdded.value)
   if (previewShowStatus.value) meta.show_status = previewShowStatus.value
+  if (previewNetwork.value.trim()) meta.network = [previewNetwork.value.trim()]
+  // Example content rating / streaming service, for every country a rule asks about.
+  for (const c of [...(selectedConfig.value?.elements || []).flatMap(el => el.conditions || []), ...(selectedConfig.value?.conditions || [])]) {
+    const f = String(c.field || '').toLowerCase()
+    const region = conditionRegion(c)
+    if (f === 'content_rating' && previewContentRating.value.trim()) {
+      const r = previewContentRating.value.trim()
+      meta[regionalKey(f, region)] = [r, `${region.toLowerCase()}/${r}`]
+    } else if (f === 'streaming' && previewStreaming.value.trim()) {
+      meta[regionalKey(f, region)] = previewStreaming.value.split(',').map(s => s.trim()).filter(Boolean)
+    }
+  }
+  if (previewToday.value) meta.today = previewToday.value
+  if (previewAddedDate.value) meta.added_date = previewAddedDate.value
+  if (previewReleaseDate.value) meta.release_date = previewReleaseDate.value
+  if (previewRemovalDate.value) meta.removal_date = previewRemovalDate.value
+  if (previewMaintainerrCollection.value.trim()) meta.maintainerr_collection = [previewMaintainerrCollection.value.trim()]
   meta.lists = [...previewOnLists.value]
   if (title) meta.movie_title = title
   // Ratings without a test box (IMDb, Rotten Tomatoes, ...) use the list's example values.
@@ -1565,7 +1740,7 @@ const renderKometaPreview = async (
     cw = 0
     ch = 0
   } else if (el.type === 'text_label') {
-    const filled = fillText(el.text || '', scene.ctx)
+    const filled = fillText(el.text || '', scene.ctx, el)
     const text = filled ?? (el.text || 'Text')
     const size = Math.max(4, (el.font_size || 40) * s)
     const stroke = (el.stroke_width || 0) * s
@@ -1594,16 +1769,21 @@ const renderKometaPreview = async (
       ih = addon.height * am
       const off = (el.addon_offset || 0) * s
       const pos = (el.addon_position || 'left').toLowerCase()
+      const align = (el.addon_align || 'center').toLowerCase()
+      // Same as the backend's _addon_cross(): centered unless start/end.
+      const cross = (total: number, size: number) => align === 'start' ? 0 : align === 'end' ? total - size : (total - size) / 2
       if (pos === 'left' || pos === 'right') {
         cw = tw + iw + off
         ch = Math.max(th, ih)
+        textY = cross(ch, th)
+        addY = cross(ch, ih)
         if (pos === 'left') textX = iw + off
         else addX = tw + off
       } else {
         cw = Math.max(tw, iw)
         ch = th + ih + off
-        textX = (cw - tw) / 2
-        addX = (cw - iw) / 2
+        textX = cross(cw, tw)
+        addX = cross(cw, iw)
         if (pos === 'top') textY = ih + off
         else addY = th + off
       }
@@ -1830,7 +2010,7 @@ const renderPreviewElement = async (
   } else if (el.type === 'text_label') {
     // Same as the real render: {variables} filled in; a missing value skips the layer
     // (drawn faint with the raw text so it can still be found and moved).
-    const filled = fillText(el.text || '', scene.ctx)
+    const filled = fillText(el.text || '', scene.ctx, el)
     if (filled === null) {
       if (!scene.interactive) return
       ctx.globalAlpha *= 0.4
@@ -2006,7 +2186,7 @@ watch(previewAudioLanguage, () => { nextTick(renderPreview) })
 watch(previewEdition, () => { nextTick(renderPreview) })
 watch(previewStreamingPlatform, () => { nextTick(renderPreview) })
 watch(previewStudio, () => { nextTick(renderPreview) })
-watch([previewLabels, previewFilePath, previewRating, previewCriticRating, previewDaysAdded, previewShowStatus, previewOnLists, previewItemLabels, previewItemFilePaths, previewItemLists], () => { nextTick(renderPreview) })
+watch([previewLabels, previewFilePath, previewRating, previewCriticRating, previewDaysAdded, previewShowStatus, previewContentRating, previewNetwork, previewStreaming, previewToday, previewAddedDate, previewReleaseDate, previewRemovalDate, previewMaintainerrCollection, previewOnLists, previewItemLabels, previewItemFilePaths, previewItemLists], () => { nextTick(renderPreview) })
 // Re-render when the simposter asset map loads (it arrives async after mount)
 watch(simposterAssetMap, () => { renderPreview() })
 // A new rating/list/badge type in the layers: fetch it for the real items being previewed.
@@ -2037,6 +2217,10 @@ const CONDITION_TEST_FIELD: Record<string, string> = {
   filepath: 'filepath', file_path: 'filepath', filename: 'filepath', audience_rating: 'audience_rating',
   critic_rating: 'critic_rating', list: 'list', mdblist_list: 'list', streaming_platform: 'platform', studio: 'studio',
   days_since_added: 'days_since_added', show_status: 'show_status',
+  added_date: 'added_date', release_date: 'release_date', days_since_release: 'release_date',
+  content_rating: 'content_rating', network: 'network', streaming: 'streaming',
+  removal_date: 'removal_date', days_until_removal: 'removal_date', leaving: 'removal_date', leaving_date: 'removal_date',
+  leaving_day: 'removal_date', leaving_days: 'removal_date', maintainerr_collection: 'maintainerr_collection',
 }
 const usedTestFields = computed(() => {
   const out = new Set<string>()
@@ -2063,6 +2247,12 @@ const usedTestFields = computed(() => {
   return out
 })
 const showAllTestValues = ref(false)
+/** A rule checks today's date (shown in both preview modes). */
+const usesToday = computed(() => [
+  ...(selectedConfig.value?.elements || []).flatMap(el => el.conditions || []),
+  ...(selectedConfig.value?.conditions || []),
+].some(c => String(c.field || '').toLowerCase() === 'today')
+  || (selectedConfig.value?.elements || []).some(el => usesCountdown(el)))
 const showTest = (field: string) => showAllTestValues.value || usedTestFields.value.has(field)
 
 // "A real movie" with nothing picked yet opens the picker, then switches over.
@@ -2137,8 +2327,10 @@ const commitRename = (el: OverlayElement) => {
 // {text} values that need MDBList are only offered once its API key is set.
 const settingsStore = useSettingsStore()
 const hasMdblistKey = computed(() => !!settingsStore.mdblist.value.apiKey)
+const hasMaintainerr = computed(() => !!settingsStore.maintainerr.value.url)
 const textVariableGroups = computed(() => TEXT_VARIABLE_GROUPS
-  .map(g => ({ group: g, vars: TEXT_VARIABLES.filter(v => v.group === g && (hasMdblistKey.value || !needsMdblist(v))) }))
+  .map(g => ({ group: g, vars: TEXT_VARIABLES.filter(v => v.group === g
+    && (needsMaintainerr(v) ? hasMaintainerr.value : (hasMdblistKey.value || !needsMdblist(v)))) }))
   .filter(g => g.vars.length))
 
 /** Put {key} into a text layer at the cursor (or at the end), from the "Insert value" list. */
@@ -2211,7 +2403,7 @@ const addCompareItem = async (movie: SimpleMovie) => {
   const mediaType = previewSelectedLibrary.value?.type === 'show' ? 'tv' : 'movie'
   const tile: CompareTile = { id: nextTileId++, label: movie.title, movie, mediaType, bg: null }
   compareTiles.value = [...compareTiles.value, tile]
-  const [data, bg] = await Promise.all([loadItemData(movie.key, mediaType), loadPosterImage(movie.key)])
+  const [data, bg] = await Promise.all([loadItemData(movie.key, mediaType), loadPosterImage(movie)])
   compareTiles.value = compareTiles.value.map(t => (t.id === tile.id ? { ...t, data: data || undefined, bg } : t))
   nextTick(renderPreview)
 }
@@ -2268,7 +2460,7 @@ onMounted(() => {
   <div class="overlay-manager">
     <div class="page-header">
       <div>
-        <h1>&#x1F9EA; Overlays <span style="font-size: 0.55em; opacity: 0.6; vertical-align: middle; font-weight: 400;">(experimental)</span></h1>
+        <h1>&#x1F4D0; Overlays</h1>
         <p class="page-subtitle">Badges, images and text drawn on top of a poster, kept up to date when ratings, lists or labels change.</p>
       </div>
     </div>
@@ -2280,7 +2472,13 @@ onMounted(() => {
       <div class="section-card">
         <div class="section-header">
           <h2>Your overlays</h2>
-          <div style="display:flex;gap:0.5rem;">
+          <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+          <button class="btn-secondary-sm" title="Ready-made overlays shared by their creators" @click="showStarters = true">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polygon points="12 2 15 9 22 9.3 16.5 14 18.5 21 12 17 5.5 21 7.5 14 2 9.3 9 9"/>
+            </svg>
+            Starter overlays
+          </button>
           <button class="btn-secondary-sm" title="Import Kometa overlay files" @click="showKometaImport = true">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
@@ -2298,13 +2496,24 @@ onMounted(() => {
 
         <div v-if="loading" class="loading">Loading...</div>
         <div v-else-if="configs.length === 0" class="empty-state">
-          No overlays yet. Click <strong>New overlay</strong> to build one, or <strong>Import Kometa</strong> if you already have Kometa overlay files.
+          No overlays yet. Click <strong>New overlay</strong> to build one, <strong>Starter overlays</strong> for ready-made ones, or <strong>Import Kometa</strong> if you already have Kometa overlay files.
         </div>
         <div v-else class="configs-list">
           <div v-for="config in configs" :key="config.id" class="config-item">
             <div class="config-info">
-              <div class="config-name">{{ config.name }}</div>
+              <div class="config-name">
+                {{ config.name }}
+                <span v-if="liveSources[config.id]" class="live-badge" :class="{ paused: !liveSources[config.id]?.enabled }" :title="liveTitle(liveSources[config.id]!)">
+                  {{ liveSources[config.id]?.enabled ? 'Live' : 'Live · paused' }}
+                </span>
+              </div>
               <div class="config-meta">{{ config.elements.length }} layer{{ config.elements.length !== 1 ? 's' : '' }}</div>
+              <div v-if="config.notes" class="config-notes">
+                <template v-for="(part, pi) in noteParts(config.notes)" :key="pi">
+                  <a v-if="part.href" :href="part.href" target="_blank" rel="noopener noreferrer" @click.stop>{{ part.text }}</a>
+                  <template v-else>{{ part.text }}</template>
+                </template>
+              </div>
             </div>
             <div class="config-actions">
               <button class="btn-icon" @click="editConfig(config)" title="Edit">
@@ -2404,6 +2613,9 @@ onMounted(() => {
             <h2>Edit overlay</h2>
             <div class="editor-name-row">
               <input v-model="selectedConfig.name" class="config-name-input" placeholder="Overlay name..." />
+              <span v-if="liveSources[selectedConfig.id]" class="live-badge" :class="{ paused: !liveSources[selectedConfig.id]?.enabled }" :title="liveTitle(liveSources[selectedConfig.id]!)">
+                {{ liveSources[selectedConfig.id]?.enabled ? 'Live' : 'Live · paused' }}
+              </span>
               <div v-if="hasStreamingBadge" class="region-selector">
                 <span class="region-label">Streaming region</span>
                 <select v-model="selectedConfig.streaming_region" class="region-select">
@@ -2411,6 +2623,14 @@ onMounted(() => {
                 </select>
               </div>
             </div>
+            <label class="notes-field">
+              <span>Notes &amp; credits</span>
+              <textarea v-model="selectedConfig.notes" rows="1" maxlength="4000"
+                placeholder="e.g. This overlay is for ratings, imported from https://github.com/"></textarea>
+            </label>
+            <p v-if="liveSources[selectedConfig.id]" class="live-note">
+              Kept in sync with {{ liveFileName(liveSources[selectedConfig.id]!) }}: its layers are replaced when that file changes. "Show overlay when" rules you add here are kept.
+            </p>
           </div>
           <button class="btn-close" title="Close" @click="closeEditor">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -2448,7 +2668,7 @@ onMounted(() => {
                         <button v-for="item in section.items" :key="item.type" class="add-menu-item" @click="addElement(item.type)">
                           <span class="add-menu-dot" :style="{ background: elementTypeColor(item.type) }"></span>
                           <span class="add-menu-label">{{ item.label }}</span>
-                          <span class="add-menu-hint">{{ item.hint }}</span>
+                          <span class="add-menu-hint" :title="needsServerHere(item.type) ? NEEDS_SERVER_TITLE : undefined">{{ needsServerHere(item.type) ? 'Needs a media server' : item.hint }}</span>
                         </button>
                       </div>
                     </div>
@@ -2507,6 +2727,7 @@ onMounted(() => {
                           {{ elementPlace(element) }} · {{ elementWhen(element) }}<template v-if="element.group"> · in set "{{ element.group }}"</template>
                         </span>
                       </div>
+                      <span v-if="needsServerHere(element.type)" class="element-hidden" :title="NEEDS_SERVER_TITLE">needs a media server</span>
                       <span v-if="layerWarnings(element).length" class="element-warn" :title="layerWarnings(element).join('\n')">⚠</span>
                       <span v-if="!visibleElements.has(idx)" class="element-hidden" title="Not drawn for the movie or values used in the preview">not on this preview</span>
                     </div>
@@ -3122,13 +3343,19 @@ onMounted(() => {
                             <option value="" disabled>+ Insert value…</option>
                             <optgroup v-for="g in textVariableGroups" :key="g.group" :label="g.group">
                               <option v-for="v in g.vars" :key="v.key" :value="v.key">
-                                {{ v.label }} (e.g. {{ v.example }}){{ v.note && !needsMdblist(v) ? ` · ${v.note}` : '' }}
+                                {{ v.label }} (e.g. {{ v.example }}){{ v.note && !needsMdblist(v) && !needsMaintainerr(v) ? ` · ${v.note}` : '' }}
                               </option>
                             </optgroup>
                           </select>
                         </div>
-                        <small class="text-var-hint">Values in {curly braces} are filled in per movie. If a value is missing for a movie, this layer is skipped on that poster.<template v-if="!hasMdblistKey"> Ratings appear in the list once you add an MDBList API key in Settings → General.</template></small>
+                        <small class="text-var-hint">Values in {curly braces} are filled in per movie. If a value is missing for a movie, this layer is skipped on that poster.<template v-if="!hasMdblistKey"> Ratings appear in the list once you add an MDBList API key in Settings → Ratings & Lists.</template></small>
                       </label>
+                      <div v-if="usesCountdown(element)" class="field-full countdown-row">
+                        <span>Countdown to</span>
+                        <DateRangeInput :model-value="element.countdown_to || ''" :range="false" :allow-yearly="true" :yearly-default="true"
+                          @update:model-value="(v: unknown) => { element.countdown_to = (typeof v === 'string' && v) ? v : null }" />
+                        <small class="text-var-hint">{countdown} shows the days left until this date (0 on the day). An every-year date starts again after it passes; a fixed date stops showing once it has passed. The number on a poster only changes when the poster is made again, so set a daily Overlay Refresh for the groups using it.</small>
+                      </div>
                       </div></div>
                       <div class="look-sec"><div class="look-sec-title">Font</div><div class="look-sec-grid">
                       <label>
@@ -3181,11 +3408,26 @@ onMounted(() => {
                       <template v-if="element.asset_id || element.url">
                         <label>
                           <span>Side</span>
-                          <select v-model="element.addon_position">
-                            <option :value="undefined">Left</option>
+                          <select :value="element.addon_position || 'left'" @change="element.addon_position = ($event.target as HTMLSelectElement).value">
+                            <option value="left">Left</option>
                             <option value="right">Right</option>
                             <option value="top">Above</option>
                             <option value="bottom">Below</option>
+                          </select>
+                        </label>
+                        <label>
+                          <span>Align</span>
+                          <select :value="element.addon_align || 'center'" @change="element.addon_align = ($event.target as HTMLSelectElement).value">
+                            <template v-if="['top', 'bottom'].includes(element.addon_position || 'left')">
+                              <option value="start">Left edges</option>
+                              <option value="center">Centered</option>
+                              <option value="end">Right edges</option>
+                            </template>
+                            <template v-else>
+                              <option value="start">Top edges</option>
+                              <option value="center">Centered</option>
+                              <option value="end">Bottom edges</option>
+                            </template>
                           </select>
                         </label>
                         <label>
@@ -3268,6 +3510,12 @@ onMounted(() => {
                     </svg>
                   </button>
                 </div>
+
+                <label v-if="usesToday" class="preview-value-field preview-today">
+                  <span>Pretend today is</span>
+                  <input type="date" v-model="previewToday" />
+                  <button v-if="previewToday" type="button" class="btn-link" @click="previewToday = ''">Use today</button>
+                </label>
 
                 <p v-if="!overlayMatchesPreview" class="overlay-off-note">
                   This overlay's own conditions don't match this preview, so nothing is drawn.
@@ -3379,6 +3627,22 @@ onMounted(() => {
                       <span>Days since added</span>
                       <input type="number" min="0" step="1" v-model.lazy="previewDaysAdded" />
                     </label>
+                    <label v-if="showTest('added_date')" class="preview-value-field">
+                      <span>Date added</span>
+                      <input type="date" v-model="previewAddedDate" />
+                    </label>
+                    <label v-if="showTest('release_date')" class="preview-value-field">
+                      <span>Release date</span>
+                      <input type="date" v-model="previewReleaseDate" />
+                    </label>
+                    <label v-if="showTest('removal_date')" class="preview-value-field">
+                      <span>Maintainerr removal date</span>
+                      <input type="date" v-model="previewRemovalDate" />
+                    </label>
+                    <label v-if="showTest('maintainerr_collection')" class="preview-value-field">
+                      <span>Maintainerr collection</span>
+                      <input type="text" v-model="previewMaintainerrCollection" placeholder="Leaving Soon" />
+                    </label>
                     <label v-if="showTest('show_status')" class="preview-value-field">
                       <span>Show status</span>
                       <select v-model="previewShowStatus">
@@ -3387,6 +3651,18 @@ onMounted(() => {
                         <option value="canceled">Canceled</option>
                         <option value="upcoming">Upcoming</option>
                       </select>
+                    </label>
+                    <label v-if="showTest('content_rating')" class="preview-value-field">
+                      <span>Content rating</span>
+                      <input type="text" v-model.lazy="previewContentRating" placeholder="PG-13" />
+                    </label>
+                    <label v-if="showTest('network')" class="preview-value-field">
+                      <span>Network</span>
+                      <input type="text" v-model.lazy="previewNetwork" placeholder="HBO" />
+                    </label>
+                    <label v-if="showTest('streaming')" class="preview-value-field">
+                      <span>Streaming services</span>
+                      <input type="text" v-model.lazy="previewStreaming" placeholder="Netflix, 8" title="Names or TMDb provider ids, separated by commas" />
                     </label>
                     <label v-if="showTest('filepath')" class="preview-value-field preview-value-wide">
                       <span>File path</span>
@@ -3448,7 +3724,7 @@ onMounted(() => {
       <div class="search-modal">
         <div class="search-modal-header">
           <div class="search-modal-title">
-            <button v-if="previewSelectedLibrary" class="btn-back" @click="backToLibraries" title="Back to libraries">
+            <button v-if="previewSelectedLibrary && !tmdbMode" class="btn-back" @click="backToLibraries" title="Back to libraries">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                 <polyline points="15 18 9 12 15 6"/>
               </svg>
@@ -3469,7 +3745,7 @@ onMounted(() => {
             <div v-else class="library-list">
               <button
                 v-for="lib in previewLibraries"
-                :key="lib.key"
+                :key="`${lib.server || ''}:${lib.key}`"
                 class="library-btn"
                 @click="selectLibrary(lib)"
               >
@@ -3481,10 +3757,14 @@ onMounted(() => {
           </template>
           <!-- Step 2: item search -->
           <template v-else>
+            <div v-if="tmdbMode" class="library-list" style="flex-direction: row; margin-bottom: 8px;">
+              <button class="library-btn" :style="previewSelectedLibrary.type !== 'show' ? 'outline: 2px solid var(--accent, #6366f1);' : ''" @click="setTmdbType('movie')"><span class="library-name">Movies (TMDb)</span></button>
+              <button class="library-btn" :style="previewSelectedLibrary.type === 'show' ? 'outline: 2px solid var(--accent, #6366f1);' : ''" @click="setTmdbType('tv')"><span class="library-name">TV Shows (TMDb)</span></button>
+            </div>
             <input
               type="text"
               v-model="movieSearchTerm"
-              placeholder="Search by title..."
+              :placeholder="tmdbMode ? 'Search TMDb (trending shown by default)...' : 'Search by title...'"
               class="search-input"
               autofocus
             />
@@ -3497,7 +3777,7 @@ onMounted(() => {
                   class="search-result"
                   @click="selectMovie(movie)"
                 >
-                  {{ movie.title }}
+                  {{ movie.title }}<template v-if="movie.year"> ({{ movie.year }})</template>
                 </button>
                 <div v-if="moviesLoaded && movieSearchResults.length === 0" class="search-empty">No items match that search.</div>
               </template>
@@ -3546,6 +3826,7 @@ onMounted(() => {
       :groups="refreshPrompt.groups"
       @close="refreshPrompt = null"
     />
+    <StarterOverlaysModal v-if="showStarters" @close="showStarters = false" @added="onStarterAdded" />
     <KometaImportModal v-if="showKometaImport" @close="showKometaImport = false" @imported="onKometaImported" />
   </div>
 </template>
@@ -3575,6 +3856,19 @@ onMounted(() => {
 .config-info { flex: 1; }
 .config-name { color: var(--text-primary, #fff); font-weight: 500; font-size: 0.95rem; }
 .config-meta { color: var(--text-secondary, #777); font-size: 0.8rem; margin-top: 2px; }
+.live-badge { display: inline-flex; align-items: center; gap: 0.3rem; margin-left: 0.4rem; padding: 0.1rem 0.45rem; border-radius: 999px; font-size: 0.65rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; vertical-align: middle; color: #3dd6b7; background: rgba(61, 214, 183, 0.12); border: 1px solid rgba(61, 214, 183, 0.45); cursor: help; }
+.live-badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.live-badge.paused { color: var(--text-secondary, #8b95a7); background: rgba(255, 255, 255, 0.05); border-color: var(--border, #2a2f3e); }
+.live-note { margin: 0.4rem 0 0; font-size: 0.75rem; color: var(--text-secondary, #8b95a7); }
+.config-notes { margin-top: 4px; font-size: 0.78rem; color: var(--text-secondary, #8b95a7); white-space: pre-line; overflow-wrap: anywhere; }
+.config-notes a { color: var(--accent, #3dd6b7); text-decoration: none; }
+.config-notes a:hover { text-decoration: underline; }
+/* The header's left side takes the free width, so the notes box isn't squeezed to the name field's width. */
+.editor-header > div:first-child { flex: 1; min-width: 0; margin-right: 1rem; }
+.notes-field { display: flex; flex-direction: column; gap: 0.25rem; margin-top: 0.5rem; max-width: 1100px; }
+.notes-field span { font-size: 0.72rem; color: var(--text-secondary, #8b95a7); font-weight: 500; }
+.notes-field textarea { padding: 0.4rem 0.55rem; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border, #2a2f3e); border-radius: 6px; color: var(--text-primary, #fff); font-size: 0.82rem; font-family: inherit; resize: vertical; }
+.notes-field textarea:focus { outline: none; border-color: var(--accent, #3dd6b7); }
 .config-actions { display: flex; gap: 0.5rem; }
 
 .btn-icon { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; background: transparent; border: 1px solid var(--border, #2a2f3e); border-radius: 5px; color: var(--text-secondary, #aaa); cursor: pointer; transition: all 0.15s; }
@@ -3599,7 +3893,7 @@ onMounted(() => {
 .editor-header { display: flex; justify-content: space-between; align-items: flex-start; padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--border, #2a2f3e); }
 .editor-header h2 { margin: 0 0 0.4rem 0; color: var(--text-primary, #fff); font-size: 1.15rem; }
 .editor-name-row { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
-.config-name-input { flex: 1; min-width: 160px; padding: 0.45rem 0.6rem; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border, #2a2f3e); border-radius: 6px; color: var(--text-primary, #fff); font-size: 0.95rem; }
+.config-name-input { flex: 1; min-width: 160px; max-width: 420px; padding: 0.45rem 0.6rem; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border, #2a2f3e); border-radius: 6px; color: var(--text-primary, #fff); font-size: 0.95rem; }
 .config-name-input:focus { outline: none; border-color: var(--accent, #3dd6b7); }
 .region-selector { display: flex; align-items: center; gap: 0.4rem; white-space: nowrap; }
 .region-label { color: var(--text-secondary, #888); font-size: 0.78rem; font-weight: 500; }
@@ -3700,6 +3994,8 @@ onMounted(() => {
 .element-fields label { display: flex; flex-direction: column; gap: 0.2rem; }
 .element-fields label.field-full { grid-column: 1 / -1; }
 .element-fields label span { color: var(--text-secondary, #888); font-size: 0.72rem; font-weight: 500; }
+.countdown-row { display: flex; flex-direction: column; gap: 4px; }
+.countdown-row > span { color: var(--text-secondary, #888); font-size: 0.72rem; font-weight: 500; }
 .element-fields input, .element-fields select { padding: 0.35rem 0.45rem; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border, #2a2f3e); border-radius: 5px; color: var(--text-primary, #fff); font-size: 0.8rem; }
 .element-fields input:focus, .element-fields select:focus { outline: none; border-color: var(--accent, #3dd6b7); }
 
@@ -3898,6 +4194,9 @@ onMounted(() => {
 .preview-value-field span { color: var(--text-secondary, #666); font-size: 0.65rem; font-weight: 500; }
 .preview-value-field select { padding: 0.25rem 0.35rem; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border, #2a2f3e); border-radius: 4px; color: var(--text-primary, #fff); font-size: 0.72rem; }
 .preview-value-field select:focus { outline: none; border-color: var(--accent, #3dd6b7); }
+.preview-value-field input[type='date'] { padding: 0.25rem 0.35rem; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border, #2a2f3e); border-radius: 4px; color: var(--text-primary, #fff); font-size: 0.72rem; color-scheme: dark; }
+:root[data-theme='light'] .preview-value-field input[type='date'] { color-scheme: light; }
+.preview-today { flex-direction: row; align-items: center; gap: 0.4rem; margin: 0.35rem 0; }
 
 .element-warn { color: #fbbf24; font-size: 0.85rem; cursor: help; flex-shrink: 0; }
 .warn-list { grid-column: 1 / -1; margin: 0; padding: 0.4rem 0.6rem; list-style: none; border: 1px solid rgba(251, 191, 36, 0.35); background: rgba(251, 191, 36, 0.07); border-radius: 6px; color: #fbbf24; font-size: 0.74rem; line-height: 1.45; }
@@ -3961,7 +4260,7 @@ onMounted(() => {
 
 @media (max-width: 900px) {
   .overlay-manager { padding: 1rem; }
-  .content-grid { grid-template-columns: 1fr; }
+  .content-grid { grid-template-columns: minmax(0, 1fr); }
   .editor-modal { width: 96%; height: 94vh; }
   .editor-columns { grid-template-columns: 1fr; }
   .preview-column { position: static; order: -1; }
@@ -3979,5 +4278,10 @@ onMounted(() => {
   vertical-align: middle;
   background: rgba(139, 92, 246, 0.18);
   color: #a78bfa;
+}
+
+@media (max-width: 600px) {
+  .overlay-manager { padding: 0.25rem; }
+  .section-card { padding: 1rem; }
 }
 </style>

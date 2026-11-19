@@ -11,6 +11,7 @@ import UpdateAnnouncementModal from './components/UpdateAnnouncementModal.vue'
 import ChangelogModal from './components/ChangelogModal.vue'
 import OnboardingModal from './components/OnboardingModal.vue'
 import QuickStartGuide from './components/QuickStartGuide.vue'
+import SectionTabs, { type SectionTab } from './components/layout/SectionTabs.vue'
 import SearchEditChoiceModal, { type SearchEditChoice } from './components/SearchEditChoiceModal.vue'
 import LogoEditorModal from './components/LogoEditorModal.vue'
 import BackdropEditorModal from './components/BackdropEditorModal.vue'
@@ -20,10 +21,14 @@ import { useMovies } from './composables/useMovies'
 import { useTvShows } from './composables/useTvShows'
 import { useSettingsStore } from './stores/settings'
 import { useScanStore } from './stores/scan'
+import { useServerless } from './composables/useServerless'
+import { LIBRARY_ROUTE_NAMES } from './router'
 import { useOperationStatus } from './stores/operationStatus'
 import { getApiBase } from '@/services/apiBase'
 import { libraryInfo } from '@/services/libraryLabel'
 import { onboardingLaunchRequested, notifyOnboardingSaved } from '@/composables/useOnboardingLauncher'
+import { apiEditorRequest } from '@/composables/useApiEditorLauncher'
+import { APP_VERSION } from '@/version'
 
 // Phase 8a -- a LibraryGroup with at least one member but NO Plex member represents a
 // standalone Jellyfin/Emby-only library (created via Settings -> Libraries's "Jellyfin/
@@ -32,63 +37,35 @@ import { onboardingLaunchRequested, notifyOnboardingSaved } from '@/composables/
 // existing `tab.replace('movies-', '')`-style parsing naturally yields `group-{id}`,
 // which resolveLibraryTarget() below already knows how to turn into a real
 // {server, library} pair -- no prefix-branching needed at the call sites.
-// Media Mirror only makes sense once a group has a real source AND target to
-// copy between -- a single-library group has nothing to mirror to/from.
-// Shared by both the Plex-anchored tabs and the non-Plex group tabs below.
-const groupMemberCount = (serverId: string, libraryId: string): number => {
-  const group = (settings.libraryGroups.value || []).find(g =>
-    (g.members || []).some(m => m.serverId === serverId && m.libraryId === libraryId)
-  )
-  return group?.members?.length ?? 1
-}
-
-// Thumb Art is Jellyfin/Emby-only (Plex has no such slot) -- the mirror of Square
-// Art being Plex-only -- so its submenu entry only shows when the library's group
-// has a Jellyfin or Emby member.
-const groupHasNonPlexMember = (serverId: string, libraryId: string): boolean => {
-  const group = (settings.libraryGroups.value || []).find(g =>
-    (g.members || []).some(m => m.serverId === serverId && m.libraryId === libraryId)
-  )
-  return (group?.members || []).some(m => m.serverId !== 'plex-1')
-}
-
+// Which Artwork/Tools tabs a library shows is decided by sectionTabs below.
 const nonPlexGroupTabs = (mediaType: 'movie' | 'tv'): MenuItem[] => {
-  const groups = (settings.libraryGroups.value || []).filter(g =>
+  // Saved groups only: a group renamed or added in Settings appears after Save.
+  const groups = (settings.savedLibraryGroups.value || []).filter(g =>
     g.mediaType === mediaType &&
     (g.members?.length ?? 0) > 0 &&
     !(g.members || []).some(m => m.serverId === 'plex-1')
   )
   const prefix = mediaType === 'movie' ? 'movies' : 'tv-shows'
   const icon = mediaType === 'movie' ? '\u{1F3AC}' : '\u{1F4FA}'
-  // Square Art is Plex-only (no Jellyfin/Emby equivalent, Quirk #44/#92) -- omit it
-  // from a non-Plex tab's submenu entirely rather than linking to a permanently-empty view.
+  // Same entries as a Plex library's menu; the Artwork and Tools pages decide
+  // which tabs apply (no Square Art without Plex, Media Mirror only with two or
+  // more servers).
   const movieItems: [string, string][] = [
     ['batch', '\u{270F}\uFE0F Batch Edit'],
     ['collections', '\u{1F4DA} Collections'],
-    ['logos', '\u{1F5BC}\uFE0F Logos'],
-    ['backdrops', '\u{1F39E}\uFE0F Backdrops'],
-    ['thumb-art', '\u{1F304} Thumb Art'],
-    ['media-mirror', '\u{1FA9E} Media Mirror'],
-    ['overlay-refresh', '\u{1F501} Overlay Refresh'],
-    ['assets', '\u{1F4C1} Local Assets'],
-    ['backup', '\u{1F4E6} Backup / Restore'],
+    ['artwork', '\u{1F5BC}\uFE0F Artwork'],
+    ['tools', '\u{1F9F0} Tools'],
   ]
   const tvItems: [string, string][] = [
     ['tv-batch', '\u{270F}\uFE0F Batch Edit'],
-    ['tv-logos', '\u{1F5BC}\uFE0F Logos'],
-    ['tv-backdrops', '\u{1F39E}\uFE0F Backdrops'],
-    ['tv-thumb-art', '\u{1F304} Thumb Art'],
-    ['tv-media-mirror', '\u{1FA9E} Media Mirror'],
-    ['tv-overlay-refresh', '\u{1F501} Overlay Refresh'],
-    ['tv-assets', '\u{1F4C1} Local Assets'],
-    ['tv-backup', '\u{1F4E6} Backup / Restore'],
+    ['tv-artwork', '\u{1F5BC}\uFE0F Artwork'],
+    ['tv-tools', '\u{1F9F0} Tools'],
   ]
   const items = mediaType === 'movie' ? movieItems : tvItems
   return groups.map(g => ({
     key: `${prefix}-group-${g.id}`,
     label: `${icon} ${g.name || 'Library'}`,
     submenu: items
-      .filter(([k]) => !k.includes('media-mirror') || g.members.length > 1)
       .map(([k, label]) => ({ key: `${k}-group-${g.id}`, label }))
   }))
 }
@@ -101,7 +78,7 @@ const nonPlexGroupTabs = (mediaType: 'movie' | 'tv'): MenuItem[] => {
 const resolveLibraryTarget = (libId: string): { library: string; server?: string } => {
   if (libId.startsWith('group-')) {
     const groupId = libId.slice('group-'.length)
-    const group = (settings.libraryGroups.value || []).find(g => g.id === groupId)
+    const group = (settings.savedLibraryGroups.value || []).find(g => g.id === groupId)
     const member = group?.members?.[0]
     if (member) return { library: member.libraryId, server: member.serverId }
   }
@@ -113,10 +90,22 @@ const tabs = computed<MenuItem[]>(() => {
   const plexConfigured = settings.plexActive.value
   // Phase 8a -- a Jellyfin/Emby-only install (no Plex at all) is no longer locked out
   // of the app; it just has no Plex-derived tabs below. See onMounted()'s matching gate.
-  const anyServerConfigured = plexConfigured || settings.mediaServers.value.some(s => s.enabled && s.type !== 'plex')
+  // Server-less mode (onboarding done, no server): reduced nav built on the Poster API.
+  // No Backup / Restore: that page backs up per-library server artwork. The
+  // database backup (presets, overlays, settings, pinned posters) is in
+  // Settings -> Advanced.
+  if (serverless.value) {
+    return [
+      { key: 'poster-api', label: '\u{1F50C} Poster API' },
+      { key: 'template-manager', label: '\u{1F3A8} Template Manager' },
+      { key: 'overlay-config-manager', label: '\u{1F4D0} Overlays' },
+      { key: 'logs', label: '\u{1F4DD} Logs' },
+      { key: 'settings', label: '\u{2699}\uFE0F Settings' }
+    ]
+  }
 
-  // If nothing at all is configured, only show Settings
-  if (!anyServerConfigured) {
+  // Not onboarded yet and nothing configured: only show Settings
+  if (!anyServerConfigured.value) {
     return [
       { key: 'settings', label: '\u{2699}\uFE0F Settings' }
     ]
@@ -146,14 +135,8 @@ const tabs = computed<MenuItem[]>(() => {
     submenu: [
       { key: `batch-${lib.id || idx}`, label: '\u{270F}\uFE0F Batch Edit' },
       { key: `collections-${lib.id || idx}`, label: '\u{1F4DA} Collections' },
-      { key: `logos-${lib.id || idx}`, label: '\u{1F5BC}\uFE0F Logos' },
-      { key: `backdrops-${lib.id || idx}`, label: '\u{1F39E}\uFE0F Backdrops' },
-      { key: `square-art-${lib.id || idx}`, label: '\u{1F533} Square Art' },
-      ...(groupHasNonPlexMember('plex-1', String(lib.id)) ? [{ key: `thumb-art-${lib.id || idx}`, label: '\u{1F304} Thumb Art' }] : []),
-      ...(groupMemberCount('plex-1', String(lib.id)) > 1 ? [{ key: `media-mirror-${lib.id || idx}`, label: '\u{1FA9E} Media Mirror' }] : []),
-      { key: `overlay-refresh-${lib.id || idx}`, label: '\u{1F501} Overlay Refresh' },
-      { key: `assets-${lib.id || idx}`, label: '\u{1F4C1} Local Assets' },
-      { key: `backup-${lib.id || idx}`, label: '\u{1F4E6} Backup / Restore' }
+      { key: `artwork-${lib.id || idx}`, label: '\u{1F5BC}\uFE0F Artwork' },
+      { key: `tools-${lib.id || idx}`, label: '\u{1F9F0} Tools' }
     ]
   }))
 
@@ -166,14 +149,8 @@ const tabs = computed<MenuItem[]>(() => {
     label: `\u{1F4FA} ${lib.displayName || lib.title || `TV Library ${idx + 1}`}`,
     submenu: [
       { key: `tv-batch-${lib.id || idx}`, label: '\u{270F}\uFE0F Batch Edit' },
-      { key: `tv-logos-${lib.id || idx}`, label: '\u{1F5BC}\uFE0F Logos' },
-      { key: `tv-backdrops-${lib.id || idx}`, label: '\u{1F39E}\uFE0F Backdrops' },
-      { key: `tv-square-art-${lib.id || idx}`, label: '\u{1F533} Square Art' },
-      ...(groupHasNonPlexMember('plex-1', String(lib.id)) ? [{ key: `tv-thumb-art-${lib.id || idx}`, label: '\u{1F304} Thumb Art' }] : []),
-      ...(groupMemberCount('plex-1', String(lib.id)) > 1 ? [{ key: `tv-media-mirror-${lib.id || idx}`, label: '\u{1FA9E} Media Mirror' }] : []),
-      { key: `tv-overlay-refresh-${lib.id || idx}`, label: '\u{1F501} Overlay Refresh' },
-      { key: `tv-assets-${lib.id || idx}`, label: '\u{1F4C1} Local Assets' },
-      { key: `tv-backup-${lib.id || idx}`, label: '\u{1F4E6} Backup / Restore' }
+      { key: `tv-artwork-${lib.id || idx}`, label: '\u{1F5BC}\uFE0F Artwork' },
+      { key: `tv-tools-${lib.id || idx}`, label: '\u{1F9F0} Tools' }
     ]
   })) : []
 
@@ -184,6 +161,8 @@ const tabs = computed<MenuItem[]>(() => {
     ...nonPlexGroupTabs('tv'),
     { key: 'template-manager', label: '\u{1F3A8} Template Manager' },
     { key: 'overlay-config-manager', label: '\u{1F4D0} Overlays' },
+    // Only once enabled (Settings -> Media Servers -> Poster API).
+    ...(settings.posterApiEnabledSaved.value ? [{ key: 'poster-api', label: '\u{1F50C} Poster API' }] : []),
     { key: 'history', label: '\u{1F4CB} History' },
     { key: 'settings', label: '\u{2699}\uFE0F Settings' },
     { key: 'logs', label: '\u{1F4DD} Logs' }
@@ -198,6 +177,26 @@ const sidebarOpen = ref(false)
 const sidebarCollapsed = ref(localStorage.getItem('sidebarCollapsed') === 'true')
 const showChangelog = ref(false)
 const showOnboarding = ref(false)
+const settingsLoadFailed = ref(false)
+
+// What's New only for installs that are set up; a brand-new install gets the
+// setup wizard instead (it used to open What's New behind the wizard).
+const showUpdateAnnouncement = computed(
+  () => settings.loaded.value && settings.onboardingCompleted.value && !showOnboarding.value
+)
+
+function onOnboardingDone() {
+  // The wizard was the introduction; don't follow it with this version's notes.
+  try { localStorage.setItem('simposter-last-seen-version', APP_VERSION) } catch { /* ignore */ }
+  showOnboarding.value = false
+  showQuickGuide.value = true
+  notifyOnboardingSaved()
+}
+
+async function retrySettingsLoad() {
+  await settings.load()
+  if (settings.loaded.value) window.location.reload()
+}
 const showQuickGuide = ref(false)
 
 // Settings → Advanced's "Run Startup Wizard" button lives in a routed view, well outside
@@ -205,6 +204,38 @@ const showQuickGuide = ref(false)
 // counter rather than a boolean re-triggering `showOnboarding`.
 watch(onboardingLaunchRequested, (val) => {
   if (val > 0) showOnboarding.value = true
+})
+
+// Poster API page / server-less search "Open in editor": a TMDb-identified item with no
+// media-server rating key. Synthetic key (never sent as a rating key -- the editors gate
+// on `apiMode`). Uses its own `apiEdit=<type>:<id>` query param rather than `edit`:
+// `edit` is resolved by tryOpenEditItem() against the library lists by rating key OR
+// TMDb/TVDB id, so a bare TMDb id there could open an unrelated library item.
+watch(apiEditorRequest, (req) => {
+  if (!req) return
+  const mediaType = req.mediaType === 'tv' ? 'tv-show' : 'movie'
+  ui.setSelectedMovie({
+    key: `api-${req.mediaType}-${req.tmdb_id}`,
+    title: req.title,
+    // /api/preview's movie_year is an int -- an empty year must be omitted, not ''.
+    year: req.year || undefined,
+    poster: null,
+    tmdb_id: req.tmdb_id,
+    apiMode: true,
+    mediaType
+  } as any)
+  const { edit: _edit, ...rest } = route.query
+  router.push({ query: { ...rest, apiEdit: `${req.mediaType}:${req.tmdb_id}` } })
+  apiEditorRequest.value = null
+})
+
+// Browser back/forward for an API-mode editor: close it when its apiEdit param goes away
+// or no longer names the open item (there's no list to re-open an API item from).
+watch(() => route.query.apiEdit, (apiEdit) => {
+  const sel = ui.selectedMovie.value as any
+  if (!sel?.apiMode) return
+  const expected = `${sel.mediaType === 'tv-show' ? 'tv' : 'movie'}:${sel.tmdb_id}`
+  if (apiEdit !== expected) ui.setSelectedMovie(null)
 })
 
 const handleQuickGuideDone = () => {
@@ -238,6 +269,7 @@ const closeSidebar = () => {
 const { movies, hydratePostersFromSession } = useMovies()
 const { tvShows } = useTvShows()
 const settings = useSettingsStore()
+const { anyServerConfigured, serverless } = useServerless()
 const scan = useScanStore()
 const operationStatus = useOperationStatus()
 let scanPoller: number | null = null
@@ -528,7 +560,68 @@ watch(
   { immediate: true }
 )
 
+// Artwork and Tools: one sidebar entry each per library; the pages inside them
+// keep their own routes and show a tab strip (SectionTabs.vue) to switch.
+const ARTWORK_ROUTES = {
+  movie: ['logos', 'backdrops', 'square-art', 'thumb-art'],
+  tv: ['tv-logos', 'tv-backdrops', 'tv-square-art', 'tv-thumb-art'],
+}
+const TOOLS_ROUTES = {
+  movie: ['overlay-refresh', 'media-mirror', 'local-assets'],
+  tv: ['tv-overlay-refresh', 'tv-media-mirror', 'tv-local-assets'],
+}
+
+const sectionTabs = computed<{ title: string; tabs: SectionTab[] } | null>(() => {
+  if (serverless.value) return null
+  const name = String(route.name || '')
+  const isBackup = name === 'backup'
+  const isTv = isBackup ? route.query.type === 'tv-show' : name.startsWith('tv-')
+  const kind = isTv ? 'tv' : 'movie'
+  const section = ARTWORK_ROUTES[kind].includes(name) ? 'artwork'
+    : (TOOLS_ROUTES[kind].includes(name) || isBackup) ? 'tools' : null
+  if (!section) return null
+  const library = String(route.query.library || '')
+  const server = String(route.query.server || 'plex-1')
+  const query: Record<string, string> = { library }
+  if (route.query.server) query.server = String(route.query.server)
+  const group = (settings.libraryGroups.value || []).find(g =>
+    (g.members || []).some(m => m.serverId === server && m.libraryId === library)
+  )
+  const members = group?.members || [{ serverId: server, libraryId: library }]
+  const hasPlex = members.some(m => m.serverId === 'plex-1')
+  const hasNonPlex = members.some(m => m.serverId !== 'plex-1')
+  const p = isTv ? 'tv-' : ''
+  const tab = (routeName: string, label: string): SectionTab => ({
+    key: routeName, label, to: { name: routeName, query }, active: name === routeName,
+  })
+  if (section === 'artwork') {
+    return {
+      title: 'Artwork',
+      tabs: [
+        tab(`${p}logos`, 'Logos'),
+        tab(`${p}backdrops`, 'Backdrops'),
+        ...(hasPlex ? [tab(`${p}square-art`, 'Square Art')] : []),
+        ...(hasNonPlex ? [tab(`${p}thumb-art`, 'Thumb Art')] : []),
+      ],
+    }
+  }
+  return {
+    title: 'Tools',
+    tabs: [
+      tab(`${p}overlay-refresh`, 'Overlay Refresh'),
+      ...(members.length > 1 ? [tab(`${p}media-mirror`, 'Media Mirror')] : []),
+      tab(`${p}local-assets`, 'Local Assets'),
+      {
+        key: 'backup', label: 'Backup / Restore',
+        to: { name: 'backup', query: { ...query, type: isTv ? 'tv-show' : 'movie' } },
+        active: isBackup,
+      },
+    ],
+  }
+})
+
 const activeTab = computed<TabKey>(() => {
+  if (serverless.value) return (route.name as TabKey) || 'poster-api'
   const libQuery = resolveTabSuffix((route.query.library as string) || '', (route.query.server as string) || '')
   if (route.name === 'backup' && (route.query.type as string) === 'tv-show') {
     if (libQuery) return `tv-shows-${libQuery}`
@@ -555,24 +648,13 @@ const activeSubmenu = computed<string>(() => {
   if (route.name === 'batch-edit') return `batch-${libQuery || 'default'}`
   if (route.name === 'tv-batch-edit') return `tv-batch-${libQuery || 'default'}`
   if (route.name === 'collections') return `collections-${libQuery || 'default'}`
-  if (route.name === 'logos') return `logos-${libQuery || 'default'}`
-  if (route.name === 'tv-logos') return `tv-logos-${libQuery || 'default'}`
-  if (route.name === 'backdrops') return `backdrops-${libQuery || 'default'}`
-  if (route.name === 'tv-backdrops') return `tv-backdrops-${libQuery || 'default'}`
-  if (route.name === 'square-art') return `square-art-${libQuery || 'default'}`
-  if (route.name === 'tv-square-art') return `tv-square-art-${libQuery || 'default'}`
-  if (route.name === 'thumb-art') return `thumb-art-${libQuery || 'default'}`
-  if (route.name === 'tv-thumb-art') return `tv-thumb-art-${libQuery || 'default'}`
-  if (route.name === 'media-mirror') return `media-mirror-${libQuery || 'default'}`
-  if (route.name === 'tv-media-mirror') return `tv-media-mirror-${libQuery || 'default'}`
-  if (route.name === 'overlay-refresh') return `overlay-refresh-${libQuery || 'default'}`
-  if (route.name === 'tv-overlay-refresh') return `tv-overlay-refresh-${libQuery || 'default'}`
-  if (route.name === 'local-assets') return `assets-${libQuery || 'default'}`
-  if (route.name === 'tv-local-assets') return `tv-assets-${libQuery || 'default'}`
-  if (route.name === 'backup') {
-    const type = route.query.type as string
-    return type === 'tv-show' ? `tv-backup-${libQuery || 'default'}` : `backup-${libQuery || 'default'}`
-  }
+  const lib = libQuery || 'default'
+  const name = String(route.name || '')
+  if (ARTWORK_ROUTES.movie.includes(name)) return `artwork-${lib}`
+  if (ARTWORK_ROUTES.tv.includes(name)) return `tv-artwork-${lib}`
+  if (TOOLS_ROUTES.movie.includes(name)) return `tools-${lib}`
+  if (TOOLS_ROUTES.tv.includes(name)) return `tv-tools-${lib}`
+  if (name === 'backup') return route.query.type === 'tv-show' ? `tv-tools-${lib}` : `tools-${lib}`
   return ''
 })
 const showBackButton = computed(() => !!ui.selectedMovie.value)
@@ -613,8 +695,29 @@ const handleBack = () => {
   ui.setSelectedMovie(null)
 
   // Remove edit parameter from URL, keep other query params
-  const { edit, ...remainingQuery } = route.query
+  const { edit, apiEdit, ...remainingQuery } = route.query
   router.replace({ query: remainingQuery })
+}
+
+// Library loaders (posters, library contents, scan status). Runs from onMounted, and
+// again when a server-less session gets its first server configured mid-session.
+// Guarded so overlapping calls never run twice at once; startScanPolling() itself
+// clears any existing interval, so polling can't be double-started either.
+let libraryLoading: Promise<void> | null = null
+const startLibraryLoading = () => {
+  if (libraryLoading) return libraryLoading
+  hydratePostersFromSession()
+  scan.checking.value = true
+  libraryLoading = Promise.allSettled([
+    fetchAllLibrariesContent(),
+    fetchScanStatus().then((running) => {
+      if (running) startScanPolling()
+      else scan.checking.value = false
+    }),
+  ]).then(() => undefined).finally(() => {
+    libraryLoading = null
+  })
+  return libraryLoading
 }
 
 onMounted(async () => {
@@ -635,21 +738,21 @@ onMounted(async () => {
   // Check if any server is configured — show onboarding for new users. Phase 8a: an
   // install with only Jellyfin/Emby configured (no Plex) is no longer redirected to
   // Settings — matches the tabs computed's identical anyServerConfigured check above.
-  const plexConfigured = settings.plexActive.value
-  const anyServerConfigured = plexConfigured || settings.mediaServers.value.some(s => s.enabled && s.type !== 'plex')
-  if (!settings.onboardingCompleted.value) {
+  // Only a settings load that SUCCEEDED can say "not set up yet". A refused or
+  // failed load (rate limit, server restarting) leaves onboardingCompleted at
+  // its default false, which used to open the setup wizard on a configured
+  // install; show a reload message instead.
+  if (!settings.loaded.value) {
+    settingsLoadFailed.value = true
+  } else if (!settings.onboardingCompleted.value) {
     showOnboarding.value = true
-  } else if (!anyServerConfigured && route.path !== '/settings') {
-    router.push('/settings')
+  } else if (serverless.value && LIBRARY_ROUTE_NAMES.has(String(route.name || ''))) {
+    // Server-less mode lands on the Poster API page (the router guard handles deep links).
+    router.replace('/poster-api')
   }
 
-  hydratePostersFromSession()
-  fetchAllLibrariesContent()
-  scan.checking.value = true
-  fetchScanStatus().then((running) => {
-    if (running) startScanPolling()
-    else scan.checking.value = false
-  })
+  // Server-less mode has no libraries to load, search or scan.
+  if (!serverless.value) startLibraryLoading()
   // Check if batch operation is running
   fetchBatchStatus().then((running) => {
     if (running) startBatchPolling()
@@ -664,6 +767,16 @@ onMounted(async () => {
     // We need to wait for content to load before we can find the item
     // This will be handled by a watcher below
   }
+})
+
+// Onboarding can finish (or the last server can be removed) while a library page is open.
+watch(serverless, (v, old) => {
+  if (v && LIBRARY_ROUTE_NAMES.has(String(route.name || ''))) {
+    ui.setSelectedMovie(null)
+    router.replace('/poster-api')
+  }
+  // server-less -> configured mid-session: start the library loaders onMounted skipped
+  if (old && !v) startLibraryLoading()
 })
 
 const tryOpenEditItem = () => {
@@ -691,8 +804,8 @@ const tryOpenEditItem = () => {
 watch(() => route.query.edit, (editId) => {
   if (editId && !ui.selectedMovie.value) {
     tryOpenEditItem()
-  } else if (!editId && ui.selectedMovie.value) {
-    // Edit parameter removed, close editor
+  } else if (!editId && ui.selectedMovie.value && !(ui.selectedMovie.value as any).apiMode) {
+    // Edit parameter removed, close editor (an API-mode editor tracks `apiEdit` instead)
     ui.setSelectedMovie(null)
   }
 })
@@ -961,7 +1074,11 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
   if (parentKey.startsWith('movies-')) {
     const libId = parentKey.replace('movies-', '')
     const target = resolveLibraryTarget(libId)
-    if (submenuKey.startsWith('batch-')) {
+    if (submenuKey.startsWith('artwork-')) {
+      router.push({ name: 'logos', query: target })
+    } else if (submenuKey.startsWith('tools-')) {
+      router.push({ name: 'overlay-refresh', query: target })
+    } else if (submenuKey.startsWith('batch-')) {
       router.push({ name: 'batch-edit', query: target })
     } else if (submenuKey.startsWith('collections-')) {
       router.push({ name: 'collections', query: target })
@@ -985,7 +1102,11 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
   } else if (parentKey.startsWith('tv-shows-')) {
     const libId = parentKey.replace('tv-shows-', '')
     const target = resolveLibraryTarget(libId)
-    if (submenuKey.startsWith('tv-batch-')) {
+    if (submenuKey.startsWith('tv-artwork-')) {
+      router.push({ name: 'tv-logos', query: target })
+    } else if (submenuKey.startsWith('tv-tools-')) {
+      router.push({ name: 'tv-overlay-refresh', query: target })
+    } else if (submenuKey.startsWith('tv-batch-')) {
       router.push({ name: 'tv-batch-edit', query: target })
     } else if (submenuKey.startsWith('tv-logos-')) {
       router.push({ name: 'tv-logos', query: target })
@@ -1011,9 +1132,13 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
 <template>
   <div class="shell">
     <NotificationContainer />
-    <OnboardingModal v-if="showOnboarding" @done="showOnboarding = false; showQuickGuide = true; notifyOnboardingSaved()" />
-    <QuickStartGuide v-if="showQuickGuide" @done="handleQuickGuideDone" />
-    <UpdateAnnouncementModal @view-full-changelog="showChangelog = true" />
+    <div v-if="settingsLoadFailed && !settings.loaded.value" class="settings-load-error" role="alert">
+      Simposter couldn't load its settings (the server may be busy or restarting).
+      <button type="button" @click="retrySettingsLoad">Try again</button>
+    </div>
+    <OnboardingModal v-if="showOnboarding" @done="onOnboardingDone" />
+    <QuickStartGuide v-if="showQuickGuide" :serverless="!anyServerConfigured" @done="handleQuickGuideDone" />
+    <UpdateAnnouncementModal v-if="showUpdateAnnouncement" @view-full-changelog="showChangelog = true" />
 
     <!-- Mobile sidebar overlay -->
     <div v-if="sidebarOpen" class="sidebar-overlay" @click="closeSidebar"></div>
@@ -1154,6 +1279,7 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
     <div v-if="!ui.selectedMovie.value" class="workspace" :style="{ '--sidebar-w': sidebarCollapsed ? '52px' : '260px' }">
       <Sidebar :tabs="tabs" :active="activeTab" :active-submenu="activeSubmenu" :mobile-open="sidebarOpen" :collapsed="sidebarCollapsed" @select="(tab) => { handleTabSelect(tab); closeSidebar() }" @submenu-click="(parentKey, submenuKey) => { handleSubmenuClick(parentKey, submenuKey); closeSidebar() }" @toggle-collapse="toggleSidebarCollapsed" />
       <section class="main-pane glass">
+        <SectionTabs v-if="sectionTabs" :title="sectionTabs.title" :tabs="sectionTabs.tabs" />
         <router-view :key="activeTab" :search="searchQuery" @select="handleSelect" />
       </section>
     </div>
@@ -1184,6 +1310,31 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
 
 
 <style scoped>
+.settings-load-error {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: calc(100vw - 32px);
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 107, 107, 0.5);
+  background: #2a1416;
+  color: #ffd6d6;
+  font-size: 0.9rem;
+}
+.settings-load-error button {
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  cursor: pointer;
+}
 .shell {
   display: flex;
   flex-direction: column;
@@ -1193,7 +1344,9 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
 
 .workspace {
   display: grid;
-  grid-template-columns: var(--sidebar-w, 260px) 1fr;
+  /* minmax(0, 1fr): .main-pane is overflow:clip, which keeps a plain 1fr
+     column from shrinking below its widest content */
+  grid-template-columns: var(--sidebar-w, 260px) minmax(0, 1fr);
   gap: 14px;
   flex: 1;
   align-items: stretch;
@@ -1204,7 +1357,11 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
   padding: 16px;
   background: rgba(14, 16, 24, 0.75);
   height: 100%;
-  overflow-y: auto;
+  /* clip, not auto: the window does the scrolling (nothing caps this pane's
+     height), and an overflow:auto pane that never scrolls stops sticky
+     elements inside it (Template Manager / Batch Edit previews) sticking */
+  overflow: clip;
+  min-width: 0;
 }
 
 .global-scan-overlay {
@@ -1504,7 +1661,9 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
 /* Tablet breakpoint - sidebar collapses to hamburger */
 @media (max-width: 900px) {
   .workspace {
-    grid-template-columns: 1fr;
+    /* minmax(0, 1fr): with .main-pane at overflow:clip (below) a plain 1fr
+       column would grow to the page's widest child instead of the screen */
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .hamburger-btn {
@@ -1517,6 +1676,11 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
 
   .main-pane {
     padding: 12px;
+    /* clip, not auto: on phones the window scrolls, and an overflow:auto
+       pane would stop sticky elements (the editor's pinned preview) sticking */
+    height: auto;
+    overflow: clip;
+    min-width: 0;
   }
 
   .global-scan-overlay,

@@ -8,7 +8,6 @@ from ..scheduler import (
     schedule_library_scan,
     cancel_library_scan,
     get_scan_schedule,
-    get_scheduler,
 )
 from ..config import logger
 from .. import database as db
@@ -136,23 +135,6 @@ def api_get_library_scan_schedule():
     except Exception as e:
         logger.error(f"[SCHEDULER API] Failed to get library scan schedule: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get schedule: {e}")
-
-
-@router.get("/scheduler/status")
-def api_scheduler_status():
-    """Check if the scheduler is running."""
-    try:
-        scheduler = get_scheduler()
-        if scheduler is None:
-            return {"status": "not_initialized"}
-
-        return {
-            "status": "running" if scheduler.running else "stopped",
-            "jobs": len(scheduler.get_jobs())
-        }
-    except Exception as e:
-        logger.error(f"[SCHEDULER API] Failed to get scheduler status: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to get scheduler status: {e}")
 
 
 # Integration polling endpoints removed (Radarr/Sonarr/Tautulli integrations deprecated)

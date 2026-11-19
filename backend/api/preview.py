@@ -7,6 +7,7 @@ from ..config import logger, load_presets, get_movie_tmdb_id
 from ..rendering import render_poster_image, render_with_overlay_cache
 from ..schemas import PreviewRequest
 from .. import database as db
+from ..preset_fallback import merge_fallback_options
 from ..tmdb_client import get_images_for_movie, get_movie_details
 from ..assets.selection import pick_poster, pick_logo, map_logo_mode_to_preference
 from ..logo_sources import get_logos_merged
@@ -243,7 +244,8 @@ def api_preview(req: PreviewRequest):
         _dt = f" [{display_title}]" if display_title else ""
 
         logger.info("[PREVIEW] %s: %s, preset '%s' (key %s)", "TV show" if is_tv_show else "Movie",
-                    display_title or "unknown title", req.preset_id or "none", rating_key)
+                    display_title or req.movie_title or "unknown title", req.preset_id or "none",
+                    rating_key or (f"tmdb {req.tmdb_id}" if req.tmdb_id else None))
 
         if rating_key and not is_tv_show:
             try:
@@ -324,7 +326,7 @@ def api_preview(req: PreviewRequest):
                                     if fpreset:
                                         fp_opts = fpreset.get("options", {})
                                         # Merge fallback preset options, letting fallback override current options to mirror batch behavior
-                                        render_options = {**render_options, **fp_opts}
+                                        render_options = merge_fallback_options(render_options, fp_opts)
                                         poster_filter = render_options.get("poster_filter", poster_filter)
                                         logo_preference = render_options.get("logo_preference") or render_options.get("logo_mode") or logo_preference
                                         logo_preference = map_logo_mode_to_preference(logo_preference)
@@ -382,7 +384,7 @@ def api_preview(req: PreviewRequest):
                                     # Merge fallback preset options, letting fallback override current options
                                     # to mirror batch behavior and ensure template-specific settings (e.g., text overlay)
                                     # take effect. Request-supplied transient sliders can still override both.
-                                    render_options = {**render_options, **fp_opts}
+                                    render_options = merge_fallback_options(render_options, fp_opts)
                                     poster_filter = render_options.get("poster_filter", poster_filter)
                                     logo_preference = render_options.get("logo_preference") or render_options.get("logo_mode") or logo_preference
                                     logo_preference = map_logo_mode_to_preference(logo_preference)
@@ -415,7 +417,10 @@ def api_preview(req: PreviewRequest):
                     elif logo_mode == "none":
                         logger.debug("[PREVIEW] Skipping logo fetch because logo_mode='none'")
                 else:
-                    logger.warning("[PREVIEW] Could not find TMDB ID for rating_key=%s%s, trying Plex poster", rating_key, _dt)
+                    # Collections (the Kometa creator) have no TMDb id of their own,
+                    # so that's expected there, not worth a warning on every preview.
+                    (logger.debug if (template_id == "kometa" or getattr(req, "is_collection", False)) else logger.warning)(
+                        "[PREVIEW] Could not find TMDB ID for rating_key=%s%s, trying Plex poster", rating_key, _dt)
                     # Fallback: Try Plex poster directly. Also treated as
                     # "not yet resolved" when background_url is still the
                     # frontend's own internal marker URL (/api/movie/.../poster)
@@ -523,8 +528,14 @@ def api_preview(req: PreviewRequest):
                         poster = pick_poster(posters, poster_filter)
                         poster_fallback_action_used = None
 
-                        # Poster fallback handling
-                        if not poster:
+                        # Poster fallback handling (skip_fallback, sent by the manual
+                        # editors and Template Manager, never switches presets --
+                        # same as the movie branch above)
+                        if not poster and req.skip_fallback:
+                            logger.info("[PREVIEW] skip_fallback=True — bypassing poster fallback, using first available poster")
+                            poster = posters[0] if posters else None
+                            poster_fallback_action_used = "continue"
+                        elif not poster:
                             fallback_action = render_options.get("fallbackPosterAction") or "continue"
                             poster_fallback_action_used = fallback_action
                             fallback_poster_template = render_options.get("fallbackPosterTemplate")
@@ -541,7 +552,7 @@ def api_preview(req: PreviewRequest):
                                         logger.debug("[PREVIEW] Using season_options from fallback preset")
                                     else:
                                         fp_opts = fpreset.get("options", {})
-                                    render_options = {**render_options, **fp_opts}
+                                    render_options = merge_fallback_options(render_options, fp_opts)
                                     # NOTE: Don't update poster_filter here - we already tried with the original filter and failed
                                     # The fallback template will be used to render whatever poster we find below
                                     logo_preference = render_options.get("logo_preference") or render_options.get("logo_mode") or logo_preference
@@ -687,6 +698,14 @@ def api_preview(req: PreviewRequest):
                 tmdb_id=tmdb_id, is_tv=is_tv_show,
                 log_prefix="[PREVIEW] ",
             )
+        elif req.tmdb_id:
+            # No media-server item (Template Manager's TMDb preview, the
+            # editor's Poster API mode): give overlays the TMDb id so ratings,
+            # lists, studio and release-date rules work, as Poster API renders do.
+            meta = render_options.get("metadata") or {}
+            meta.setdefault("tmdb_id", req.tmdb_id)
+            meta.setdefault("media_type", "tv" if (req.is_tv or is_tv_show) else "movie")
+            render_options["metadata"] = meta
 
         # Pass preset_id so the template renderer can look up linked overlay configs
         if req.preset_id:

@@ -2,7 +2,7 @@
 
 > **Template-based poster generation for Plex, Jellyfin and Emby** — Create clean, consistent custom posters with TMDb/TVDB/Fanart.tv artwork, overlay badges, and full batch automation.
 
-![Simposter UI](https://github.com/user-attachments/assets/2cc5cf6e-4aad-40e2-8ef5-03e4ce92f5ba)
+![Simposter](docs/images/movies.png)
 
 
 ---
@@ -22,9 +22,22 @@
 - **Scheduled scans** and a **smart retry queue** for hands-off automation
 - **Guided setup wizard** on first launch — media servers, API keys, libraries, automation, all in one flow
 - **Cleanup tools** — clear Simposter's own stale cache, and run each media server's built-in maintenance
+- **Poster API** — other apps (like Ether) can request a poster by TMDb id and get your pinned, library or freshly rendered poster. It also runs with no media server at all, though connecting one is recommended: file details for badges, server ratings, and posters kept up to date
 - **6 themes**, Discord/Apprise notifications, full History audit log with hover previews
 
 Full breakdown of all of this in the docs below.
+
+---
+
+## Screenshots
+
+| | |
+|---|---|
+| ![Poster editor](docs/images/editor-movie.png) **Poster editor**: live preview, posters/logos from TMDb, Fanart.tv and TVDB, drag the logo and text boxes | ![TV editor](docs/images/editor-tv.png) **TV shows**: series and season posters, each with its own settings |
+| ![Overlay editor](docs/images/overlay-editor.png) **Overlays**: badges, ratings and text with rules, previewed on your own titles | ![Batch Edit](docs/images/batch-edit.png) **Batch Edit**: one preset across a whole library, sent to every server |
+| ![Library groups](docs/images/settings-libraries.png) **Library groups**: Plex, Jellyfin and Emby libraries linked as one | ![Setup wizard](docs/images/wizard-look.png) **Setup wizard**: servers, libraries, keys and your default look in a few minutes |
+
+A full tour of every page is in the **[User Guide](docs/USER_GUIDE.md)**.
 
 ---
 
@@ -36,7 +49,7 @@ cd Simposter
 docker-compose up -d --build
 ```
 
-Open `http://localhost:8003` — a setup wizard walks you through your media servers, API keys and libraries from there. No manual config file editing required.
+Open `http://localhost:8003` — a setup wizard walks you through your media servers, API keys and libraries from there ([step by step](docs/GETTING_STARTED.md#first-launch-setup-wizard)). No manual config file editing required.
 
 **Updating:** `git pull && docker-compose up -d --build` — your data lives in the bind-mounted `./config` folder, untouched by rebuilds.
 
@@ -48,10 +61,12 @@ Prefer not to build locally? Pre-built images are published to [ghcr.io/pjgithub
 
 | Doc | What's in it |
 |-----|--------------|
-| **[Getting Started](docs/GETTING_STARTED.md)** | Install (Docker/local dev), the setup wizard, your first poster, Settings reference, environment variables |
+| **[Getting Started](docs/GETTING_STARTED.md)** | Install (Docker/Unraid/local dev), the setup wizard step by step, your first poster, Settings reference, environment variables |
+| **[User Guide](docs/USER_GUIDE.md)** | A tour of every page with screenshots, plus how-to guides: first poster, whole-library batch, automatic posters, badges, keeping Plex and Jellyfin in sync |
 | **[Media Servers](docs/MEDIA_SERVERS.md)** | Plex, Jellyfin and Emby: connecting servers, library groups, merged browsing, multi-server sending, Media Mirror, collection matching, server maintenance |
 | **[Overlays](docs/OVERLAYS.md)** | Building overlays and their rules, text values, Kometa import, MDBList ratings and lists, Overlay Refresh, live Kometa files |
 | **[Collections & Poster Guide](docs/COLLECTIONS_AND_POSTERS.md)** | Templates/presets, logos, overlay badges, batch processing, the smart retry queue, and Collections (including why a Fanart.tv key matters) |
+| **[Poster API](docs/POSTER_API.md)** | Serving posters to other apps by TMDb id, the key, URL forms, responses, pinning, running without a media server |
 | **[Webhooks](docs/WEBHOOKS.md)** | Radarr, Sonarr, and Tautulli setup, payload examples, dry-run testing |
 | **[ARCHITECTURE.md](ARCHITECTURE.md)** | Technical architecture, API routers, rendering pipeline (for contributors) |
 | **[WORKFLOW.md](WORKFLOW.md)** | How a poster request flows end-to-end for each trigger type |

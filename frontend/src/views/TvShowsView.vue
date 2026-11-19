@@ -7,6 +7,7 @@ import { useTvShows } from '../composables/useTvShows'
 import { useLibraryGroupPreference } from '../composables/useLibraryGroupPreference'
 import { getApiBase } from '@/services/apiBase'
 import { compareTitles } from '@/services/sortTitle'
+import { MODE_FILTER_OPTIONS, matchesModeFilter } from '@/services/posterModes'
 
 type TvShow = {
   key: string
@@ -21,6 +22,9 @@ type TvShow = {
   server_id?: string | null
   also_on?: string[] | null
   other_servers?: { server_id: string; rating_key: string }[] | null
+  poster_mode?: string | null
+  poster_mode_reason?: string | null
+  poster_mode_warning?: string | null
 }
 
 // Simple module-level caches so navigating away/back does not refetch everything
@@ -263,6 +267,16 @@ const page = ref(Number(route.query.page) || 1)
 const defaultSortSettings = getDefaultSort()
 const sortBy = ref<'title' | 'year' | 'addedAt'>((route.query.sortBy as any) || defaultSortSettings.sortBy)
 const sortOrder = ref<'asc' | 'desc'>((route.query.sortOrder as any) || defaultSortSettings.sortOrder)
+
+// Phones: the sort/filter controls collapse behind one button (opened on demand).
+const mobileFiltersOpen = ref(false)
+const sortSummary = computed(() => {
+  const by = sortBy.value === 'title' ? 'Title' : sortBy.value === 'year' ? 'Year' : 'Date added'
+  const dir = sortBy.value === 'title'
+    ? (sortOrder.value === 'asc' ? 'A-Z' : 'Z-A')
+    : (sortOrder.value === 'asc' ? 'oldest first' : 'newest first')
+  return `${by}, ${dir}`
+})
 const filterLabel = ref<string>((route.query.label as string) || '')
 
 const posterCache = posterCacheStore
@@ -281,6 +295,7 @@ const allLabels = computed(() => {
 })
 
 const filterCached = ref(false)
+const filterMode = ref<string>('')
 
 const filtered = computed(() => {
   const term = (props.search || '').trim().toLowerCase()
@@ -302,6 +317,11 @@ const filtered = computed(() => {
   // Filter by cached poster
   if (filterCached.value) {
     result = result.filter(s => cachedKeys.value.has(s.key))
+  }
+
+  // Filter by poster mode
+  if (filterMode.value) {
+    result = result.filter(s => matchesModeFilter(s, filterMode.value))
   }
 
   return result
@@ -337,6 +357,10 @@ watch(() => props.search, () => {
   page.value = 1
 })
 
+watch(filterMode, () => {
+  page.value = 1
+})
+
 watch(() => filterLabel.value, () => {
   page.value = 1
 })
@@ -350,7 +374,11 @@ watch(paged, (list) => {
   fetchLabels(list)
 })
 
+// Only the newest fetchTvShows() call may apply its result (see MoviesView's
+// fetchMovies: a bare /tv-shows load racing the ?library= load).
+let tvShowsFetchSeq = 0
 const fetchTvShows = async () => {
+  const seq = ++tvShowsFetchSeq
   loading.value = true
   error.value = null
   try {
@@ -361,6 +389,7 @@ const fetchTvShows = async () => {
     const res = await fetch(`${apiBase}/api/tv-shows${tvShowsParams.toString() ? '?' + tvShowsParams.toString() : ''}`)
     if (!res.ok) throw new Error(`API error ${res.status}`)
     const data = (await res.json()) as (TvShow & { labels?: string[] })[]
+    if (seq !== tvShowsFetchSeq) return
     // Seed caches from server data when available
     data.forEach((s) => {
       if (s.poster && !(s.key in posterCacheStore.value)) {
@@ -387,9 +416,9 @@ const fetchTvShows = async () => {
     saveTvShowsCache()
     tvShows.value = tvShowsCache.value
   } catch (err: unknown) {
-    error.value = err instanceof Error ? err.message : 'Failed to load TV shows'
+    if (seq === tvShowsFetchSeq) error.value = err instanceof Error ? err.message : 'Failed to load TV shows'
   } finally {
-    loading.value = false
+    if (seq === tvShowsFetchSeq) loading.value = false
   }
 }
 
@@ -545,7 +574,12 @@ onMounted(async () => {
 <template>
   <div class="view">
     <div class="toolbar glass">
-      <div class="controls">
+      <button type="button" class="mobile-filters-toggle" :aria-expanded="mobileFiltersOpen" @click="mobileFiltersOpen = !mobileFiltersOpen">
+        <span>Sort &amp; filter</span>
+        <span class="mobile-filters-summary">{{ sortSummary }}</span>
+        <span class="mobile-filters-caret">{{ mobileFiltersOpen ? '▴' : '▾' }}</span>
+      </button>
+      <div class="controls" :class="{ 'mobile-open': mobileFiltersOpen }">
         <div class="control-group">
           <label for="sort-select">Sort by:</label>
           <select id="sort-select" v-model="sortBy" class="control-select">
@@ -581,6 +615,12 @@ onMounted(async () => {
             @change="onPreferredServerChange(($event.target as HTMLSelectElement).value)"
           >
             <option v-for="opt in libraryGroupPref.options.value" :key="opt.id" :value="opt.id">{{ opt.label }}</option>
+          </select>
+        </div>
+        <div class="control-group">
+          <label for="mode-select">Poster mode:</label>
+          <select id="mode-select" v-model="filterMode" class="control-select">
+            <option v-for="opt in MODE_FILTER_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
           </select>
         </div>
         <label class="filter-check" :class="{ active: filterCached }" title="Show only items Simposter has previously generated a poster for (saved renders)">
@@ -878,6 +918,66 @@ button {
   .callout {
     padding: 10px;
     font-size: 13px;
+  }
+}
+
+.mobile-filters-toggle {
+  display: none;
+}
+
+/* Phones: controls hidden behind the "Sort & filter" button, laid out in two
+   columns when opened, so the posters start near the top of the screen. */
+@media (max-width: 600px) {
+  .mobile-filters-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text-primary, #eef);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .mobile-filters-summary {
+    flex: 1;
+    text-align: right;
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--muted, #9aa);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .controls:not(.mobile-open) {
+    display: none;
+  }
+
+  .controls.mobile-open {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    width: 100%;
+  }
+
+  .controls.mobile-open .control-group,
+  .controls.mobile-open .filter-check {
+    grid-column: 1 / -1;
+  }
+
+  .controls.mobile-open .control-select {
+    max-width: none;
+  }
+
+  .controls.mobile-open .refresh-btn {
+    width: auto;
+    padding: 9px 6px;
+    font-size: 12px;
   }
 }
 </style>

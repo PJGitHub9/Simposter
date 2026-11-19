@@ -101,6 +101,7 @@ interface DriftItem {
   drift_detected_at: string
   drift_score: number | null
   drift_action: string | null
+  library_id?: string | null
 }
 const driftItems = ref<DriftItem[]>([])
 const driftAction = ref('list')
@@ -184,6 +185,31 @@ const driftCurrentUrl = (item: DriftItem) => {
   return `${apiBase}/api/${kind}/${key}/poster?raw=1&v=${v}`
 }
 const DRIFT_ASSET_LABELS: Record<string, string> = { poster: 'Poster', logo: 'Logo', backdrop: 'Backdrop' }
+const DRIFT_ASSET_ORDER = ['poster', 'logo', 'backdrop'] as const
+const DRIFT_ASSET_PLURAL: Record<string, string> = { poster: 'Posters', logo: 'Logos', backdrop: 'Backdrops' }
+
+/** Changed items by library group (or library when it isn't in a group), then by type. */
+const driftGroups = computed(() => {
+  const groups = new Map<string, { key: string; name: string; count: number; types: Map<string, DriftItem[]> }>()
+  for (const item of driftItems.value) {
+    const lib = item.library_id ? String(item.library_id) : ''
+    const g = lib ? (settings.libraryGroups.value || []).find(gr => (gr.members || []).some(m => String(m.libraryId) === lib)) : undefined
+    const key = g ? `group:${g.id}` : (lib ? `lib:${lib}` : 'none')
+    const name = g ? (g.name || libraryLabel(lib)) : (lib ? libraryLabel(lib, 'Other') : 'Other')
+    if (!groups.has(key)) groups.set(key, { key, name, count: 0, types: new Map() })
+    const entry = groups.get(key)!
+    const type = driftAsset(item)
+    if (!entry.types.has(type)) entry.types.set(type, [])
+    entry.types.get(type)!.push(item)
+    entry.count += 1
+  }
+  return [...groups.values()]
+    .sort((a, b) => (a.key === 'none' ? 1 : b.key === 'none' ? -1 : a.name.localeCompare(b.name)))
+    .map(g => ({
+      ...g,
+      types: DRIFT_ASSET_ORDER.filter(t => g.types.has(t)).map(t => ({ type: t, items: g.types.get(t)! })),
+    }))
+})
 
 // Retry queue state
 const retryItems = ref<RetryQueueItem[]>([])
@@ -319,6 +345,67 @@ const filteredRecords = computed(() => {
 
   return filtered
 })
+
+// One poster sent to several servers is written as one History row per
+// server. Show those as a single row ("Sent to Plex + Jellyfin"): same title,
+// year, template, preset, source and kind of action, on different servers,
+// within a few minutes of each other. The Plex row (when there is one) is
+// the one the preview and the title link use. Display only.
+type HistoryRow = HistoryRecord & { servers: string[] }
+const MERGE_WINDOW_MS = 5 * 60 * 1000
+const actionKind = (action: string): string | null => {
+  if (action === 'sent_to_plex' || action === 'sent_to_media_server') return 'sent'
+  if (action === 'resent_to_plex' || action === 'resent_to_media_server') return 'resent'
+  if (action === 'overlay_refresh' || action === 'overlay_removed' || action === 'overlay_only_sent') return action
+  return null
+}
+const recordTime = (r: HistoryRecord) => {
+  const t = Date.parse(r.created_at.includes('T') || r.created_at.includes('Z') ? r.created_at : r.created_at.replace(' ', 'T') + 'Z')
+  return isNaN(t) ? 0 : t
+}
+const displayRows = computed<HistoryRow[]>(() => {
+  const rows: HistoryRow[] = []
+  const open = new Map<string, { row: HistoryRow; time: number }>()
+  for (const r of filteredRecords.value) {
+    const server = r.server_id || 'plex-1'
+    const kind = actionKind(r.action)
+    if (!kind) {
+      rows.push({ ...r, servers: [server] })
+      continue
+    }
+    const key = [r.title, r.year, r.template_id, r.preset_id, r.source, kind].join('|')
+    const time = recordTime(r)
+    const hit = open.get(key)
+    if (hit && !hit.row.servers.includes(server) && Math.abs(hit.time - time) <= MERGE_WINDOW_MS) {
+      hit.row.servers.push(server)
+      if (server === 'plex-1') {
+        // Use the Plex copy for the preview and the title link.
+        Object.assign(hit.row, { ...r, servers: hit.row.servers, created_at: hit.row.created_at })
+      }
+      continue
+    }
+    const row: HistoryRow = { ...r, servers: [server] }
+    rows.push(row)
+    open.set(key, { row, time })
+  }
+  for (const row of rows) {
+    row.servers.sort((a, b) => (a === 'plex-1' ? -1 : b === 'plex-1' ? 1 : 0))
+  }
+  return rows
+})
+
+const rowActionLabel = (row: HistoryRow) => {
+  if (row.servers.length < 2) return getActionLabel(row)
+  const names = row.servers.map(sid => mediaServerLabel(sid, settings.mediaServers.value)).join(' + ')
+  switch (actionKind(row.action)) {
+    case 'sent': return `Sent to ${names}`
+    case 'resent': return `Resent to ${names}`
+    case 'overlay_refresh': return `Overlay refreshed on ${names}`
+    case 'overlay_removed': return `Overlays removed on ${names}`
+    case 'overlay_only_sent': return `Overlays applied on ${names}`
+    default: return getActionLabel(row)
+  }
+}
 
 const fetchHistory = async () => {
   loading.value = true
@@ -470,6 +557,8 @@ const getActionLabel = (record: HistoryRecord) => {
       return `Overlay refreshed on ${mediaServerLabel(record.server_id || 'plex-1', settings.mediaServers.value)}`
     case 'overlay_removed':
       return `Overlays removed on ${mediaServerLabel(record.server_id || 'plex-1', settings.mediaServers.value)}`
+    case 'overlay_only_sent':
+      return `Overlays applied on ${mediaServerLabel(record.server_id || 'plex-1', settings.mediaServers.value)}`
     case 'saved_local':
       return 'Saved Locally'
     case 'failed':
@@ -488,6 +577,7 @@ const getActionClass = (action: string) => {
     case 'resent_to_media_server':
     case 'overlay_refresh':
     case 'overlay_removed':
+    case 'overlay_only_sent':
       return 'action-resent'
     case 'saved_local':
       return 'action-local'
@@ -562,7 +652,7 @@ const clearFilters = () => {
 // Check if a record can be previewed
 const canPreview = (record: HistoryRecord): boolean => {
   // Can preview if we have a save_path (local file) or if it was sent to Plex (rating_key)
-  return !!(record.save_path || ((record.action === 'sent_to_plex' || record.action === 'resent_to_plex' || record.action === 'sent_to_media_server' || record.action === 'resent_to_media_server' || record.action === 'overlay_refresh' || record.action === 'overlay_removed') && record.rating_key))
+  return !!(record.save_path || ((record.action === 'sent_to_plex' || record.action === 'resent_to_plex' || record.action === 'sent_to_media_server' || record.action === 'resent_to_media_server' || record.action === 'overlay_refresh' || record.action === 'overlay_removed' || record.action === 'overlay_only_sent') && record.rating_key))
 }
 
 // Get the preview image URL for a record
@@ -574,6 +664,12 @@ const getPreviewUrl = (record: HistoryRecord): string | null => {
 
 // Detect mobile/touch device
 const isMobile = ref(false)
+// Phones: the filters collapse behind one button; the count shows what's set.
+const mobileFiltersOpen = ref(false)
+const activeFilterCount = computed(() =>
+  [titleSearch.value, selectedLibrary.value, selectedTemplate.value, selectedAction.value, selectedSource.value, selectedServer.value]
+    .filter(v => v !== '' && v !== 'all' && v != null).length
+)
 const checkMobile = () => {
   isMobile.value = window.innerWidth <= 768 || 'ontouchstart' in window
 }
@@ -735,7 +831,12 @@ onMounted(async () => {
 
     <!-- History tab -->
     <template v-if="activeTab === 'history'">
-    <div class="filters">
+    <button type="button" class="mobile-filters-toggle" :aria-expanded="mobileFiltersOpen" @click="mobileFiltersOpen = !mobileFiltersOpen">
+      <span>Filters</span>
+      <span class="mobile-filters-summary">{{ activeFilterCount ? `${activeFilterCount} active` : 'none' }}</span>
+      <span>{{ mobileFiltersOpen ? '▴' : '▾' }}</span>
+    </button>
+    <div class="filters" :class="{ 'mobile-open': mobileFiltersOpen }">
       <div class="filter-group">
         <label class="search-label">
           <span>Search</span>
@@ -776,6 +877,7 @@ onMounted(async () => {
             <option value="resent_to_media_server">Resent to Linked Server</option>
             <option value="overlay_refresh">Overlay Refreshed</option>
             <option value="overlay_removed">Overlays Removed</option>
+            <option value="overlay_only_sent">Overlays Applied</option>
             <option value="saved_local">Saved Locally</option>
             <option value="failed">Failed</option>
           </select>
@@ -825,10 +927,10 @@ onMounted(async () => {
 
     <div v-else class="history-table-container">
       <div class="results-count">
-        Showing {{ filteredRecords.length }} record{{ filteredRecords.length !== 1 ? 's' : '' }}
+        Showing {{ displayRows.length }} record{{ displayRows.length !== 1 ? 's' : '' }}
       </div>
 
-      <table class="history-table">
+      <table class="history-table history-main-table">
         <thead>
           <tr>
             <th class="preview-th">Preview</th>
@@ -845,7 +947,7 @@ onMounted(async () => {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="record in filteredRecords" :key="record.id" :class="{ 'row-failed': record.action === 'failed' }">
+          <tr v-for="record in displayRows" :key="record.id" :class="{ 'row-failed': record.action === 'failed' }">
             <td class="preview-cell">
               <button
                 v-if="canPreview(record)"
@@ -889,7 +991,7 @@ onMounted(async () => {
             </td>
             <td class="action-cell">
               <span :class="['action-badge', getActionClass(record.action)]">
-                {{ getActionLabel(record) }}
+                {{ rowActionLabel(record) }}
               </span>
             </td>
             <td class="fallback-cell">
@@ -1047,8 +1149,16 @@ onMounted(async () => {
         <p>Nothing changed outside Simposter.</p>
         <p class="hint">Only art Simposter sent is tracked, and it's checked when a scan sees the server's copy change.</p>
       </div>
-      <div v-else class="drift-grid">
-        <div v-for="item in driftItems" :key="driftKey(item)" class="drift-card">
+      <template v-else>
+      <details v-for="group in driftGroups" :key="group.key" class="drift-group" open>
+        <summary class="drift-group-head">
+          <span class="drift-group-name">{{ group.name }}</span>
+          <span class="drift-group-count">{{ group.count }}</span>
+        </summary>
+        <div v-for="t in group.types" :key="t.type" class="drift-type">
+          <h4 class="drift-type-head">{{ DRIFT_ASSET_PLURAL[t.type] }} <span>{{ t.items.length }}</span></h4>
+      <div class="drift-grid">
+        <div v-for="item in t.items" :key="driftKey(item)" class="drift-card">
           <div class="drift-title">{{ item.title }} <span class="drift-asset">{{ DRIFT_ASSET_LABELS[driftAsset(item)] }}</span></div>
           <div class="drift-meta">
             {{ mediaServerLabel(item.server_id, settings.mediaServers.value) }} · noticed {{ formatDate(item.drift_detected_at) }}
@@ -1074,6 +1184,9 @@ onMounted(async () => {
           </div>
         </div>
       </div>
+        </div>
+      </details>
+      </template>
     </template>
 
     <!-- Preview Popup -->
@@ -1653,6 +1766,14 @@ onMounted(async () => {
 }
 .drift-setting small, .drift-meta { color: var(--text-secondary, #9aa4b2); font-size: 0.8rem; }
 .drift-message { margin: 0 0 12px; font-size: 0.85rem; }
+.drift-group { margin-bottom: 14px; border: 1px solid var(--border, #2a2f3e); border-radius: 10px; padding: 10px 14px; background: rgba(255, 255, 255, 0.015); }
+.drift-group-head { display: flex; align-items: center; gap: 8px; cursor: pointer; list-style: none; font-weight: 600; color: var(--text-primary, #fff); }
+.drift-group-head::-webkit-details-marker { display: none; }
+.drift-group-head::before { content: '\25B8'; color: var(--text-secondary, #8b95a7); transition: transform 0.15s; }
+.drift-group[open] > .drift-group-head::before { transform: rotate(90deg); }
+.drift-group-count, .drift-type-head span { font-size: 0.72rem; font-weight: 600; padding: 1px 7px; border-radius: 999px; background: rgba(61, 214, 183, 0.12); color: var(--accent, #3dd6b7); }
+.drift-type { margin-top: 12px; }
+.drift-type-head { margin: 0 0 8px; font-size: 0.82rem; font-weight: 600; color: var(--text-secondary, #9aa4b2); display: flex; align-items: center; gap: 6px; }
 .drift-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
 .drift-card {
   border: 1px solid rgba(255, 255, 255, 0.06);
@@ -1951,6 +2072,114 @@ onMounted(async () => {
 
   .preview-title {
     max-width: 160px;
+  }
+}
+
+.mobile-filters-toggle {
+  display: none;
+}
+
+/* Phones: filters behind a button, and each history row as a small card
+   (title, date, badges) instead of a 1200px table scrolled sideways. */
+@media (max-width: 600px) {
+  .mobile-filters-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    margin-bottom: 10px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text-primary);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .mobile-filters-summary {
+    flex: 1;
+    text-align: right;
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--text-secondary);
+  }
+
+  .filters:not(.mobile-open) {
+    display: none;
+  }
+
+  .history-main-table.history-table {
+    min-width: 0;
+  }
+
+  .history-main-table thead {
+    display: none;
+  }
+
+  .history-main-table,
+  .history-main-table tbody {
+    display: block;
+  }
+
+  .history-main-table tr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 8px;
+    padding: 10px 4px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  }
+
+  .history-main-table td {
+    display: block;
+    padding: 0;
+    border: none;
+    font-size: 12px;
+  }
+
+  .history-main-table .title-cell {
+    order: 1;
+    flex: 1 1 0;
+    min-width: 0;
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .history-main-table .preview-cell {
+    order: 2;
+  }
+
+  .history-main-table .date-cell {
+    order: 3;
+    flex-basis: 100%;
+    color: var(--text-secondary);
+  }
+
+  .history-main-table .action-cell { order: 4; }
+  .history-main-table .source-cell { order: 5; }
+  .history-main-table .library-cell { order: 6; color: var(--text-secondary); }
+  .history-main-table .preset-cell { order: 7; color: var(--text-secondary); }
+  .history-main-table .fallback-cell { order: 8; }
+
+  .history-main-table .year-cell,
+  .history-main-table .template-cell,
+  .history-main-table .fallback-cell:has(.no-fallback) {
+    display: none;
+  }
+
+  .history-main-table .path-cell {
+    order: 9;
+    flex-basis: 100%;
+    color: var(--text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .history-main-table .path-cell:not(:has(.error-message-text, .path-text)) {
+    display: none;
   }
 }
 </style>

@@ -14,7 +14,7 @@ from typing import Any, Dict
 from fastapi import APIRouter, HTTPException, Query
 
 from .. import database as db
-from ..config import logger, settings, SECRET_FIELD_PATHS
+from ..config import logger, settings, SECRET_FIELD_PATHS, same_origin
 
 router = APIRouter()
 
@@ -24,6 +24,27 @@ _SECRET_DB_KEYS = {f"{section}.{field}" for section, field in SECRET_FIELD_PATHS
 _MEDIA_SERVER_SECRET_FIELDS = ("token", "apiKey")
 _BACKUP_FORMAT = "simposter-db-backup"
 _BACKUP_VERSION = 2
+
+# Saved credentials that belong to one server address: restoring a backup that
+# points the address somewhere else must not carry this install's key over.
+_HOST_BOUND_SECRETS = {
+    "plex.token": "plex.url",
+    "floppy.token": "floppy.url",
+    "maintainerr.apiKey": "maintainerr.url",
+}
+
+
+def _setting_text(value) -> str:
+    """A settings-table value as plain text (strings may be stored JSON-quoted)."""
+    if value is None:
+        return ""
+    s = str(value)
+    if s.startswith('"'):
+        try:
+            return str(json.loads(s))
+        except ValueError:
+            pass
+    return s
 
 
 def _strip_media_server_secrets(value: str) -> str:
@@ -57,9 +78,7 @@ def _fill_media_server_secrets(value: str, current_value: str) -> str:
         existing = by_id.get(s.get("id")) or {}
         # Only hand over a stored credential when the server address is the same;
         # a backup pointing the same id at another server must not get our key.
-        url_new = (s.get("url") or "").strip().rstrip("/").lower()
-        url_old = (existing.get("url") or "").strip().rstrip("/").lower()
-        if url_new and url_old and url_new != url_old:
+        if not same_origin(s.get("url"), existing.get("url")):
             continue
         for f in _MEDIA_SERVER_SECRET_FIELDS:
             if not s.get(f) and existing.get(f):
@@ -89,7 +108,7 @@ def api_export_database(
                 if not include_secrets:
                     if key in _SECRET_DB_KEYS:
                         continue
-                    if key == "mediaServers" and value:
+                    if key in ("mediaServers", "arrInstances") and value:
                         value = _strip_media_server_secrets(value)
                 settings_out[key] = {"value": value, "category": row["category"]}
 
@@ -101,6 +120,7 @@ def api_export_database(
 
         overlays = build_bundle(None, all_assets=True)
 
+        pinned = _export_pinned_posters()
         return {
             "format": _BACKUP_FORMAT,
             "version": _BACKUP_VERSION,
@@ -110,10 +130,56 @@ def api_export_database(
             "settings": settings_out,
             "presets": presets,
             "overlays": overlays,
+            "poster_api_pinned": pinned,
         }
     except Exception as e:
         logger.error(f"[DB EXPORT] Failed to export database: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to export database: {e}")
+
+
+def _export_pinned_posters() -> list:
+    """Pinned Poster API posters (hand-made, not regenerable) as base64 JPEG."""
+    import base64
+    out = []
+    try:
+        rows, _ = db.poster_api_cache_list("", None, "pinned", 0, 100000)
+    except Exception as e:
+        logger.warning(f"[DB EXPORT] Couldn't list pinned Poster API posters: {e}")
+        return out
+    for r in rows:
+        try:
+            data = Path(r["file_path"]).read_bytes()
+        except OSError:
+            continue
+        out.append({
+            "media_type": r["media_type"], "tmdb_id": r["tmdb_id"], "season_index": r["season_index"],
+            "title": r.get("title") or "", "image_b64": base64.b64encode(data).decode("ascii"),
+        })
+    return out
+
+
+def _import_pinned_posters(entries) -> int:
+    """Recreate pinned posters; malformed entries are skipped, never fatal."""
+    import base64
+    from .. import poster_api_store as store
+    n = 0
+    if not isinstance(entries, list):
+        return 0
+    for e in entries:
+        try:
+            media_type = e["media_type"]
+            if media_type not in ("movie", "tv"):
+                continue
+            season = int(e.get("season_index", -1))
+            img = base64.b64decode(e["image_b64"], validate=True)
+            if not img:
+                continue
+            key = store.CacheKey(media_type, int(e["tmdb_id"]), None if season < 0 else season, "")
+            store.put_entry(key, "pinned", img, e.get("title") or "", "")
+            n += 1
+        except Exception as err:
+            logger.warning(f"[DB IMPORT] Skipped a malformed pinned Poster API entry: {err}")
+    return n
 
 
 def _preset_row(p: Dict[str, Any]):
@@ -161,7 +227,11 @@ def api_import_database(data: Dict[str, Any]):
             current = {row["key"]: row["value"] for row in cursor.fetchall()}
 
             cursor.execute("DELETE FROM settings WHERE key != 'app.version'")
+            # Stored Radarr/Sonarr tags belong to the connections being replaced.
+            cursor.execute("DELETE FROM arr_tags")
+            cursor.execute("DELETE FROM arr_tag_sync")
             restored_keys = set()
+            restored_values = {}
             for key, setting_data in data["settings"].items():
                 if key == "app.version":
                     continue
@@ -172,17 +242,23 @@ def api_import_database(data: Dict[str, Any]):
                     value, category = setting_data, None
                 if value is not None and not isinstance(value, str):
                     value = json.dumps(value)
-                if key == "mediaServers" and value and current.get("mediaServers"):
-                    value = _fill_media_server_secrets(value, current["mediaServers"])
+                if key in ("mediaServers", "arrInstances") and value and current.get(key):
+                    value = _fill_media_server_secrets(value, current[key])
                 cursor.execute(
                     "INSERT INTO settings (key, value, category, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)",
                     (key, value, category),
                 )
                 restored_keys.add(key)
+                restored_values[key] = value
 
             # Credentials left out of the backup: keep this install's own.
             for key in _SECRET_DB_KEYS:
                 if key not in restored_keys and current.get(key):
+                    url_key = _HOST_BOUND_SECRETS.get(key)
+                    if url_key and not same_origin(_setting_text(restored_values.get(url_key)),
+                                                   _setting_text(current.get(url_key))):
+                        logger.info(f"[DB IMPORT] Not keeping {key}: the backup uses a different address")
+                        continue
                     cursor.execute(
                         "INSERT INTO settings (key, value, category, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)",
                         (key, current[key], key.split(".", 1)[0]),
@@ -194,6 +270,10 @@ def api_import_database(data: Dict[str, Any]):
                    VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)""",
                 preset_rows,
             )
+
+        pinned_restored = _import_pinned_posters(data.get("poster_api_pinned"))
+        if pinned_restored:
+            logger.info(f"[DB IMPORT] Restored {pinned_restored} pinned Poster API posters")
 
         overlays = data.get("overlays")
         if isinstance(overlays, dict):

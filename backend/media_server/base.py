@@ -63,6 +63,10 @@ class MediaItem:
     # DateLastSaved) -- unchanged means the scan can skip re-fetching its
     # metadata, logo and backdrop.
     etag: Optional[str] = None
+    # The server's own ratings, 0-10 (Jellyfin CommunityRating / CriticRating/10),
+    # used for overlay audience_rating/critic_rating (server_ratings.py).
+    audience_rating: Optional[float] = None
+    critic_rating: Optional[float] = None
 
 
 @dataclass

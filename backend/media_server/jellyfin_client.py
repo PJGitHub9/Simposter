@@ -135,7 +135,7 @@ class JellyfinClient(MediaServerClient):
             "IncludeItemTypes": item_type,
             # Etag = MD5 of the item's DateLastSaved (BaseItem.GetEtag() in
             # Jellyfin's source); it changes whenever the server saves the item.
-            "Fields": "ProviderIds,Path,ProductionYear,DateCreated,Etag",
+            "Fields": "ProviderIds,Path,ProductionYear,DateCreated,Etag,CommunityRating,CriticRating",
             "CollapseBoxSetItems": "false",
         }
         try:
@@ -152,6 +152,8 @@ class JellyfinClient(MediaServerClient):
             if not item_id:
                 continue
             provider_ids = item.get("ProviderIds") or {}
+            from ..server_ratings import from_jellyfin_item
+            audience, critic = from_jellyfin_item(item)
             out.append(MediaItem(
                 id=item_id,
                 title=item.get("Name") or "",
@@ -165,6 +167,8 @@ class JellyfinClient(MediaServerClient):
                 logo_version=(item.get("ImageTags") or {}).get("Logo"),
                 backdrop_version=((item.get("BackdropImageTags") or [None])[0]),
                 etag=item.get("Etag") or None,
+                audience_rating=audience,
+                critic_rating=critic,
             ))
         return out
 
@@ -406,7 +410,21 @@ class JellyfinClient(MediaServerClient):
         # as-is rather than "cleaned up", since API routing can be
         # case-sensitive.
         url = f"{self.url}/items/{item_id}/images/{jellyfin_image_type}/"
-        r = requests.post(url, headers=headers, data=payload, timeout=20)
+        # A poster upload is a multi-MB body that Jellyfin processes before
+        # answering, and a batch sends several at once, so allow 60s for the
+        # reply and try once more on a timeout or dropped connection. Posting
+        # the same image again just replaces it, so a retry is safe.
+        for attempt in (1, 2):
+            try:
+                r = requests.post(url, headers=headers, data=payload, timeout=(10, 60))
+                break
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                if attempt == 2:
+                    raise
+                logger.info("[JELLYFIN_CLIENT:%s] %s upload for item=%s didn't finish (%s); retrying in 3s",
+                            self.server_id, jellyfin_image_type, item_id, e)
+                import time
+                time.sleep(3)
         r.raise_for_status()
         # A 2xx here only proves Jellyfin ACCEPTED the request -- it's never
         # been confirmed (against a real server) that this also proves the
@@ -490,6 +508,10 @@ class JellyfinClient(MediaServerClient):
                 "Recursive": "true",
                 "IncludeItemTypes": item_type,
                 "Fields": "ProviderIds",
+                # Without this, a library with "group movies into collections"
+                # returns a movie that's in a BoxSet (Rocky, Moana...) only as
+                # the BoxSet, so the lookup never finds it (Quirk #230).
+                "CollapseBoxSetItems": "false",
             }
             if library_id:
                 # Real bug fix, not defensive: without this, a tmdb_id present

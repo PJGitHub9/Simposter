@@ -1,7 +1,8 @@
 import os
 from pathlib import Path
+from typing import Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -27,6 +28,12 @@ async def startup_event():
     # first batch render of a preset is already fast.
     from .overlay_cache import warm_all
     threading.Thread(target=warm_all, daemon=True, name="overlay-cache-warm").start()
+    # Shrink image caches written before cached images were stored downscaled (once).
+    from .cache_images import start_shrink_existing
+    start_shrink_existing()
+    # Once: logo/backdrop drift fingerprints that ignore the colour under transparent pixels.
+    from .poster_drift import recheck_art_fingerprints
+    threading.Thread(target=recheck_art_fingerprints, daemon=True, name="drift-fp-recheck").start()
     # Overlay Refresh no longer tracks posters sent without overlays; drop old ones.
     from .overlay_refresh import prune_without_overlays
     threading.Thread(target=prune_without_overlays, daemon=True, name="overlay-refresh-prune").start()
@@ -60,6 +67,16 @@ app.add_middleware(
 )
 
 app.include_router(api_router, prefix="/api")
+
+
+# Root alias for the public Poster API. Registered BEFORE the SPA catch-all below so
+# the catch-all (which would return index.html) never sees it. Exact path only:
+# /poster-api is a Vue route and must still fall through to the SPA.
+@app.get("/poster")
+def root_poster(request: Request, tmdb_id: Optional[int] = None, type: Optional[str] = None,
+                season: Optional[int] = None, preset: Optional[str] = None, group: Optional[str] = None):
+    from .api.poster_api import handle_poster_request
+    return handle_poster_request(request, tmdb_id, type, season, preset, group)
 
 
 # Serve built frontend
