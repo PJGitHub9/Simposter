@@ -243,6 +243,60 @@ export const majorReleases: MajorRelease[] = [
     ],
   },
   {
+    // Placed at v1.8.29 (the first version after main's v1.8.28) so it only
+    // shows for people updating from main; webui-overhaul-dev users are past it.
+    version: 'v1.8.29',
+    title: 'Overlays, ratings & new connections',
+    intro: "A lot has been added since your last update. This page covers overlays and the services you can now connect; the pages below cover the Poster API and poster modes. The full changelog is one click away below.",
+    highlights: [
+      {
+        icon: '⭐',
+        title: 'Starter overlays',
+        description: 'Overlays → Starter overlays adds ready-made overlays in one click: resolution/HDR/audio badges, an audience rating badge and a Maintainerr "Leaving soon" border. New ones appear without updating Simposter.',
+      },
+      {
+        icon: '🍅',
+        title: 'Ratings without an extra key',
+        description: 'Audience and critic rating overlays now use the ratings your Plex, Jellyfin or Emby already has, or TMDb’s user score. MDBList is still there for IMDb, Rotten Tomatoes and more, but no longer required.',
+      },
+      {
+        icon: '🔑',
+        title: 'New Ratings & Lists settings',
+        description: 'A new Settings tab for where ratings come from and every service overlays can use: MDBList, WeTrakr, SIMKL and Floppy lists, and Maintainerr. Add a key or sign in, then use them in "Show when" rules.',
+      },
+      {
+        icon: '📡',
+        title: 'Radarr & Sonarr connections',
+        description: 'Add Radarr and Sonarr with their API keys in Settings → Media Servers. The setup wizard can create Simposter’s webhook in them for you, and their tags can decide a title’s poster mode.',
+      },
+      {
+        icon: '🗓️',
+        title: 'Dates and countdowns',
+        description: 'Show a layer only between two dates (a Christmas badge in December), by date added or release date, count down to a day with {countdown}, or show when Maintainerr will remove a title.',
+      },
+      {
+        icon: '🌍',
+        title: 'New rules from TMDb',
+        description: 'Show layers by content rating (per country, e.g. PG-13 or 12A), TV network or streaming service. Kometa’s built-in content rating, network and streaming overlays now import fully.',
+      },
+      {
+        icon: '📥',
+        title: 'Easier Kometa import',
+        description: 'Paste the overlay_files entries straight from your Kometa config.yml (e.g. "- default: ratings" with its template_variables) and Kometa’s rating text formats work as in Kometa.',
+      },
+      {
+        icon: '🎨',
+        title: 'Template Manager edits presets',
+        description: 'Change a preset by typing values, pick its overlays and their order, and when the overlays change Simposter offers to refresh the posters already sent with it.',
+      },
+      {
+        icon: '📱',
+        title: 'Phones and update notices',
+        description: 'The app works on a phone (the editor pins its preview while you scroll), and Discord/Apprise can tell you when a new version is out (Settings → Notifications → App updates).',
+      },
+    ],
+  },
+  {
     version: 'v1.8.50',
     title: 'Poster API & running without a media server',
     intro: "Simposter can now hand your posters to other apps like Ether, and can even run without a media server. It's off by default: turn it on in Settings → Media Servers → Poster API. Here's the short version; the full changelog is one click away below.",

@@ -10,6 +10,20 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.86',
+    date: '2026-11-19',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Updating from main: the What’s New window now also has a page on overlays, ratings and the new connections (Ratings & Lists, Radarr/Sonarr, Maintainerr), next to the poster modes and Poster API pages.',
+          'Documentation: a new User Guide with a tour of every page and how-to guides, a step-by-step setup wizard guide, Unraid install steps, and new screenshots throughout.',
+          'The Overlays page is no longer marked experimental. Kometa import stays in beta.',
+        ],
+      },
+    ],
+  },
+  {
     version: 'v1.8.85',
     date: '2026-11-18',
     sections: [

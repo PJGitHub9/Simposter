@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.8.86 (2026-11-19) — `webui-overhaul-dev` branch
+
+### Improvements
+- **What's New for `main` users** — new `majorReleases.ts` milestone at **v1.8.29** ("Overlays, ratings & new connections": starter overlays, server/TMDb ratings, the Ratings & Lists tab, Radarr/Sonarr connections, date rules and countdowns, TMDb content rating/network/streaming rules, Kometa `config.yml` import, Template Manager editing, mobile and update notices). Placed at v1.8.29 so only installs updating from `main` (v1.8.28) cross it. `UpdateAnnouncementModal.vue` now shows up to three milestones (was two), oldest first (was newest first), with a short heading when there are three.
+- **Docs** — new `docs/USER_GUIDE.md`; setup wizard section of `docs/GETTING_STARTED.md` rewritten for the 14-step wizard, plus an Unraid section; screenshots in `docs/images/` used across README and every doc.
+- **Overlays page** — "(experimental)" removed from the heading; its icon is now 📐, matching the sidebar.
+
 ## v1.8.85 (2026-11-18) — `webui-overhaul-dev` branch
 
 ### New Features
