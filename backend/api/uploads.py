@@ -7,6 +7,7 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse
 
 from ..config import settings, logger
+from .. import kometa_assets
 
 router = APIRouter()
 
@@ -41,7 +42,8 @@ def api_uploaded(filename: str):
 # (rendering.py's _download_image(), with its own LRU cache/retry/SSRF check),
 # so no separate serving/proxy endpoint is needed here.
 #
-# The directory listing itself is cached in-memory (a few hours) because it
+# The directory listing itself is cached (a few hours, in memory and on disk
+# via kometa_assets.py) because it
 # comes from GitHub's Contents API, which is rate-limited to 60 requests/hour
 # per IP unauthenticated — the actual texture images are served straight from
 # raw.githubusercontent.com (a CDN, not that rate-limited API) and aren't
@@ -62,8 +64,7 @@ _KOMETA_TEXTURES_FALLBACK_NAMES = [
     "navy", "ocean", "olive", "orchid", "orig", "pink", "plum", "purple",
     "red", "rust", "salmon", "sand", "stb", "tan",
 ]
-_KOMETA_TEXTURES_CACHE_TTL_SECONDS = 6 * 60 * 60
-_kometa_textures_cache: dict = {"names": None, "fetched_at": 0.0}
+_kometa_textures_cache: dict = {}
 
 
 def _fetch_kometa_texture_names() -> list[str]:
@@ -80,19 +81,11 @@ def _fetch_kometa_texture_names() -> list[str]:
 @router.get("/kometa-textures")
 def api_list_kometa_textures():
     """List available Kometa Creator background textures as {name, url} pairs,
-    refreshing the live GitHub listing at most every few hours."""
-    now = time.time()
-    if _kometa_textures_cache["names"] is None or (now - _kometa_textures_cache["fetched_at"]) > _KOMETA_TEXTURES_CACHE_TTL_SECONDS:
-        try:
-            names = _fetch_kometa_texture_names()
-            _kometa_textures_cache["names"] = names
-            _kometa_textures_cache["fetched_at"] = now
-        except Exception as e:
-            logger.debug("[KOMETA] Failed to refresh texture listing from GitHub: %s", e)
-            if _kometa_textures_cache["names"] is None:
-                _kometa_textures_cache["names"] = _KOMETA_TEXTURES_FALLBACK_NAMES
-
-    names = _kometa_textures_cache["names"] or _KOMETA_TEXTURES_FALLBACK_NAMES
+    refreshing the live GitHub listing at most every few hours (kept on disk
+    across restarts, kometa_assets.py)."""
+    names = kometa_assets.cached_listing(
+        "textures", _kometa_textures_cache, _fetch_kometa_texture_names, _KOMETA_TEXTURES_FALLBACK_NAMES
+    ) or _KOMETA_TEXTURES_FALLBACK_NAMES
     return {"textures": [{"name": n, "url": f"{_KOMETA_TEXTURES_RAW_BASE}{n}.png"} for n in names]}
 
 
@@ -116,7 +109,6 @@ _KOMETA_LOGOS_RAW_BASE_TMPL = (
     "https://raw.githubusercontent.com/Kometa-Team/Defaults-Image-Creation/"
     "main/create_defaults/logos_{category}/"
 )
-_KOMETA_LOGOS_CACHE_TTL_SECONDS = 6 * 60 * 60
 _kometa_logos_cache: dict = {}
 
 
@@ -145,15 +137,7 @@ def api_list_kometa_logos(category: str):
     if category not in _KOMETA_LOGO_CATEGORIES:
         raise HTTPException(404, "Unknown logo category")
 
-    now = time.time()
-    cached = _kometa_logos_cache.get(category)
-    if cached is None or (now - cached["fetched_at"]) > _KOMETA_LOGOS_CACHE_TTL_SECONDS:
-        try:
-            items = _fetch_kometa_logo_items(category)
-            _kometa_logos_cache[category] = {"items": items, "fetched_at": now}
-        except Exception as e:
-            logger.debug("[KOMETA] Failed to refresh logo listing for '%s': %s", category, e)
-            if cached is None:
-                _kometa_logos_cache[category] = {"items": [], "fetched_at": now}
-
-    return {"logos": _kometa_logos_cache[category]["items"]}
+    items = kometa_assets.cached_listing(
+        f"logos_{category}", _kometa_logos_cache, lambda: _fetch_kometa_logo_items(category), []
+    )
+    return {"logos": items}

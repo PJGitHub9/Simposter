@@ -29,6 +29,7 @@ from . import (
     mdblist,
     list_sources,
     maintainerr,
+    plex_auth,
     arr,
     version_info,
     cleanup,
@@ -70,6 +71,7 @@ router.include_router(live_kometa.router)
 router.include_router(mdblist.router)
 router.include_router(list_sources.router)
 router.include_router(maintainerr.router)
+router.include_router(plex_auth.router)
 router.include_router(arr.router)
 router.include_router(version_info.router)
 router.include_router(cleanup.router)

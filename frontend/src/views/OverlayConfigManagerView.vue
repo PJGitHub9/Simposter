@@ -19,6 +19,7 @@ import { listDisplayName, useListSources } from '@/composables/useListSources'
 import { mediaServerLabel } from '@/services/mediaServerLabel'
 import { fetchTmdbTrending, searchTmdb, isTmdbKey } from '@/services/tmdbPreview'
 import { useServerless } from '@/composables/useServerless'
+import { useRoute } from 'vue-router'
 import {
   buildContext, selectElementIndices, fillText, placeBox, offsetsFromBox, cssColor, blurAmount, queuePlacements,
   KOMETA_W, KOMETA_H, referencedLists, checkCondition, type OverlayRuleFields, type OverlayCondition,
@@ -26,6 +27,7 @@ import {
   usesCountdown as usesCountdownText, countdownWarning, localToday,
 } from '@/services/overlayEngine'
 
+const route = useRoute()
 const apiBase = getApiBase()
 
 // --- Types ---
@@ -2453,6 +2455,9 @@ onMounted(() => {
   loadAssets()
   loadFonts()
   loadSimposterAssets()
+  // Links from Settings → Advanced ("Settings on other pages") open a section.
+  const section = route.query.section
+  if (section === 'scheduler' || section === 'advanced') openSection(section)
 })
 </script>
 
@@ -4262,7 +4267,7 @@ onMounted(() => {
   .overlay-manager { padding: 1rem; }
   .content-grid { grid-template-columns: minmax(0, 1fr); }
   .editor-modal { width: 96%; height: 94vh; }
-  .editor-columns { grid-template-columns: 1fr; }
+  .editor-columns { grid-template-columns: minmax(0, 1fr); }
   .preview-column { position: static; order: -1; }
   .upload-modal { width: 96%; }
 }
@@ -4283,5 +4288,25 @@ onMounted(() => {
 @media (max-width: 600px) {
   .overlay-manager { padding: 0.25rem; }
   .section-card { padding: 1rem; }
+
+  /* Editor on phones: full screen, one scroll for the whole editor (the
+     header scrolls away), Save/Cancel pinned at the bottom, and a preview
+     small enough to see the layers below it. */
+  .modal-overlay:has(> .editor-modal) { align-items: stretch; }
+  .editor-modal { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; border: none; border-radius: 0; overflow-y: auto; }
+  .editor-header { padding: 0.75rem 0.75rem 0.6rem; }
+  .editor-body { flex: none; overflow: visible; padding: 0.75rem; }
+  .editor-footer { position: sticky; bottom: 0; z-index: 5; background: var(--surface, #1a1f2e); padding: 0.6rem 0.75rem; }
+  .preview-panel { max-height: none; overflow: visible; padding: 0.6rem; }
+  .preview-top-row, .preview-toggles { flex-wrap: wrap; gap: 0.4rem; }
+  .preview-canvas { width: auto !important; height: min(48vh, calc((100vw - 3.5rem) * 1.5)) !important; max-width: 100%; }
+  .left-tabs { overflow-x: auto; }
+  .left-tabs button { padding: 0.4rem 0.5rem; font-size: 0.85rem; white-space: nowrap; }
+  /* Layer cards: the name gets the first line, status pills and the
+     move/duplicate/remove buttons wrap below it. */
+  .element-header { flex-wrap: wrap; row-gap: 0.3rem; }
+  .element-header-left { flex: 1 1 100%; flex-wrap: wrap; row-gap: 0.25rem; }
+  .element-title { flex: 1 1 150px; }
+  .element-actions { margin-left: auto; }
 }
 </style>

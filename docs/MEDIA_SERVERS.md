@@ -12,7 +12,7 @@ Simposter works with **Plex, Jellyfin and Emby**, in any combination: Plex only,
 
 ![Settings → Media Servers](images/settings-media-servers.png)
 
-- **Plex**: the server URL and an X-Plex-Token.
+- **Plex**: the server URL and an X-Plex-Token. Or click **Sign in with Plex**: sign in at plex.tv, pick your server, and Simposter fills both in (it checks which of the server's addresses it can reach). Then Test Connection and Save.
 - **Jellyfin / Emby**: the server URL and an API key (in Jellyfin: Dashboard → API Keys).
 
 Give each server a **name** (e.g. "Jellyfin-main"). The name appears throughout the app, which matters once you have more than one server of the same type.

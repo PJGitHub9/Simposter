@@ -440,6 +440,22 @@ const KIND_LABEL: Record<string, string> = {
 .ki-done-title { font-weight: 700; font-size: 0.95rem; color: var(--accent, #3dd6b7); }
 .ki-done p { margin: 0; }
 
+/* Phones: full screen, one scroll, no nested scroll box for the overlay list,
+   and the Check/Import buttons pinned at the bottom. */
+@media (max-width: 600px) {
+  .ki-backdrop { padding: 0; align-items: stretch; }
+  .ki-modal { width: 100%; max-height: none; height: 100dvh; border: none; border-radius: 0; }
+  .ki-head { padding: 0.75rem; }
+  .ki-body { padding: 0.75rem; flex: 1; }
+  .ki-overlays { max-height: none; overflow: visible; }
+  .ki-file-main, .ki-paste-name { min-width: 0; }
+  .ki-file-main { flex-basis: calc(100% - 2.5rem); }
+  .ki-file-path { word-break: break-word; }
+  .ki-name { flex: 1 1 auto; }
+  .ki-name input { width: 100%; box-sizing: border-box; }
+  .ki-foot { position: sticky; bottom: -0.75rem; background: var(--surface, #141824); padding: 0.6rem 0; margin-bottom: -0.75rem; }
+}
+
 .beta-badge {
   margin-left: 6px;
   padding: 1px 6px;

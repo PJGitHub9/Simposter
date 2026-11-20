@@ -136,7 +136,7 @@ npm run dev
 
 The first time you open Simposter, a setup wizard walks you through everything. It takes about five minutes. Have these ready:
 
-- your media server's address and credentials: a **Plex token** ([how to find it](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/)) and/or a **Jellyfin/Emby API key** (Dashboard → API Keys)
+- your media server's address and credentials: a **Plex token** (or use **Sign in with Plex** in the wizard; [how to find a token by hand](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/)) and/or a **Jellyfin/Emby API key** (Dashboard → API Keys)
 - a **TMDb API key** (free, [themoviedb.org](https://www.themoviedb.org/settings/api)); a **TVDB key** if you have TV libraries, and optionally a **Fanart.tv key**
 - optionally, your Radarr/Sonarr address and API key
 

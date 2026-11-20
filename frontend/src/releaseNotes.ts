@@ -10,6 +10,32 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.88',
+    date: '2026-11-19',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Sign in with Plex: in Settings → Media Servers (main Plex server and Add Another Plex Server) and the setup wizard, sign in through plex.tv instead of pasting a URL and token. Simposter lists your servers, checks which of each server’s addresses it can reach, and fills in the one you pick. The address and token fields are still there for entering them by hand.',
+          'Settings → Advanced lists the settings that live on other pages (Changed outside Simposter, Media Mirror, Overlay Refresh, ratings and lists refresh, Live Kometa files, Poster API), with their current values and a link to each.',
+        ],
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Compact preset exports (Share with "compact" on) could leave out values the preset really used, such as a 0.22 matte, the border width or the logo mode, so the preset looked different after importing. Compact exports now only leave out values that match what Simposter uses when a value is missing, and importing puts them back. Compact exports made by earlier versions can’t be repaired; export them again.',
+        ],
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'The Kometa Creator’s textures, logo lists and logo images are now kept on disk, so they aren’t downloaded again after a restart, and still work if GitHub can’t be reached.',
+          'Phones: the overlay editor and the Kometa import window now use the whole screen, fit its width, and keep Save/Cancel (or Check/Import) at the bottom.',
+        ],
+      },
+    ],
+  },
+  {
     version: 'v1.8.87',
     date: '2026-11-19',
     sections: [

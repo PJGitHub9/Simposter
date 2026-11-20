@@ -39,6 +39,14 @@ def fetch_logo_for_upload(url: str) -> "tuple[bytes, str]":
     return buf.getvalue(), "image/png"
 
 
+class _BytesResponse:
+    """Stands in for a requests response when the bytes came from disk."""
+
+    def __init__(self, content: bytes):
+        self.content = content
+        self.headers: dict = {}
+
+
 def _download_image(url: str) -> Image.Image:
     """
     Fetch an image from a URL and return a PIL Image (RGBA).
@@ -67,10 +75,17 @@ def _download_image(url: str) -> Image.Image:
                 _IMAGE_BYTE_CACHE.pop(url, None)
             raw = None  # fall through to re-download
 
+    # Kometa Creator textures/logos are also kept on disk (kometa_assets.py),
+    # so a restart doesn't download them again.
+    from . import kometa_assets
+    is_kometa_asset = kometa_assets.is_kometa_asset_url(url)
+    disk_raw = kometa_assets.read_image(url) if is_kometa_asset else None
+
     # Retry with backoff on timeouts and connection errors. Connection errors
     # include "Temporary failure in name resolution", which a container's DNS
     # resolver returns now and then during a busy batch.
-    max_retries = 3
+    max_retries = 0 if disk_raw is not None else 3
+    resp = _BytesResponse(disk_raw) if disk_raw is not None else None
     for attempt in range(max_retries):
         try:
             # Increase timeout from 20s to 60s for slow connections
@@ -85,11 +100,22 @@ def _download_image(url: str) -> Image.Image:
                 import time
                 time.sleep(wait_time)
             else:
+                stale = kometa_assets.read_image(url, allow_stale=True) if is_kometa_asset else None
+                if stale is not None:
+                    resp = _BytesResponse(stale)
+                    break
                 logger.warning("Failed to download image after %d attempts: %s (%s)", max_retries, url, e)
                 raise ValueError(f"Failed to download image after {max_retries} attempts: {url}") from e
         except Exception as e:
+            stale = kometa_assets.read_image(url, allow_stale=True) if is_kometa_asset else None
+            if stale is not None:
+                logger.debug("Using the cached copy of %s after a failed download: %s", url, e)
+                resp = _BytesResponse(stale)
+                break
             logger.exception("Failed to download image: %s", url)
             raise ValueError(f"Failed to download image: {url}") from e
+    if is_kometa_asset and not isinstance(resp, _BytesResponse) and resp is not None:
+        kometa_assets.write_image(url, resp.content)
 
     # Store in cache (evict LRU if over limit)
     with _IMAGE_BYTE_CACHE_LOCK:

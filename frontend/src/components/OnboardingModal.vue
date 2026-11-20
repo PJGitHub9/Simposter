@@ -8,6 +8,7 @@ import { mediaServerId } from '@/services/mediaServerId'
 import { keyNeedsReentry, sameOrigin } from '@/services/serverOrigin'
 import { useServerless } from '@/composables/useServerless'
 import LookStep from '@/components/onboarding/LookStep.vue'
+import PlexSignIn from '@/components/PlexSignIn.vue'
 import ArrStep from '@/components/onboarding/ArrStep.vue'
 import ExtrasStep from '@/components/onboarding/ExtrasStep.vue'
 import GroupsStep from '@/components/onboarding/GroupsStep.vue'
@@ -85,6 +86,14 @@ const plexOk = ref(false)
 
 type PlexSection = { key: string; title: string; type: string }
 const plexSections = ref<PlexSection[]>([])
+
+// "Sign in with Plex" picked a server: fill it in and test it.
+const onPlexSignedIn = (v: { url: string; token: string; name: string }) => {
+  plexUrl.value = v.url
+  plexToken.value = v.token
+  plexOk.value = false
+  testPlex()
+}
 
 const testPlex = async () => {
   testingPlex.value = true
@@ -1163,6 +1172,7 @@ onMounted(() => {
 
           <div v-if="wantsPlex" class="ob-form ob-server-form">
             <div class="ob-server-heading"><img src="/icons/plex.svg" class="ob-server-icon" alt="" /> Plex</div>
+            <PlexSignIn @connected="onPlexSignedIn" />
             <label class="ob-label">Server URL</label>
             <input v-model="plexUrl" class="ob-input" type="url" placeholder="http://192.168.1.100:32400" @keyup.enter="testPlex" @input="plexOk = false" />
             <label class="ob-label">Token</label>

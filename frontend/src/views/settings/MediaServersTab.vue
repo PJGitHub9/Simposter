@@ -53,6 +53,7 @@
               <input type="checkbox" v-model="primaryPlexEnabled" /> Enabled
             </label>
           </div>
+          <PlexSignIn @connected="onPlexSignedIn" />
           <div class="server-card-row">
             <input v-model="localPlexUrl" placeholder="http://localhost:32400" class="server-url-input" />
             <input v-model="localPlexToken" type="password" placeholder="X-Plex-Token" class="server-credential-input" />
@@ -186,6 +187,7 @@
           Simposter currently only renders/sends through your primary Plex connection above —
           an additional Plex entry can be tested and linked for browsing, but won't receive sends yet.
         </p>
+        <PlexSignIn v-if="group.type === 'plex'" @connected="onNewPlexSignedIn" />
         <div class="add-server-row">
           <input v-model="newServerState[group.type].name" :placeholder="`Name (e.g. ${nameExample(group.type)})`" class="server-name-input" />
           <input v-model="newServerState[group.type].url" placeholder="Server URL" class="server-url-input" />
@@ -263,7 +265,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, nextTick, reactive, ref } from 'vue'
+import PlexSignIn from '@/components/PlexSignIn.vue'
 import { useSettingsStore, type MediaServerEntry } from '@/stores/settings'
 import { getApiBase } from '@/services/apiBase'
 import { mediaServerId } from '@/services/mediaServerId'
@@ -323,6 +326,16 @@ const localPlexToken = computed({
 
 const apiBase = getApiBase()
 const settingsStore = useSettingsStore()
+
+// "Sign in with Plex" filled in a server: put it in the fields (saved with
+// the page's Save like a pasted token), name it if unnamed, and test it.
+const onPlexSignedIn = async (v: { url: string; token: string; name: string }) => {
+  localPlexUrl.value = v.url
+  localPlexToken.value = v.token
+  if (!primaryPlexName.value && v.name) primaryPlexName.value = v.name
+  await nextTick()
+  emit('test-connection')
+}
 
 // Poster API on/off. Only changes the settings store; the page-wide Save sends
 // it (posterApi is part of the /api/ui-settings payload), and SettingsView's
@@ -540,6 +553,15 @@ const addFormOpen = reactive<Record<'plex' | 'jellyfin' | 'emby', boolean>>({
 function cancelAddServer(type: 'plex' | 'jellyfin' | 'emby') {
   newServerState[type] = freshNewServerState()
   addFormOpen[type] = false
+}
+
+// "Sign in with Plex" in the "Add another Plex server" form: fill it in and test it.
+function onNewPlexSignedIn(v: { url: string; token: string; name: string }) {
+  const state = newServerState.plex
+  state.url = v.url
+  state.credential = v.token
+  if (!state.name && v.name) state.name = v.name
+  testNewServer('plex')
 }
 
 async function testNewServer(type: 'plex' | 'jellyfin' | 'emby') {

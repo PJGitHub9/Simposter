@@ -5,6 +5,7 @@ from typing import Any
 from typing import Optional
 from fastapi import APIRouter, HTTPException, UploadFile, File, Body
 
+from ..preset_compact import COMPACT_VERSION, compact_options, expand_payload
 from ..config import load_presets, save_presets, USER_PRESETS_PATH, logger, settings
 from ..schemas import PresetAddOverlaysRequest, PresetDeleteRequest, PresetSaveRequest
 from .. import database as db
@@ -775,34 +776,9 @@ def api_presets_export():
         raise HTTPException(status_code=500, detail=f"Failed to export presets: {e}")
 
 
-# Default values that are stripped from compact exports to keep shared presets small
-_PRESET_DEFAULTS = {
-    "poster_zoom": 1, "poster_shift_y": -0.04, "matte_height_ratio": 0.22,
-    "fade_height_ratio": 0.21, "top_matte_height_ratio": 0.0, "top_fade_height_ratio": 0.0,
-    "vignette_strength": 0.03, "grain_amount": 0.22,
-    "logo_scale": 0.45, "logo_offset": 0.88, "uniform_logo_max_w": 1282,
-    "uniform_logo_max_h": 352, "uniform_logo_offset_x": 0.5, "uniform_logo_offset_y": 0.83,
-    "uniform_logo_h_align": "center", "uniform_logo_v_align": "center",
-    "uniform_logo_shadow_enabled": False, "uniform_logo_shadow_opacity": 60,
-    "uniform_logo_shadow_angle": -45, "uniform_logo_shadow_distance": 8,
-    "uniform_logo_shadow_size": 15, "uniform_logo_shadow_color": "#000000",
-    "border_enabled": False, "border_px": 14, "border_color": "#ffffff",
-    "overlay_file": "", "overlay_opacity": 0.4, "overlay_mode": "screen",
-    "poster_filter": "textless", "logo_preference": "white", "logo_mode": "original",
-    "logo_hex": "#4b5efc", "text_overlay_enabled": False, "custom_text": "",
-    "font_family": "Arial", "font_size": 120, "font_weight": "700",
-    "text_color": "#ffffff", "text_align": "center", "text_transform": "uppercase",
-    "letter_spacing": 2, "line_height": 1.2, "position_y": 0.75,
-    "shadow_enabled": False, "shadow_blur": 10, "shadow_offset_x": 0,
-    "shadow_offset_y": 4, "shadow_color": "#000000", "shadow_opacity": 0.8,
-    "stroke_enabled": False, "stroke_width": 4, "stroke_color": "#000000",
-    "logoSource": "tmdb_fanart",
-}
-
-
 def _compact_options(opts: dict) -> dict:
-    """Strip fields that match built-in defaults; keep everything else."""
-    return {k: v for k, v in opts.items() if _PRESET_DEFAULTS.get(k, "__missing__") != v}
+    """Leave out options equal to the renderer's own default (preset_compact.py)."""
+    return compact_options(opts)
 
 
 def _compact_export(data: dict) -> dict:
@@ -824,6 +800,8 @@ def _compact_export(data: dict) -> dict:
                 entry["season_options"] = season_diff
             compact_presets.append(entry)
         compact[template_id] = {"presets": compact_presets}
+    # Import puts the left-out values back (preset_compact.expand_payload).
+    compact["_compact"] = COMPACT_VERSION
     return _attach_overlays(compact, raw_entries)
 
 
@@ -896,6 +874,7 @@ def api_presets_import(payload: dict = Body(...)):
         extra_fonts = payload.pop("_fonts", None)
         all_asset_fonts = bool(payload.pop("_asset_fonts", False))
         overlays = payload.pop("_overlays", None)
+        compact_version = payload.pop("_compact", None)
         restored_overlays = 0
         if isinstance(overlays, dict):
             from ..overlay_bundle import restore_bundle, remap_options
@@ -912,6 +891,8 @@ def api_presets_import(payload: dict = Body(...)):
                                 preset["season_options"] = remap_options(preset["season_options"], remap)
         # Drop any other non-template keys (future metadata like "_simposter").
         payload = {k: v for k, v in payload.items() if not str(k).startswith("_")}
+        if compact_version is not None:
+            payload = expand_payload(payload, compact_version)
 
         db.merge_presets(payload)
         logger.info("[PRESETS] Imported and merged presets from JSON")

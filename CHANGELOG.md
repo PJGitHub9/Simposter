@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.8.88 (2026-11-19) — `webui-overhaul-dev` branch
+
+### New Features
+- **Sign in with Plex** — new `backend/api/plex_auth.py` (`POST /api/plex-auth/pin`, `GET /api/plex-auth/pin/{id}`, `GET /api/plex-auth/pin/{id}/servers`, `POST /api/plex-auth/pin/{id}/use`) and `PlexSignIn.vue`, in the main Plex card and the "Add another Plex server" form of Settings → Media Servers, and the wizard's Connect step. Plex's PIN flow (`plex.tv/api/v2/pins`, `app.plex.tv/auth`), then the account's servers from `plex.tv/api/v2/resources`; Simposter's server tests every connection (`/identity`, 4 s) and the best reachable one is preselected. The account token stays in server memory (15 minutes) and is never returned; only the chosen server's own token fills the token field, saved with Save. A stable client id is kept in `config/settings/plex_client_id`.
+- **Settings on other pages** — new `OtherPagesSettings.vue` at the top of Settings → Advanced: the Changed-outside-Simposter action, Media Mirror and Overlay Refresh counts per group, ratings/lists refresh times, Live Kometa files and the Poster API, each with a link. The Overlays page accepts `?section=scheduler|advanced` to open those sections.
+
+### Bug Fixes
+- **Compact preset exports dropped real values** — the old hand-written defaults list came from editor defaults, so values like `matte_height_ratio: 0.22`, `border_px: 14`, `logo_mode: original` or `poster_shift_y: -0.04` were left out and the renderer then used its own default (0, 0, `stock`, 0). New `backend/preset_compact.py`: only the 36 keys with one literal default everywhere in the backend are left out, the export carries `_compact: 2`, and `/presets/import` puts them back (`expand_payload()`). Checked by rendering all 16 of the dev DB's preset configs stored, compacted and restored: identical pixels. Float rounding was dropped: even 10 decimals moved text by a pixel.
+
+### Improvements
+- **Kometa Creator disk cache** — new `backend/kometa_assets.py`: texture/logo listings (6 h) and Kometa-Team/Defaults-Image-Creation images (30 days) are kept in `config/cache/kometa_creator/`; `rendering._download_image()` reads/writes the image cache and falls back to a stale copy when a download fails.
+- **Phone layout** — overlay editor full screen with one scroll, sticky Save/Cancel, a smaller preview and wrapping layer cards (`.editor-columns` used `1fr`, which let the layer column grow past the screen); Kometa import full screen, no nested scroll, sticky buttons.
+
 ## v1.8.87 (2026-11-19) — `webui-overhaul-dev` branch
 
 ### Improvements

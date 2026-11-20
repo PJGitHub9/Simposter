@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { launchOnboarding } from '@/composables/useOnboardingLauncher'
+import OtherPagesSettings from '@/components/settings/OtherPagesSettings.vue'
 
 interface APISource {
   id: string
@@ -166,6 +167,8 @@ const moveApiDown = (api: string) => {
 <template>
   <div class="tab-content">
     <h2>Advanced Settings</h2>
+
+    <OtherPagesSettings />
 
     <!-- Setup Wizard -->
     <div class="section">
