@@ -89,6 +89,7 @@ const sectionsWithChanges = ref({
   mediaServersPlex: false,
   mediaServersJellyfin: false,
   mediaServersEmby: false,
+  mediaServersSilo: false,
   arrRadarr: false,
   arrSonarr: false,
   // One flag per Settings section, all computed in checkForChanges() from the
@@ -491,6 +492,7 @@ const captureSettingsSnapshot = () => {
   sectionsWithChanges.value.mediaServersPlex = false
   sectionsWithChanges.value.mediaServersJellyfin = false
   sectionsWithChanges.value.mediaServersEmby = false
+  sectionsWithChanges.value.mediaServersSilo = false
   sectionsWithChanges.value.arrRadarr = false
   sectionsWithChanges.value.arrSonarr = false
   for (const key of Object.keys(sectionsWithChanges.value) as Array<keyof typeof sectionsWithChanges.value>) {
@@ -635,6 +637,8 @@ const checkForChanges = () => {
     JSON.stringify(byType(settings.mediaServers.value, 'jellyfin')) !== JSON.stringify(byType(initialMediaServers, 'jellyfin'))
   sectionsWithChanges.value.mediaServersEmby =
     JSON.stringify(byType(settings.mediaServers.value, 'emby')) !== JSON.stringify(byType(initialMediaServers, 'emby'))
+  sectionsWithChanges.value.mediaServersSilo =
+    JSON.stringify(byType(settings.mediaServers.value, 'silo')) !== JSON.stringify(byType(initialMediaServers, 'silo'))
   const initialArr: any[] = initial.arrInstances || []
   sectionsWithChanges.value.arrRadarr =
     JSON.stringify(byType(settings.arrInstances.value, 'radarr')) !== JSON.stringify(byType(initialArr, 'radarr'))
@@ -1768,6 +1772,7 @@ onMounted(() => {
         :plexServersChanged="sectionsWithChanges.mediaServersPlex"
         :jellyfinServersChanged="sectionsWithChanges.mediaServersJellyfin"
         :embyServersChanged="sectionsWithChanges.mediaServersEmby"
+        :siloServersChanged="sectionsWithChanges.mediaServersSilo"
         :radarrChanged="sectionsWithChanges.arrRadarr"
         :sonarrChanged="sectionsWithChanges.arrSonarr"
         :posterApiChanged="sectionsWithChanges.posterApi"

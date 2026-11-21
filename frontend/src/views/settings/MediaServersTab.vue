@@ -5,7 +5,7 @@
     <div class="area-head">
       <h3 class="area-title">Media servers</h3>
       <p class="hint">
-        Where Simposter reads your libraries and sends posters. Connect Plex, Jellyfin and/or Emby;
+        Where Simposter reads your libraries and sends posters. Connect Plex, Jellyfin, Emby and/or Silo;
         more than one can be enabled at once.
       </p>
     </div>
@@ -35,6 +35,9 @@
         {{ group.label }}
         <span v-if="group.type === 'emby'" class="coming-soon-badge testing-badge">Testing required</span>
       </h3>
+      <p v-if="group.type === 'silo'" class="scan-hint">
+        Needs an admin API key from Silo (Settings → API keys). Silo keeps one poster per title, so libraries sharing a title share its poster. If you use Simposter's overlays, turn off Silo's own card overlays so badges don't appear twice.
+      </p>
       <p v-if="group.type === 'emby'" class="scan-hint">
         Emby support uses the same calls as Jellyfin and hasn't been tested on a real Emby server yet.
         Please report anything that doesn't work.
@@ -165,6 +168,7 @@
       >
         + Add Plex Server
       </button>
+      <p v-else-if="group.type === 'silo' && group.servers.length" class="scan-hint">Only one Silo server can be added.</p>
       <button
         v-else-if="!addFormOpen[group.type]"
         type="button"
@@ -218,12 +222,6 @@
       </div>
     </div>
 
-    <!-- Placeholder for a planned server type; nothing here is functional. -->
-    <div class="section section-coming-soon" aria-disabled="true">
-      <h3>Silo <span class="coming-soon-badge">Future update</span></h3>
-      <p class="empty-state">Silo support is planned for a future update.</p>
-      <button type="button" class="secondary-small add-server-toggle" disabled>+ Add a Silo Server</button>
-    </div>
     </div>
 
     <!-- Radarr / Sonarr: optional, read only; their tags feed poster mode rules. -->
@@ -297,6 +295,7 @@ const props = defineProps<{
   plexServersChanged?: boolean
   jellyfinServersChanged?: boolean
   embyServersChanged?: boolean
+  siloServersChanged?: boolean
   radarrChanged?: boolean
   sonarrChanged?: boolean
   posterApiChanged?: boolean
@@ -414,13 +413,14 @@ function cancelPrimaryPlex() {
 }
 
 interface ServerGroupDef {
-  type: 'plex' | 'jellyfin' | 'emby'
+  type: 'plex' | 'jellyfin' | 'emby' | 'silo'
   label: string
 }
 const groupDefs: ServerGroupDef[] = [
   { type: 'plex', label: 'Plex' },
   { type: 'jellyfin', label: 'Jellyfin' },
   { type: 'emby', label: 'Emby' },
+  { type: 'silo', label: 'Silo' },
 ]
 
 const serverGroups = computed(() =>
@@ -433,19 +433,20 @@ const serverGroups = computed(() =>
     changed:
       g.type === 'plex' ? !!props.plexServersChanged
       : g.type === 'jellyfin' ? !!props.jellyfinServersChanged
+      : g.type === 'silo' ? !!props.siloServersChanged
       : !!props.embyServersChanged,
   }))
 )
 
 function typeLabel(type: string): string {
-  return ({ plex: 'Plex', jellyfin: 'Jellyfin', emby: 'Emby' } as Record<string, string>)[type] || type
+  return ({ plex: 'Plex', jellyfin: 'Jellyfin', emby: 'Emby', silo: 'Silo' } as Record<string, string>)[type] || type
 }
 
 // Type-appropriate example for the optional "Name" field's placeholder --
 // generic, not tied to any one person's real server naming (this field is a
 // shared, multi-user app's UI, not a personal config file).
 function nameExample(type: string): string {
-  return ({ plex: 'plex-secondary', jellyfin: 'jellyfin-main', emby: 'emby-main' } as Record<string, string>)[type] || `${type}-main`
+  return ({ plex: 'plex-secondary', jellyfin: 'jellyfin-main', emby: 'emby-main', silo: 'silo-main' } as Record<string, string>)[type] || `${type}-main`
 }
 
 interface ServerSection {
@@ -535,22 +536,24 @@ function freshNewServerState(): NewServerState {
 // One independent add-a-server form per type now, instead of a single shared
 // form with a type dropdown -- the type is implied by which section the form
 // sits in.
-const newServerState = reactive<Record<'plex' | 'jellyfin' | 'emby', NewServerState>>({
+const newServerState = reactive<Record<'plex' | 'jellyfin' | 'emby' | 'silo', NewServerState>>({
   plex: freshNewServerState(),
   jellyfin: freshNewServerState(),
   emby: freshNewServerState(),
+  silo: freshNewServerState(),
 })
 
 // Whether each type's add-server form is expanded -- collapsed by default
 // (a small "+ Add a Server" button instead) so a section with nothing to add
 // right now doesn't permanently show three empty text fields.
-const addFormOpen = reactive<Record<'plex' | 'jellyfin' | 'emby', boolean>>({
+const addFormOpen = reactive<Record<'plex' | 'jellyfin' | 'emby' | 'silo', boolean>>({
   plex: false,
   jellyfin: false,
   emby: false,
+  silo: false,
 })
 
-function cancelAddServer(type: 'plex' | 'jellyfin' | 'emby') {
+function cancelAddServer(type: 'plex' | 'jellyfin' | 'emby' | 'silo') {
   newServerState[type] = freshNewServerState()
   addFormOpen[type] = false
 }
@@ -564,7 +567,7 @@ function onNewPlexSignedIn(v: { url: string; token: string; name: string }) {
   testNewServer('plex')
 }
 
-async function testNewServer(type: 'plex' | 'jellyfin' | 'emby') {
+async function testNewServer(type: 'plex' | 'jellyfin' | 'emby' | 'silo') {
   const state = newServerState[type]
   state.testing = true
   state.testResult = null
@@ -595,7 +598,7 @@ async function testNewServer(type: 'plex' | 'jellyfin' | 'emby') {
 // Jellyfin after the earlier data-loss incident, Quirk #64's last bullet).
 // FNV-1a is deliberately simple/dependency-free -- this only needs to be a
 // stable, short, URL-safe fingerprint, not cryptographically strong.
-function addServer(type: 'plex' | 'jellyfin' | 'emby') {
+function addServer(type: 'plex' | 'jellyfin' | 'emby' | 'silo') {
   const state = newServerState[type]
   const id = mediaServerId(type, state.url)
   const entry: MediaServerEntry = {
@@ -853,12 +856,8 @@ h3 {
 .server-type-badge.plex { background: rgba(229, 160, 13, 0.15); color: #e5a00d; }
 .server-type-badge.jellyfin { background: rgba(170, 92, 195, 0.15); color: #aa5cc3; }
 .server-type-badge.emby { background: rgba(82, 181, 75, 0.15); color: #52b54b; }
+.server-type-badge.silo { background: rgba(79, 143, 214, 0.15); color: #4f8fd6; }
 
-.section-coming-soon {
-  opacity: 0.5;
-  pointer-events: none;
-  user-select: none;
-}
 .coming-soon-badge {
   margin-left: 8px;
   padding: 2px 8px;

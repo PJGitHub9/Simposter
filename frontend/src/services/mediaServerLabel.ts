@@ -10,7 +10,7 @@
 import type { MediaServerEntry } from '@/stores/settings'
 
 export function mediaServerTypeLabel(type: string): string {
-  return type === 'jellyfin' ? 'Jellyfin' : type === 'emby' ? 'Emby' : type === 'plex' ? 'Plex' : type
+  return type === 'jellyfin' ? 'Jellyfin' : type === 'emby' ? 'Emby' : type === 'plex' ? 'Plex' : type === 'silo' ? 'Silo' : type
 }
 
 export function mediaServerLabel(serverId: string, mediaServers: MediaServerEntry[]): string {

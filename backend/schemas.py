@@ -109,7 +109,7 @@ class PresetDeleteRequest(BaseModel):
 
 class MediaServerEntry(BaseModel):
     id: str
-    type: str  # "plex" | "jellyfin" | "emby"
+    type: str  # "plex" | "jellyfin" | "emby" | "silo"
     name: Optional[str] = None  # user-supplied display label (e.g. "jellyfin-main") so
                                  # multiple same-type servers can be told apart in the UI --
                                  # falls back to a generic type label ("Jellyfin"/"Emby")
@@ -155,7 +155,7 @@ class MDBListSettings(BaseModel):
     apiKey: str = ""
     # What fills the overlay fields audience_rating / critic_rating (0-10, like
     # Kometa's): "server" (the first enabled media server that has a rating),
-    # "plex", "jellyfin" (Jellyfin or Emby), or an MDBList source: imdb, tmdb,
+    # "plex", "jellyfin" (Jellyfin or Emby), "silo", or an MDBList source: imdb, tmdb,
     # trakt, tomatoes, tomatoesaudience, metacritic, metacriticuser, letterboxd,
     # myanimelist, score. See server_ratings.py.
     audienceRatingSource: str = "server"

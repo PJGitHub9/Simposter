@@ -177,9 +177,10 @@ const isPlexId = (id: string) => id.startsWith('plex')
 const squareArtAvailable = computed(() =>
   isPlexId(sourceServerId.value) && Array.from(targetServerIds.value).some(isPlexId)
 )
-// Thumb Art is the reverse: Jellyfin/Emby only, no Plex slot (Quirk #153).
+// Thumb Art is the reverse: Jellyfin/Emby only, no Plex or Silo slot (Quirk #153/#240).
+const isThumbId = (id: string) => id.startsWith('jellyfin') || id.startsWith('emby')
 const thumbArtAvailable = computed(() =>
-  !!sourceServerId.value && !isPlexId(sourceServerId.value) && Array.from(targetServerIds.value).some(id => !isPlexId(id))
+  isThumbId(sourceServerId.value) && Array.from(targetServerIds.value).some(isThumbId)
 )
 const assetDisabled = (id: string) =>
   (id === 'square_art' && !squareArtAvailable.value) || (id === 'thumb_art' && !thumbArtAvailable.value)
@@ -187,7 +188,7 @@ const assetDisabledReason = (id: string) => {
   if (id === 'square_art' && !squareArtAvailable.value)
     return 'Square Art only works when both the source and at least one target are Plex — Jellyfin/Emby have no square art equivalent.'
   if (id === 'thumb_art' && !thumbArtAvailable.value)
-    return 'Thumb Art only works when both the source and at least one target are Jellyfin/Emby — Plex has no thumb art slot.'
+    return 'Thumb Art only works when both the source and at least one target are Jellyfin/Emby — Plex and Silo have no thumb art slot.'
   return undefined
 }
 watch([squareArtAvailable, thumbArtAvailable], () => {

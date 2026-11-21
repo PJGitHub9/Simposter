@@ -38,7 +38,7 @@ Every library group opens on a grid of its posters (the screenshot above).
 - **Sort / Order / Filter by Label / Poster mode**: narrow down what's shown. "Generated" shows only titles Simposter has made a poster for.
 - **Show posters from**: when a title is on more than one server, which server's poster the card shows.
 - **Refresh Cache** re-reads the library from Simposter's cache; **Force Poster Refresh** downloads every poster from the server again.
-- The small icons under each card show which servers have the title (Plex, Jellyfin, Emby). A **Changed** badge means the poster was changed on the server after Simposter sent it (see [History](#history)).
+- The small icons under each card show which servers have the title (Plex, Jellyfin, Emby, Silo). A **Changed** badge means the poster was changed on the server after Simposter sent it (see [History](#history)).
 - Cards Simposter has made a poster for have a resend arrow: it sends that poster again, without rendering, to the servers you pick.
 - Click a card to open the editor.
 

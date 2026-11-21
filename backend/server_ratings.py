@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-SERVER_SOURCES = ("server", "plex", "jellyfin")
+SERVER_SOURCES = ("server", "plex", "jellyfin", "silo")
 # Sources that need no MDBList key: the media servers, plus TMDb's own user
 # score (audience only -- TMDb has no critic score). TMDb is also the fallback
 # for audience_rating whenever no server has a value, which is always the case
@@ -184,7 +184,21 @@ def store(server_id: str, server_type: str, media_type: str,
 
 
 def _types_for(source: str) -> Tuple[str, ...]:
-    return ("plex",) if source == "plex" else ("jellyfin", "emby")
+    if source in ("plex", "silo"):
+        return (source,)
+    return ("jellyfin", "emby")
+
+
+def kind_for_client(client: Any) -> str:
+    """The server_ratings server_type a non-Plex scan stores under."""
+    from .media_server.silo_client import SiloClient
+    return "silo" if isinstance(client, SiloClient) else "jellyfin"
+
+
+def _kind(server_type: Any) -> Optional[str]:
+    if server_type in ("plex", "silo"):
+        return server_type
+    return "jellyfin" if server_type in ("jellyfin", "emby") else None
 
 
 def lookup(source: str, media_type: str, tmdb_id: Any = None, rating_key: Any = None) -> Dict[str, Optional[float]]:
@@ -249,7 +263,7 @@ def server_order() -> List[str]:
     for srv in servers:
         if not isinstance(srv, dict) or srv.get("enabled") is False:
             continue
-        kind = "plex" if srv.get("type") == "plex" else "jellyfin" if srv.get("type") in ("jellyfin", "emby") else None
+        kind = _kind(srv.get("type"))
         if kind and kind not in order:
             order.append(kind)
     return order or ["plex", "jellyfin"]
@@ -294,7 +308,7 @@ def fill(ctx: Dict[str, Any], media_type: str, tmdb_id: Any, mdblist_ready: bool
                 if src not in cache:
                     cache[src] = lookup(src, media_type, tmdb_id, rating_key)
                 value = cache[src].get(field)
-                label = "Plex" if src == "plex" else "Jellyfin/Emby"
+                label = {"plex": "Plex", "silo": "Silo"}.get(src, "Jellyfin/Emby")
             if value is not None:
                 ctx[field] = value
                 used[field] = label
@@ -331,7 +345,7 @@ def _any_server_enabled() -> bool:
         servers = (db.get_ui_settings() or {}).get("mediaServers") or []
     except Exception:
         servers = []
-    return any(isinstance(s, dict) and s.get("enabled") is not False and s.get("type") in ("plex", "jellyfin", "emby")
+    return any(isinstance(s, dict) and s.get("enabled") is not False and s.get("type") in ("plex", "jellyfin", "emby", "silo")
                for s in servers)
 
 

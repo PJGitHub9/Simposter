@@ -1,6 +1,6 @@
-# Media Servers: Plex, Jellyfin & Emby
+# Media Servers: Plex, Jellyfin, Emby & Silo
 
-Simposter works with **Plex, Jellyfin and Emby**, in any combination: Plex only, Jellyfin only, or several servers at once (including two of the same kind). This guide covers connecting servers, linking their libraries together, and the features built on top of that.
+Simposter works with **Plex, Jellyfin, Emby and Silo**, in any combination: Plex only, Jellyfin only, or several servers at once (including two of the same kind). This guide covers connecting servers, linking their libraries together, and the features built on top of that.
 
 > Emby uses the same API as Jellyfin and is supported the same way, but it has had far less real-world testing. Please report anything that doesn't work.
 
@@ -14,6 +14,7 @@ Simposter works with **Plex, Jellyfin and Emby**, in any combination: Plex only,
 
 - **Plex**: the server URL and an X-Plex-Token. Or click **Sign in with Plex**: sign in at plex.tv, pick your server, and Simposter fills both in (it checks which of the server's addresses it can reach). Then Test Connection and Save.
 - **Jellyfin / Emby**: the server URL and an API key (in Jellyfin: Dashboard → API Keys).
+- **Silo**: the server URL (its web port, usually 8090) and an **admin** API key from Silo (admin settings → API keys). See [Silo](#silo) below.
 
 Give each server a **name** (e.g. "Jellyfin-main"). The name appears throughout the app, which matters once you have more than one server of the same type.
 
@@ -109,6 +110,21 @@ Remove a server in **Settings → Media Servers**. When you save:
 - Simposter deletes everything it had cached for that server (posters, logos, backdrops, scan data, retry-queue entries).
 
 History and your saved poster files are kept. If you remove Plex, Simposter stops using any `PLEX_URL`/`PLEX_TOKEN` environment variables, so it doesn't reconnect on the next restart. Adding Plex back re-enables them.
+
+---
+
+## Silo
+
+[Silo](https://github.com/Silo-Server/silo-server) works like Jellyfin in Simposter: link its libraries into library groups, browse, edit, send, Batch Edit, webhooks, Media Mirror, Overlay Refresh and drift detection all apply. Simposter uses Silo's own API, not its Jellyfin-compatible one.
+
+- **One poster per title.** Silo keeps a single entry per title, so a movie with a 1080p file in one Silo library and a 4K file in another is one title with one poster, backdrop and logo. Simposter shows it in both libraries (each with its own quality badges), but sending from either one changes Silo's poster for both. If the two library groups use different presets, the last send wins.
+- **One Silo server** can be added.
+- **Admin key needed.** A non-admin key can read but not upload; Test Connection says so.
+- Silo can't take square art, thumb art, season logos or box-set (collection) artwork from other apps, and has no labels.
+- Titles Silo hasn't matched yet still show, but only merge with Plex/Jellyfin copies once Silo matches them.
+- **Silo's own overlays.** Silo can draw its own badges on cards. If you use Simposter's overlays, turn Silo's card overlays off so the badges don't appear twice.
+- Silo lists at most 20 box sets per library, so Collections shows no more than that.
+- Silo is pre-release software, so its API may still change.
 
 ---
 

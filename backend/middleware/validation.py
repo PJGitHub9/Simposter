@@ -197,11 +197,12 @@ def validate_rating_key(rating_key: str) -> str:
             detail="Rating key cannot be empty"
         )
 
-    # Allow alphanumeric, hyphens, underscores (Plex rating key patterns)
-    if not re.match(r'^[a-zA-Z0-9_-]+$', rating_key):
+    # Alphanumeric, hyphens, underscores (Plex/Jellyfin/Emby ids), and '@' for
+    # Silo's per-library keys (<content_id>@silo-<library>, Quirk #240).
+    if not re.match(r'^[a-zA-Z0-9_@-]+$', rating_key):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid rating key format. Must be alphanumeric with optional hyphens/underscores."
+            detail="Invalid rating key format. Must be alphanumeric with optional hyphens, underscores or @."
         )
 
     # Reasonable length limit (prevent DOS)

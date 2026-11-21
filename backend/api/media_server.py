@@ -81,7 +81,7 @@ def api_purge_media_server_cache(server_id: str):
 
 
 class MediaServerTestRequest(BaseModel):
-    type: str  # "plex" | "jellyfin" | "emby"
+    type: str  # "plex" | "jellyfin" | "emby" | "silo"
     url: str
     token: Optional[str] = None    # Plex
     apiKey: Optional[str] = None   # Jellyfin/Emby
@@ -171,6 +171,22 @@ def api_test_media_server_connection(payload: MediaServerTestRequest):
             except Exception:
                 sections = []
         return {"connected": connected, "sections": sections}
+
+    if payload.type == "silo":
+        from ..media_server.silo_client import SiloClient
+        client = SiloClient("test", url=payload.url, api_key=api_key or token or "")
+        connected = client.test_connection()
+        sections = []
+        if connected:
+            try:
+                sections = [{"title": lib.name, "key": lib.id, "type": "movie" if lib.media_type == "movie" else "show"}
+                            for lib in client.list_libraries()]
+            except Exception:
+                sections = []
+        result = {"connected": connected, "sections": sections}
+        if client.last_error:
+            result["error"] = client.last_error
+        return result
 
     raise HTTPException(400, f"Unknown server type: {payload.type}")
 
@@ -262,7 +278,7 @@ def _scan_one_library(client, server_id: str, library_id: str, media_type: str, 
     # The server's own ratings, for overlay audience/critic rating rules.
     from .. import server_ratings
     server_ratings.store(
-        server_id, "jellyfin",  # Jellyfin and Emby; Plex has its own scan
+        server_id, server_ratings.kind_for_client(client),  # Plex has its own scan
         "movie" if media_type == "movie" else "tv",
         [(i.id, i.tmdb_id, getattr(i, "audience_rating", None), getattr(i, "critic_rating", None)) for i in items],
     )

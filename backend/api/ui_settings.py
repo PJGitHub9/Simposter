@@ -459,6 +459,10 @@ def api_ping():
 
 @router.post("/ui-settings")
 def save_ui_settings_endpoint(payload: UISettings, allow_empty_media_servers: bool = False):
+    # Silo rating keys carry no server part (CLAUDE.md Quirk #240), so only one
+    # Silo server can be configured.
+    if sum(1 for s in (payload.mediaServers or []) if getattr(s, "type", None) == "silo") > 1:
+        raise HTTPException(400, "Only one Silo server can be added")
     try:
         # Merge defaults + current + incoming payload to avoid losing fields
         defaults = _default_ui_settings().model_dump(exclude_none=False, exclude_defaults=False, exclude_unset=False)

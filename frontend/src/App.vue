@@ -589,7 +589,12 @@ const sectionTabs = computed<{ title: string; tabs: SectionTab[] } | null>(() =>
   )
   const members = group?.members || [{ serverId: server, libraryId: library }]
   const hasPlex = members.some(m => m.serverId === 'plex-1')
-  const hasNonPlex = members.some(m => m.serverId !== 'plex-1')
+  // Thumb Art needs a Jellyfin/Emby member (Silo has no thumb image).
+  const hasNonPlex = members.some(m => {
+    if (m.serverId === 'plex-1') return false
+    const t = (settings.mediaServers.value || []).find(s => s.id === m.serverId)?.type || m.serverId.split('-')[0]
+    return t === 'jellyfin' || t === 'emby'
+  })
   const p = isTv ? 'tv-' : ''
   const tab = (routeName: string, label: string): SectionTab => ({
     key: routeName, label, to: { name: routeName, query }, active: name === routeName,

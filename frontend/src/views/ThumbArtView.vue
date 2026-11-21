@@ -65,12 +65,18 @@ const headerServerTypes = computed(() => {
 
 // Every Jellyfin/Emby copy of an item: the item itself if it's a Jellyfin/Emby
 // row, plus any linked copies (other_servers) of a merged card.
+// (Silo has no thumb image, so a Silo copy doesn't count.)
+function hasThumbSlot(serverId: string): boolean {
+  if (serverId === 'plex-1') return false
+  const t = settings.mediaServers.value.find(s => s.id === serverId)?.type || serverId.split('-')[0]
+  return t === 'jellyfin' || t === 'emby'
+}
 function nonPlexCopies(item: ThumbArtItem): LinkedServer[] {
   const list: LinkedServer[] = []
   const own = item.server_id || 'plex-1'
-  if (own !== 'plex-1') list.push({ server_id: own, rating_key: item.key })
+  if (hasThumbSlot(own)) list.push({ server_id: own, rating_key: item.key })
   for (const o of item.other_servers || []) {
-    if (o?.server_id && o.server_id !== 'plex-1' && o.rating_key && !list.some(l => l.server_id === o.server_id)) {
+    if (o?.server_id && hasThumbSlot(o.server_id) && o.rating_key && !list.some(l => l.server_id === o.server_id)) {
       list.push({ server_id: o.server_id, rating_key: o.rating_key })
     }
   }

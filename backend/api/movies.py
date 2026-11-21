@@ -1391,12 +1391,28 @@ def api_movie_poster(rating_key: str, request: Request, meta: bool = False, raw:
 
 
 @router.get("/logo/{rating_key}")
-def api_logo(rating_key: str, force_refresh: bool = False):
-    """Serve cached clearlogo file. Pass force_refresh=1 to re-fetch from Plex first."""
+def api_logo(rating_key: str, force_refresh: bool = False, meta: bool = False, is_tv: Optional[bool] = None):
+    """Serve cached clearlogo file. Pass force_refresh=1 to re-fetch from the
+    item's server first; that also updates the saved logo_url (its v= stamp),
+    as api_backdrop() does, so the Logos grid shows the new file. meta=1
+    returns {"url": ...} instead of the bytes (a single card refreshing itself)."""
+    new_url = None
     if force_refresh:
-        fetch_and_cache_logo(rating_key, force_refresh=True)
+        logo_path = fetch_and_cache_logo(rating_key, force_refresh=True)
+        if logo_path:
+            new_url = _logo_cache_url(rating_key, logo_path)
+            try:
+                from .. import database as db_mod
+                if is_tv is None:
+                    with db_mod.get_db() as conn:
+                        is_tv = conn.execute("SELECT 1 FROM tv_cache WHERE rating_key = ?", (rating_key,)).fetchone() is not None
+                (db_mod.update_tv_logo_url if is_tv else db_mod.update_movie_logo_url)(rating_key, new_url)
+            except Exception as e:
+                logger.debug("[LOGO] Failed to update cache after refresh for %s: %s", rating_key, e)
     cached = _logo_cache_path(rating_key)
     if cached:
+        if meta:
+            return JSONResponse({"url": new_url or _logo_cache_url(rating_key, cached)})
         resp = FileResponse(cached)
         # Safe to cache forever, same as posters (_return_file() above): every
         # caller builds this URL via _logo_cache_url()/etc with a `v=<mtime>`

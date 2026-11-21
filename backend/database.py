@@ -2842,6 +2842,21 @@ def _overlay_state_row(r) -> Dict[str, Any]:
     return d
 
 
+def get_overlay_state_by_tmdb(server_id: str, media_type: str, tmdb_id, season_index: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    """The most recently sent tracked poster for a TMDb id on a server, or None."""
+    if not tmdb_id:
+        return None
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT server_id, rating_key, season_index FROM overlay_state WHERE server_id = ? AND media_type = ? "
+            "AND tmdb_id = ? AND season_index = ? AND is_collection = 0 ORDER BY updated_at DESC LIMIT 1",
+            (server_id, media_type, int(tmdb_id), _season_db(season_index)),
+        ).fetchone()
+    if not row:
+        return None
+    return get_overlay_state(row["server_id"], row["rating_key"], season_index)
+
+
 def get_overlay_states(pairs: List[tuple]) -> List[Dict[str, Any]]:
     """Every tracked poster in the given (server_id, library_id) pairs."""
     if not pairs:
@@ -4933,6 +4948,48 @@ def get_cached_item_identity(rating_key: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def get_silo_sibling_keys(server_id: str, rating_key: str) -> List[str]:
+    """Silo keeps one title (and one poster) per content id, shown in several
+    libraries; Simposter stores one row per library, keyed
+    `<content_id>@silo-<library>` (Quirk #240). Returns the other libraries'
+    keys for the same title on this server. A season key
+    (`season-<series part>-<n>@silo-<lib>`) has no cache row of its own, so its
+    siblings are the same season under each other library its series row is in."""
+    key = str(rating_key or "")
+    if "@" not in key:
+        return []
+    content_id, lib = key.rsplit("@", 1)
+    out: List[str] = []
+    try:
+        with get_db() as conn:
+            if content_id.startswith("season-"):
+                m = re.match(r"^season-(.+)-(\d+)$", content_id)
+                if not m:
+                    return []
+                series_id = f"series-{m.group(1)}"
+                rows = conn.execute(
+                    "SELECT rating_key FROM tv_cache WHERE server_id = ? AND rating_key LIKE ? ESCAPE '\\'",
+                    (server_id, _like_prefix(series_id + "@"))).fetchall()
+                for (rk,) in rows:
+                    other = rk.rsplit("@", 1)[1]
+                    if other != lib:
+                        out.append(f"{content_id}@{other}")
+            else:
+                for table in ("movie_cache", "tv_cache"):
+                    rows = conn.execute(
+                        f"SELECT rating_key FROM {table} WHERE server_id = ? AND rating_key LIKE ? ESCAPE '\\'",
+                        (server_id, _like_prefix(content_id + "@"))).fetchall()
+                    out.extend(rk for (rk,) in rows if rk != key)
+    except sqlite3.Error as e:
+        logger.debug("[DB] get_silo_sibling_keys(%s) failed: %s", key, e)
+        return []
+    return sorted(set(out))
+
+
+def _like_prefix(prefix: str) -> str:
+    return prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+
+
 def rekey_media_server_item(server_id: str, old_key: str, new_key: str) -> bool:
     """Move a Jellyfin/Emby item's cached rows from its old item id to a new
     one (the server re-imported the file under a new id). Covers the cache
@@ -5218,17 +5275,22 @@ def poster_already_sent(server_id: str, rating_key: str) -> bool:
     the scan sees it for the first time."""
     if not server_id or not rating_key:
         return False
+    # Silo has one poster per title, shared by every library copy (Quirk #240):
+    # a send to any copy counts for all of them.
+    keys = [str(rating_key)]
+    if "@silo-" in keys[0]:
+        keys += get_silo_sibling_keys(server_id, keys[0])
     try:
         with get_db() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                """SELECT 1 FROM poster_history
-                   WHERE server_id = ? AND rating_key = ?
+                f"""SELECT 1 FROM poster_history
+                   WHERE server_id = ? AND rating_key IN ({",".join("?" * len(keys))})
                      AND action IN ('sent_to_plex', 'resent_to_plex', 'sent_to_media_server', 'resent_to_media_server', 'overlay_refresh',
                                     'overlay_only_sent')
                      AND COALESCE(status, 'success') = 'success'
                    LIMIT 1""",
-                (server_id, str(rating_key)),
+                (server_id, *keys),
             )
             return cursor.fetchone() is not None
     except Exception:

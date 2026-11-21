@@ -305,8 +305,16 @@ def _sync_one_item(
         asset_failed = False
         for target_id, target_rating_key in targets_needing.items():
             target_label = target_labels.get(target_id, target_id)
+            t_bytes, t_type = image_bytes, content_type
+            if asset_type == "poster" and not is_collection:
+                # "Media server" overlay rule: a poster Simposter sent to the
+                # source is rendered again for a target where the rule differs.
+                from ..overlay_refresh import render_for_server
+                alt = render_for_server(source_server_id, source_rating_key, None, target_id)
+                if alt:
+                    t_bytes, t_type = alt
 
-            def _upload(item_key, _target_id=target_id):
+            def _upload(item_key, _target_id=target_id, t_bytes=t_bytes, t_type=t_type):
                 if asset_type == "poster":
                     # Reuses the exact verify-after-upload diagnostic
                     # media_server_send.py's api_send_poster() already has
@@ -319,10 +327,10 @@ def _sync_one_item(
                     # this treatment yet -- only posters have ever needed it
                     # in a real report so far.
                     from .media_server_send import _upload_poster_and_verify
-                    _upload_poster_and_verify(target_clients[_target_id], _target_id, item_key, image_bytes, content_type, is_collection=is_collection)
+                    _upload_poster_and_verify(target_clients[_target_id], _target_id, item_key, t_bytes, t_type, is_collection=is_collection)
                 else:
                     target_clients[_target_id].upload_image(
-                        item_key, _ASSET_TYPE_MAP[asset_type], image_bytes, content_type,
+                        item_key, _ASSET_TYPE_MAP[asset_type], t_bytes, t_type,
                         is_collection=is_collection,
                     )
             try:
@@ -343,6 +351,10 @@ def _sync_one_item(
                 item_touched = True
                 asset_copied = True
                 logger.info("[MIRROR] %s --> %s: %s - %s", source_label, target_label, asset_label, title_display)
+                if not is_collection and asset_type in ("poster", "logo", "backdrop"):
+                    # Show the copied image on Simposter's own pages straight away.
+                    from .media_server_send import refresh_local_art_cache
+                    refresh_local_art_cache(str(target_rating_key), asset_type, t_bytes, t_type)
                 if source_server_id:
                     try:
                         db.record_mirror_sync(source_server_id, source_rating_key, asset_type,

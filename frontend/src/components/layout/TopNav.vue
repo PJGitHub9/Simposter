@@ -121,7 +121,7 @@ const mediaServerLabel = (s: MediaServerStatus) => {
   const saved = settingsStore.savedMediaServers.value.find(m => m.id === s.server_id)
   if (saved?.name && saved.name.trim()) return saved.name.trim()
   if (s.name && s.name.trim()) return s.name.trim()
-  return s.type === 'jellyfin' ? 'Jellyfin' : s.type === 'emby' ? 'Emby' : s.type
+  return s.type === 'jellyfin' ? 'Jellyfin' : s.type === 'emby' ? 'Emby' : s.type === 'silo' ? 'Silo' : s.type
 }
 
 const mediaServerTitle = (s: MediaServerStatus) => {

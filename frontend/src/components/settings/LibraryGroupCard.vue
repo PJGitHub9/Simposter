@@ -337,9 +337,9 @@ const labelChoices = computed(() => {
   return [...set].sort((a, b) => a.localeCompare(b))
 })
 
-// Plex, then Jellyfin, then Emby, as in the edit view.
+// Plex, then Jellyfin, Emby and Silo, as in the edit view.
 const summaryMembers = computed(() => {
-  const order = ['plex', 'jellyfin', 'emby']
+  const order = ['plex', 'jellyfin', 'emby', 'silo']
   const rank = (m: LibraryGroupMember) => { const i = order.indexOf(serverTypeFor(m.serverId)); return i === -1 ? 9 : i }
   return [...props.group.members].sort((x, y) => rank(x) - rank(y))
 })
@@ -454,6 +454,7 @@ const serverRowDefs = [
   { type: 'plex', label: 'Plex' },
   { type: 'jellyfin', label: 'Jellyfin' },
   { type: 'emby', label: 'Emby' },
+  { type: 'silo', label: 'Silo' },
 ] as const
 const serverRows = computed(() =>
   serverRowDefs
@@ -811,6 +812,7 @@ function removeGroup() {
 .summary-type.plex { color: #e5a00d; background: rgba(229, 160, 13, 0.14); }
 .summary-type.jellyfin { color: #aa5cc3; background: rgba(170, 92, 195, 0.14); }
 .summary-type.emby { color: #52b54b; background: rgba(82, 181, 75, 0.14); }
+.summary-type.silo { color: #4f8fd6; background: rgba(79, 143, 214, 0.14); }
 .summary-muted { color: var(--text-secondary); font-size: 0.85rem; }
 .summary-text {
   margin: 0;
@@ -945,6 +947,7 @@ function removeGroup() {
 .server-type-badge.plex { background: rgba(229, 160, 13, 0.15); color: #e5a00d; }
 .server-type-badge.jellyfin { background: rgba(170, 92, 195, 0.15); color: #aa5cc3; }
 .server-type-badge.emby { background: rgba(82, 181, 75, 0.15); color: #52b54b; }
+.server-type-badge.silo { background: rgba(79, 143, 214, 0.15); color: #4f8fd6; }
 
 .add-linked-row {
   display: flex;

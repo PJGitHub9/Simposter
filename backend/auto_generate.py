@@ -567,8 +567,13 @@ def _deliver_cached_plex_render(server_id: str, library_id: str, media_type: str
     notify_bytes = None
     for item_id, path, season_index in targets:
         try:
-            data = path.read_bytes()
-            client.upload_image(item_id, ImageType.POSTER, data, "image/jpeg")
+            data, ct = path.read_bytes(), "image/jpeg"
+            # "Media server" overlay rule: render for this server when it differs from Plex's.
+            from .overlay_refresh import render_for_server
+            alt = render_for_server("plex-1", None, season_index, server_id, tmdb_id=tmdb_id, media_type=media_type)
+            if alt:
+                data, ct = alt
+            client.upload_image(item_id, ImageType.POSTER, data, ct)
             sent = True
             if season_index is None or notify_bytes is None:
                 notify_bytes = data

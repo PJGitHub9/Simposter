@@ -70,7 +70,7 @@ const serverBadges = computed(() => {
 })
 
 function displayServerLabel(type: string): string {
-  return type === 'jellyfin' ? 'Jellyfin' : type === 'emby' ? 'Emby' : type === 'plex' ? 'Plex' : type
+  return type === 'jellyfin' ? 'Jellyfin' : type === 'emby' ? 'Emby' : type === 'plex' ? 'Plex' : type === 'silo' ? 'Silo' : type
 }
 
 // Real official brand marks (simple-icons, MIT-licensed for exactly this kind

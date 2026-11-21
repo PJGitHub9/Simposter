@@ -233,6 +233,8 @@ const previewItemLists = ref<string[]>([])
 const previewCriticRating = ref('7.5')
 const previewDaysAdded = ref('3')
 const previewShowStatus = ref('continuing')
+// Example "Media server" the poster is being sent to (rule field media_server).
+const previewMediaServer = ref('')
 const previewContentRating = ref('PG-13')
 const previewNetwork = ref('HBO')
 const previewStreaming = ref('Netflix, 8')
@@ -1290,8 +1292,16 @@ watch(showHiddenInPreview, v => {
 })
 
 /** Context from a real item's data. */
+/** [server id, server type] for the example "Sending to" server. */
+const previewServerValues = (): string[] => {
+  const servers = settingsStore.savedMediaServers.value || []
+  const id = previewMediaServer.value || servers[0]?.id || 'plex-1'
+  const type = servers.find(s => s.id === id)?.type || id.split('-')[0] || 'plex'
+  return [id, type]
+}
+
 const itemContext = (d: ItemData, mediaType: string, title?: string) => buildContext({
-  ...d.metadata, media_type: mediaType, labels: d.labels, file_paths: d.file_paths, lists: d.lists,
+  ...d.metadata, media_type: mediaType, media_server: previewServerValues(), labels: d.labels, file_paths: d.file_paths, lists: d.lists,
   ...(title ? { movie_title: title } : {}),
   ...(previewToday.value ? { today: previewToday.value } : {}),
 })
@@ -1306,6 +1316,7 @@ const exampleContext = (overrides: Record<string, string> = {}, title?: string) 
   if (String(previewCriticRating.value).trim() !== '') meta.critic_rating = Number(previewCriticRating.value)
   if (String(previewDaysAdded.value).trim() !== '') meta.days_since_added = Number(previewDaysAdded.value)
   if (previewShowStatus.value) meta.show_status = previewShowStatus.value
+  meta.media_server = previewServerValues()
   if (previewNetwork.value.trim()) meta.network = [previewNetwork.value.trim()]
   // Example content rating / streaming service, for every country a rule asks about.
   for (const c of [...(selectedConfig.value?.elements || []).flatMap(el => el.conditions || []), ...(selectedConfig.value?.conditions || [])]) {
@@ -2188,7 +2199,7 @@ watch(previewAudioLanguage, () => { nextTick(renderPreview) })
 watch(previewEdition, () => { nextTick(renderPreview) })
 watch(previewStreamingPlatform, () => { nextTick(renderPreview) })
 watch(previewStudio, () => { nextTick(renderPreview) })
-watch([previewLabels, previewFilePath, previewRating, previewCriticRating, previewDaysAdded, previewShowStatus, previewContentRating, previewNetwork, previewStreaming, previewToday, previewAddedDate, previewReleaseDate, previewRemovalDate, previewMaintainerrCollection, previewOnLists, previewItemLabels, previewItemFilePaths, previewItemLists], () => { nextTick(renderPreview) })
+watch([previewLabels, previewFilePath, previewRating, previewCriticRating, previewDaysAdded, previewShowStatus, previewMediaServer, previewContentRating, previewNetwork, previewStreaming, previewToday, previewAddedDate, previewReleaseDate, previewRemovalDate, previewMaintainerrCollection, previewOnLists, previewItemLabels, previewItemFilePaths, previewItemLists], () => { nextTick(renderPreview) })
 // Re-render when the simposter asset map loads (it arrives async after mount)
 watch(simposterAssetMap, () => { renderPreview() })
 // A new rating/list/badge type in the layers: fetch it for the real items being previewed.
@@ -2218,7 +2229,7 @@ const CONDITION_TEST_FIELD: Record<string, string> = {
   audio_channels: 'audio_channels', audio_language: 'audio_language', edition: 'edition', label: 'labels', labels: 'labels',
   filepath: 'filepath', file_path: 'filepath', filename: 'filepath', audience_rating: 'audience_rating',
   critic_rating: 'critic_rating', list: 'list', mdblist_list: 'list', streaming_platform: 'platform', studio: 'studio',
-  days_since_added: 'days_since_added', show_status: 'show_status',
+  days_since_added: 'days_since_added', show_status: 'show_status', media_server: 'media_server',
   added_date: 'added_date', release_date: 'release_date', days_since_release: 'release_date',
   content_rating: 'content_rating', network: 'network', streaming: 'streaming',
   removal_date: 'removal_date', days_until_removal: 'removal_date', leaving: 'removal_date', leaving_date: 'removal_date',
@@ -3543,6 +3554,12 @@ onMounted(() => {
 
                 <!-- Preview value switchers -->
                 <div v-if="previewMode === 'item' && selectedMovie" class="preview-values item-values">
+                  <label v-if="showTest('media_server')" class="preview-value-field">
+                    <span>Sending to</span>
+                    <select v-model="previewMediaServer">
+                      <option v-for="s in settingsStore.savedMediaServers.value || []" :key="s.id" :value="s.id">{{ mediaServerLabel(s.id, settingsStore.savedMediaServers.value || []) }}</option>
+                    </select>
+                  </label>
                   <div v-for="[field, label] in [['video_resolution','Res'],['video_codec','VCodec'],['audio_codec','ACodec'],['audio_channels','Ch'],['audio_language','Lang'],['edition','Edition']]" :key="field" class="preview-value-field">
                     <span>{{ label }}</span>
                     <span class="item-val">{{ previewItemMetadata[(field as string)] || '—' }}</span>
@@ -3647,6 +3664,12 @@ onMounted(() => {
                     <label v-if="showTest('maintainerr_collection')" class="preview-value-field">
                       <span>Maintainerr collection</span>
                       <input type="text" v-model="previewMaintainerrCollection" placeholder="Leaving Soon" />
+                    </label>
+                    <label v-if="showTest('media_server')" class="preview-value-field">
+                      <span>Sending to</span>
+                      <select v-model="previewMediaServer">
+                        <option v-for="s in settingsStore.savedMediaServers.value || []" :key="s.id" :value="s.id">{{ mediaServerLabel(s.id, settingsStore.savedMediaServers.value || []) }}</option>
+                      </select>
                     </label>
                     <label v-if="showTest('show_status')" class="preview-value-field">
                       <span>Show status</span>

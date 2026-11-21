@@ -364,7 +364,9 @@ def _upload_poster_and_verify(client, server_id: str, item_id: str, image_bytes:
                 "[MEDIA_SERVER_SEND:%s] Poster upload returned success but re-fetching immediately after found NO image at all for item_id=%s (sent %d bytes) -- the upload likely did not actually apply",
                 server_id, item_id, sent_len,
             )
-        elif sent_len > 0 and got_len < sent_len * 0.5:
+        elif sent_len > 0 and got_len < sent_len * 0.5 and type(client).__name__ != "SiloClient":
+            # (Silo always stores its own WebP, so its copy is normally much
+            # smaller than the PNG sent; a size check means nothing there.)
             logger.warning(
                 "[MEDIA_SERVER_SEND:%s] Poster upload returned success but re-fetched image (%d bytes) is far smaller than what was sent (%d bytes) for item_id=%s -- may still be showing an old/different image",
                 server_id, got_len, sent_len, item_id,
@@ -453,6 +455,30 @@ def _cache_logo_after_upload(item_id: str, image_bytes: bytes, content_type: str
     return new_logo_url
 
 
+def refresh_local_art_cache(item_id: str, asset: str, image_bytes: bytes, content_type: str) -> None:
+    """After an upload that didn't go through the send endpoints (Media Mirror,
+    Silo's shared-poster siblings), point Simposter's own cached poster, logo
+    or backdrop for this item at the image just sent, so the Movies/Logos/
+    Backdrops pages show it without waiting for the next scan. Never raises."""
+    try:
+        from .. import database as db
+        if asset == "poster":
+            _cache_poster_after_upload(item_id, image_bytes, content_type)
+            return
+        with db.get_db() as conn:
+            is_tv = conn.execute("SELECT 1 FROM tv_cache WHERE rating_key = ?", (str(item_id),)).fetchone() is not None
+        if asset == "logo":
+            _cache_logo_after_upload(item_id, image_bytes, content_type, is_tv=is_tv)
+        elif asset == "backdrop":
+            from .movies import _save_art_cache, _art_cache_url, _art_thumbnail
+            saved = _save_art_cache(item_id, image_bytes, content_type)
+            if saved:
+                _art_thumbnail(item_id, saved)
+                (db.update_tv_art_url if is_tv else db.update_movie_art_url)(item_id, _art_cache_url(item_id, saved))
+    except Exception as e:
+        logger.debug("[MEDIA_SERVER_SEND] Could not refresh the local %s cache for %s: %s", asset, item_id, e)
+
+
 def _record_editor_render(req: "MediaServerSendRequest", server_id: str, item_id: str, current_key: Optional[str] = None) -> None:
     """Track a manual-editor poster sent to Jellyfin/Emby for overlay refresh.
     Metadata is rebuilt the same way the preview built it (from the item the
@@ -493,6 +519,43 @@ def _record_editor_render(req: "MediaServerSendRequest", server_id: str, item_id
 
 
 @router.post("/send-poster")
+def _editor_render_for_server(req: "MediaServerSendRequest", server_id: str):
+    """The editor's poster rendered again for `server_id` when an overlay's
+    "Media server" rule comes out differently there than for the server the
+    preview was made for. None means send the preview as it is."""
+    r = req.render or {}
+    template_id = r.get("template_id")
+    if not template_id or not r.get("background_url"):
+        return None
+    try:
+        from .. import database as db
+        from ..overlay_engine import overlay_elements_for_options, media_server_outcome
+        opts = dict(r.get("options") or {})
+        elements = overlay_elements_for_options(opts, template_id)
+        if not any(str(c.get("field") or "").lower() == "media_server"
+                   for e in elements for c in (e.get("conditions") or []) if isinstance(c, dict)):
+            return None
+        meta_key = str(r.get("meta_rating_key") or req.rating_key)
+        preview_server = db.get_server_id_for_rating_key(meta_key) or "plex-1"
+        if media_server_outcome(elements, preview_server) == media_server_outcome(elements, server_id):
+            return None
+        from ..config import inject_plex_media_metadata
+        from ..rendering import render_poster_image
+        opts["movie_title"] = r.get("title") or ""
+        opts["movie_year"] = r.get("year") or ""
+        if r.get("preset_id"):
+            opts["preset_id"] = r["preset_id"]
+        is_tv = r.get("media_type") in ("tv", "tv-show") or req.is_tv
+        is_collection = r.get("media_type") == "collection" or db.is_collection_key(meta_key)
+        inject_plex_media_metadata(opts, meta_key, tmdb_id=None if is_collection else r.get("tmdb_id"), is_tv=is_tv)
+        opts["metadata"] = dict(opts.get("metadata") or {}, media_server=server_id)
+        opts["skip_fallback"] = True
+        return render_poster_image(template_id, r["background_url"], r.get("logo_url"), opts)
+    except Exception as e:
+        logger.warning("[MEDIA_SERVER_SEND] Couldn't render the poster for %s, sending the preview: %s", server_id, e)
+        return None
+
+
 def api_send_poster(req: MediaServerSendRequest):
     server_id, client = _resolve_non_plex_client(req.rating_key, req.server_id)
     image_bytes, _content_type = _resolve_image_bytes(req)
@@ -506,7 +569,7 @@ def api_send_poster(req: MediaServerSendRequest):
     # safety net for any destination. Takes a PIL Image, not raw bytes (unlike
     # normalize_logo_for_plex()/normalize_backdrop_for_plex() below) -- decode
     # first.
-    img = Image.open(BytesIO(image_bytes))
+    img = _editor_render_for_server(req, server_id) or Image.open(BytesIO(image_bytes))
     image_bytes, content_type = encode_poster_for_plex(img, for_plex=False)
 
     try:
@@ -627,6 +690,7 @@ def sync_render_to_linked_servers(
     tvdb_id: Optional[int] = None,
     source_server_id: str = "plex-1",
     known_item_ids: Optional[Dict[str, str]] = None,
+    poster_for_server=None,
 ) -> List[Dict[str, str]]:
     """Sends already-rendered poster/logo bytes (whichever are given -- both
     are optional and independent) to whichever of `target_ids` are BOTH
@@ -764,8 +828,15 @@ def sync_render_to_linked_servers(
                 continue
             did_something = False
             if poster_bytes:
-                _upload_poster_and_verify(client, server_id, item_id, poster_bytes, poster_content_type or "image/png")
-                _cache_poster_after_upload(item_id, poster_bytes, poster_content_type or "image/png", is_tv=(media_type == "tv"))
+                # A poster whose overlays use the "Media server" rule may need
+                # its own render for this server (poster_for_server returns it).
+                p_bytes, p_ct = poster_bytes, poster_content_type or "image/png"
+                if poster_for_server is not None:
+                    alt = poster_for_server(server_id)
+                    if alt:
+                        p_bytes, p_ct = alt
+                _upload_poster_and_verify(client, server_id, item_id, p_bytes, p_ct)
+                _cache_poster_after_upload(item_id, p_bytes, p_ct, is_tv=(media_type == "tv"))
                 did_something = True
             if logo_bytes:
                 client.upload_image(item_id, ImageType.LOGO, logo_bytes, logo_content_type or "image/png")

@@ -1,6 +1,6 @@
 # <img src=".github/icon-512.png" alt="Simposter logo" width="50" height="50"> Simposter
 
-> **Template-based poster generation for Plex, Jellyfin and Emby** — Create clean, consistent custom posters with TMDb/TVDB/Fanart.tv artwork, overlay badges, and full batch automation.
+> **Template-based poster generation for Plex, Jellyfin, Emby and Silo** — Create clean, consistent custom posters with TMDb/TVDB/Fanart.tv artwork, overlay badges, and full batch automation.
 
 ![Simposter](docs/images/movies.png)
 
@@ -10,7 +10,7 @@
 ## Features
 
 - **Live-preview poster editor** for movies, TV shows (per-season, independent artwork/logo/text), and **Collections** (two dedicated creators, including a Kometa-style one)
-- **Plex, Jellyfin and Emby** — use any combination (Plex not required), link the same library across servers, and send artwork to several servers at once
+- **Plex, Jellyfin, Emby and Silo** — use any combination (Plex not required), link the same library across servers, and send artwork to several servers at once
 - **Media Mirror** — keep posters, logos and backdrops in sync from one server to the others, on demand or on a schedule
 - **Multi-source artwork** — TMDb, TVDB, Fanart.tv, with configurable priority and fallback rules
 - **Overlays** — resolution, codec, audio, edition, studio and streaming badges, images and text with per-layer rules (file name, ratings, lists, show status, days since added…)
@@ -35,7 +35,7 @@ Full breakdown of all of this in the docs below.
 |---|---|
 | ![Poster editor](docs/images/editor-movie.png) **Poster editor**: live preview, posters/logos from TMDb, Fanart.tv and TVDB, drag the logo and text boxes | ![TV editor](docs/images/editor-tv.png) **TV shows**: series and season posters, each with its own settings |
 | ![Overlay editor](docs/images/overlay-editor.png) **Overlays**: badges, ratings and text with rules, previewed on your own titles | ![Batch Edit](docs/images/batch-edit.png) **Batch Edit**: one preset across a whole library, sent to every server |
-| ![Library groups](docs/images/settings-libraries.png) **Library groups**: Plex, Jellyfin and Emby libraries linked as one | ![Setup wizard](docs/images/wizard-look.png) **Setup wizard**: servers, libraries, keys and your default look in a few minutes |
+| ![Library groups](docs/images/settings-libraries.png) **Library groups**: Plex, Jellyfin, Emby and Silo libraries linked as one | ![Setup wizard](docs/images/wizard-look.png) **Setup wizard**: servers, libraries, keys and your default look in a few minutes |
 
 A full tour of every page is in the **[User Guide](docs/USER_GUIDE.md)**.
 
@@ -63,7 +63,7 @@ Prefer not to build locally? Pre-built images are published to [ghcr.io/pjgithub
 |-----|--------------|
 | **[Getting Started](docs/GETTING_STARTED.md)** | Install (Docker/Unraid/local dev), the setup wizard step by step, your first poster, Settings reference, environment variables |
 | **[User Guide](docs/USER_GUIDE.md)** | A tour of every page with screenshots, plus how-to guides: first poster, whole-library batch, automatic posters, badges, keeping Plex and Jellyfin in sync |
-| **[Media Servers](docs/MEDIA_SERVERS.md)** | Plex, Jellyfin and Emby: connecting servers, library groups, merged browsing, multi-server sending, Media Mirror, collection matching, server maintenance |
+| **[Media Servers](docs/MEDIA_SERVERS.md)** | Plex, Jellyfin, Emby and Silo: connecting servers, library groups, merged browsing, multi-server sending, Media Mirror, collection matching, server maintenance |
 | **[Overlays](docs/OVERLAYS.md)** | Building overlays and their rules, text values, Kometa import, MDBList ratings and lists, Overlay Refresh, live Kometa files |
 | **[Collections & Poster Guide](docs/COLLECTIONS_AND_POSTERS.md)** | Templates/presets, logos, overlay badges, batch processing, the smart retry queue, and Collections (including why a Fanart.tv key matters) |
 | **[Poster API](docs/POSTER_API.md)** | Serving posters to other apps by TMDb id, the key, URL forms, responses, pinning, running without a media server |

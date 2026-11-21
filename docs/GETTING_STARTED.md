@@ -1,6 +1,6 @@
 # Getting Started
 
-This walks through installing Simposter, the first-launch setup wizard, generating your first poster, and a reference for every Settings tab. For a tour of every page, see the [User Guide](USER_GUIDE.md). For connecting Plex, Jellyfin and/or Emby and linking their libraries, see [MEDIA_SERVERS.md](MEDIA_SERVERS.md). For webhook setup (Radarr/Sonarr/Tautulli), see [WEBHOOKS.md](WEBHOOKS.md). For templates, logos and Collections, see [COLLECTIONS_AND_POSTERS.md](COLLECTIONS_AND_POSTERS.md). For overlays (badges, rules, Kometa import, MDBList), see [OVERLAYS.md](OVERLAYS.md).
+This walks through installing Simposter, the first-launch setup wizard, generating your first poster, and a reference for every Settings tab. For a tour of every page, see the [User Guide](USER_GUIDE.md). For connecting Plex, Jellyfin, Emby and/or Silo and linking their libraries, see [MEDIA_SERVERS.md](MEDIA_SERVERS.md). For webhook setup (Radarr/Sonarr/Tautulli), see [WEBHOOKS.md](WEBHOOKS.md). For templates, logos and Collections, see [COLLECTIONS_AND_POSTERS.md](COLLECTIONS_AND_POSTERS.md). For overlays (badges, rules, Kometa import, MDBList), see [OVERLAYS.md](OVERLAYS.md).
 
 ---
 
@@ -146,7 +146,7 @@ Every step can be changed later in **Settings**, and Settings → Advanced → *
 
 <img src="images/wizard-servers.png" alt="Which media servers" width="420">
 
-Pick the servers you use: Plex, Jellyfin and/or Emby, in any combination.
+Pick the servers you use: Plex, Jellyfin, Emby and/or Silo, in any combination.
 
 Or pick **No media server — use Simposter as a poster provider**. The wizard then only asks for your API keys and default look, sets up the [Poster API](POSTER_API.md), and ends on the Poster API page. Connecting a server is still recommended: without one there are no file-based badges (4K, HDR, audio), no ratings from the server and nothing that keeps posters up to date ([why](POSTER_API.md#why-connect-a-media-server)).
 
@@ -244,7 +244,7 @@ The [User Guide](USER_GUIDE.md) explains every part of the editor and the other 
 | **General** | Theme, poster display density, deduplication, default sort, TMDb/TVDB/Fanart API keys |
 | **Ratings & Lists** | Where overlay audience/critic ratings come from (your media server, TMDb or MDBList), the MDBList key, WeTrakr, SIMKL and Floppy lists, and Maintainerr (see [OVERLAYS.md](OVERLAYS.md#ratings)) |
 | **Libraries** | **Library groups** (link the same library across Plex/Jellyfin/Emby — see [MEDIA_SERVERS.md](MEDIA_SERVERS.md)), each shown as a one-line summary; **Edit** opens its auto-generate preset, Merge items, poster mode rules (Leave alone / Overlay only from Plex labels or Radarr/Sonarr tags) and the Plex labels to remove when sending; **Kometa compatibility** (always removes the "Overlay" label for every Plex library), add/remove libraries (removing purges that library's cache/DB rows, keeping History) |
-| **Media Servers** | Add, name, test and remove Plex, Jellyfin and Emby servers (removing one purges its cached data on save); Radarr and Sonarr (tags for poster mode rules); turn the [Poster API](POSTER_API.md) on or off |
+| **Media Servers** | Add, name, test and remove Plex, Jellyfin, Emby and Silo servers (removing one purges its cached data on save); Radarr and Sonarr (tags for poster mode rules); turn the [Poster API](POSTER_API.md) on or off |
 | **Output** | Save-location path templates (with Kometa-compatible presets, including a `{folder}` variable that matches Radarr/Sonarr's real on-disk folder names) for movies, TV shows, and collections; batch subfolder option; image format/quality |
 | **Automation** | **Logos** (send logos with posters by default), **Webhooks** (auto-send to your media servers, season posters, webhook secret) and the webhook URL generator; **Items that already have a poster** (regenerate or resend, and **Reuse Cached Poster For (days)**, which protects a hand-tuned poster when Radarr/Sonarr or a similar tool makes the server re-match an item under a new ID); the **Retry queue**; **Plex labels** (an optional label added after a poster is sent) |
 | **Performance** | Concurrent renders (up to 10 — see the tip below), overlay cache, API rate limits, cache management |

@@ -10,6 +10,29 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.90',
+    date: '2026-11-20',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Silo is now a supported media server: add it in Settings → Media Servers, link its libraries in library groups, and send posters, logos and backdrops to it.',
+          'A title Silo has in two libraries (for example HD and 4K) shows in both, each with its own quality badges. Silo keeps one poster per title, so sending from either library updates it for both.',
+          'Scans notice a logo or backdrop changed in Silo and download the new one.',
+          'If you use Simposter’s overlays, turn off Silo’s own card overlays so badges don’t appear twice.',
+          'New overlay rule "Media server": show or hide a layer depending on the server the poster is sent to, for example no badges on Silo. A poster going to several servers is drawn once per different result.',
+        ],
+      },
+      {
+        title: 'Known limits',
+        items: [
+          'Silo can’t take square art, thumb art, season logos or collection artwork from other apps, so those can’t be sent to Silo; the Send buttons for Silo collections are turned off.',
+          'Silo lists at most 20 box sets per library, so Collections shows no more than that.',
+        ],
+      },
+    ],
+  },
+  {
     version: 'v1.8.88',
     date: '2026-11-19',
     sections: [

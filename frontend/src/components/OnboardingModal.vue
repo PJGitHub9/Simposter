@@ -57,12 +57,13 @@ const step = ref<Step>('welcome')
 const wantsPlex = ref(true)
 const wantsJellyfinServer = ref(false)
 const wantsEmbyServer = ref(false)
+const wantsSiloServer = ref(false)
 // 'connect' (default) is the original flow. 'none' = no media server: Simposter runs as a
 // Poster API provider (welcome -> servers -> apikeys -> posterapi -> finish). On a re-run
 // with servers already configured this never removes them -- it only configures the Poster API.
 const connectMode = ref<'connect' | 'none'>('connect')
 const noServer = computed(() => connectMode.value === 'none')
-const canAdvanceServers = computed(() => noServer.value || wantsPlex.value || wantsJellyfinServer.value || wantsEmbyServer.value)
+const canAdvanceServers = computed(() => noServer.value || wantsPlex.value || wantsJellyfinServer.value || wantsEmbyServer.value || wantsSiloServer.value)
 
 // visibleSteps -- the step sequence for this run. Every step currently always
 // shows (the per-server choice lives inside 'connect'), but goNext()/goBack()
@@ -135,17 +136,27 @@ const embyError = ref('')
 const embyOk = ref(false)
 const addedEmbyServer = ref<MediaServerEntry | null>(null)
 
+const siloUrl = ref('')
+const siloApiKey = ref('')
+const testingSilo = ref(false)
+const siloError = ref('')
+const siloOk = ref(false)
+const addedSiloServer = ref<MediaServerEntry | null>(null)
+
 // On a re-run: the saved Jellyfin/Emby server. Its key comes back masked; a
 // test sends the server's id so Simposter uses the saved key, which only
 // works with the saved address (sameOrigin). Changing the address clears it.
 type SavedServer = { id: string; url: string } | null
 const savedJellyfin = ref<SavedServer>(null)
 const savedEmby = ref<SavedServer>(null)
+const savedSilo = ref<SavedServer>(null)
 // Takes the type, not the refs: refs passed from the template arrive unwrapped.
-const onServerUrlInput = (type: 'jellyfin' | 'emby') => {
+const onServerUrlInput = (type: 'jellyfin' | 'emby' | 'silo') => {
   const [saved, url, keyRef, okRef] = type === 'jellyfin'
     ? [savedJellyfin.value, jellyfinUrl.value, jellyfinApiKey, jellyfinOk]
-    : [savedEmby.value, embyUrl.value, embyApiKey, embyOk]
+    : type === 'silo'
+      ? [savedSilo.value, siloUrl.value, siloApiKey, siloOk]
+      : [savedEmby.value, embyUrl.value, embyApiKey, embyOk]
   okRef.value = false
   if (saved && keyNeedsReentry(url, keyRef.value, saved.url)) keyRef.value = ''
 }
@@ -154,7 +165,7 @@ const onServerUrlInput = (type: 'jellyfin' | 'emby') => {
 // independent state (separate url/key/status per type), this just avoids two
 // copies of the same fetch-and-interpret-the-response block.
 async function testMediaServerGeneric(
-  type: 'jellyfin' | 'emby', url: string, apiKey: string,
+  type: 'jellyfin' | 'emby' | 'silo', url: string, apiKey: string,
   testingRef: typeof testingJellyfin, errorRef: typeof jellyfinError,
   okRef: typeof jellyfinOk, addedRef: typeof addedJellyfinServer, saved: SavedServer,
 ) {
@@ -185,6 +196,7 @@ async function testMediaServerGeneric(
 }
 const testJellyfin = () => testMediaServerGeneric('jellyfin', jellyfinUrl.value, jellyfinApiKey.value, testingJellyfin, jellyfinError, jellyfinOk, addedJellyfinServer, savedJellyfin.value)
 const testEmby = () => testMediaServerGeneric('emby', embyUrl.value, embyApiKey.value, testingEmby, embyError, embyOk, addedEmbyServer, savedEmby.value)
+const testSilo = () => testMediaServerGeneric('silo', siloUrl.value, siloApiKey.value, testingSilo, siloError, siloOk, addedSiloServer, savedSilo.value)
 
 // ── Libraries step ─────────────────────────────────────────────────────────
 const movieLibSections = computed(() => plexSections.value.filter(s => s.type === 'movie'))
@@ -801,12 +813,14 @@ const savePosterApiStep = async (): Promise<boolean> => {
 const connectedCount = computed(() =>
   (wantsPlex.value && plexOk.value ? 1 : 0) +
   (wantsJellyfinServer.value && jellyfinOk.value ? 1 : 0) +
-  (wantsEmbyServer.value && embyOk.value ? 1 : 0)
+  (wantsEmbyServer.value && embyOk.value ? 1 : 0) +
+  (wantsSiloServer.value && siloOk.value ? 1 : 0)
 )
 const untestedServers = () => [
   wantsPlex.value && !plexOk.value && plexUrl.value.trim() && plexToken.value.trim() ? testPlex : null,
   wantsJellyfinServer.value && !jellyfinOk.value && jellyfinUrl.value.trim() && jellyfinApiKey.value.trim() ? testJellyfin : null,
   wantsEmbyServer.value && !embyOk.value && embyUrl.value.trim() && embyApiKey.value.trim() ? testEmby : null,
+  wantsSiloServer.value && !siloOk.value && siloUrl.value.trim() && siloApiKey.value.trim() ? testSilo : null,
 ].filter((t): t is () => Promise<void> => !!t)
 const canAdvanceConnect = computed(() => connectedCount.value > 0 || untestedServers().length > 0)
 
@@ -871,12 +885,14 @@ const goNextInner = async () => {
       await Promise.all(pending.map(t => t()))
       if ((wantsPlex.value && !plexOk.value && plexError.value)
         || (wantsJellyfinServer.value && !jellyfinOk.value && jellyfinError.value)
-        || (wantsEmbyServer.value && !embyOk.value && embyError.value)) return
+        || (wantsEmbyServer.value && !embyOk.value && embyError.value)
+        || (wantsSiloServer.value && !siloOk.value && siloError.value)) return
     }
     // A picked server left empty is skipped for this run.
     if (wantsPlex.value && !plexOk.value) wantsPlex.value = false
     if (wantsJellyfinServer.value && !jellyfinOk.value) wantsJellyfinServer.value = false
     if (wantsEmbyServer.value && !embyOk.value) wantsEmbyServer.value = false
+    if (wantsSiloServer.value && !siloOk.value) wantsSiloServer.value = false
     if (plexOk.value) initLibraries()
     // Save Jellyfin/Emby immediately, same reasoning as the Plex early-save below — don't let a
     // real, successfully-tested server sit only in local component state until
@@ -887,6 +903,7 @@ const goNextInner = async () => {
     const toAdd = [
       jellyfinOk.value ? addedJellyfinServer.value : null,
       embyOk.value ? addedEmbyServer.value : null,
+      siloOk.value ? addedSiloServer.value : null,
     ].filter((s): s is MediaServerEntry => !!s)
     if (toAdd.length) {
       const addIds = new Set(toAdd.map(s => s.id))
@@ -1093,6 +1110,13 @@ onMounted(() => {
     savedEmby.value = { id: existingEmby.id, url: existingEmby.url }
     if (existingEmby.apiKey) embyApiKey.value = existingEmby.apiKey  // masked
   }
+  const existingSilo = settings.mediaServers.value.find(s => s.type === 'silo')
+  if (existingSilo) {
+    wantsSiloServer.value = true
+    siloUrl.value = existingSilo.url
+    savedSilo.value = { id: existingSilo.id, url: existingSilo.url }
+    if (existingSilo.apiKey) siloApiKey.value = existingSilo.apiKey  // masked
+  }
 })
 </script>
 
@@ -1157,6 +1181,13 @@ onMounted(() => {
             <img src="/icons/emby.svg" class="ob-server-icon" alt="" />
             Emby
           </label>
+          <label class="ob-lib-row" :class="{ selected: wantsSiloServer }" @click="wantsSiloServer = !wantsSiloServer">
+            <span class="ob-checkbox" :class="{ checked: wantsSiloServer }">
+              <svg v-if="wantsSiloServer" width="12" height="12" viewBox="0 0 12 12" fill="none"><polyline points="2,6 5,9 10,3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </span>
+            <img src="/icons/silo.svg" class="ob-server-icon" alt="" />
+            Silo
+          </label>
           </template>
           <div class="ob-actions">
             <button class="ob-btn-ghost" @click="goBack">Back</button>
@@ -1217,6 +1248,22 @@ onMounted(() => {
               <button class="ob-btn-secondary" :disabled="testingEmby || !embyUrl || !embyApiKey" @click="testEmby">
                 <span v-if="testingEmby" class="ob-spinner" />
                 {{ testingEmby ? 'Testing...' : 'Test connection' }}
+              </button>
+            </div>
+          </div>
+
+          <div v-if="wantsSiloServer" class="ob-form ob-server-form">
+            <div class="ob-server-heading"><img src="/icons/silo.svg" class="ob-server-icon" alt="" /> Silo</div>
+            <label class="ob-label">Server URL</label>
+            <input v-model="siloUrl" class="ob-input" type="url" placeholder="http://192.168.1.100:8090" @keyup.enter="testSilo" @input="onServerUrlInput('silo')" />
+            <label class="ob-label">API Key</label>
+            <input v-model="siloApiKey" class="ob-input" type="password" placeholder="Silo admin → API keys" @keyup.enter="testSilo" @input="siloOk = false" />
+            <div v-if="siloError" class="ob-error">{{ siloError }}</div>
+            <div v-if="siloOk" class="ob-success">Connected!</div>
+            <div class="ob-actions ob-server-actions">
+              <button class="ob-btn-secondary" :disabled="testingSilo || !siloUrl || !siloApiKey" @click="testSilo">
+                <span v-if="testingSilo" class="ob-spinner" />
+                {{ testingSilo ? 'Testing...' : 'Test connection' }}
               </button>
             </div>
           </div>

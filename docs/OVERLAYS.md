@@ -133,7 +133,7 @@ Every layer, and every overlay as a whole, can have rules. All of a layer's rule
 | **Ratings** | Audience rating (0–10) and critic rating (0–10), from your media server or MDBList ([Ratings](#ratings)). MDBList score, IMDb, Rotten Tomatoes (critics and audience), Metacritic, TMDb, Trakt, Letterboxd need an [MDBList key](#mdblist-ratings-and-lists). |
 | **Lists** | On a list from MDBList, WeTrakr, SIMKL or Floppy (see [Lists from other services](#lists-from-wetrakr-simkl-and-floppy)) |
 | **Dates** | Today's date, date added, days since added, release date, days since release |
-| **Item** | Label (Plex only), movie or show, year, show status (TV), TMDb ID, TVDB ID, title, studio, streaming platform, content rating, network (TV), streaming service |
+| **Item** | Label (Plex only), movie or show, media server, year, show status (TV), TMDb ID, TVDB ID, title, studio, streaming platform, content rating, network (TV), streaming service |
 
 Operators depend on the field:
 
@@ -149,6 +149,7 @@ Notes on some fields:
 - **Days since added** and **Date added** come from the date your last library scan recorded. Use "is at most 7" for a "NEW" badge.
 - **Release date** and **Days since release** come from TMDb (movie release date, or a show's first air date), stored for 30 days. Days since release is below 0 before release.
 - **Show status** is continuing, ended, canceled or upcoming, from TMDb. TV shows only.
+- **Media server** is the server the poster is being sent to: pick a server by name, or any server of a type (any Plex, any Jellyfin, any Emby, any Silo). Use it to leave badges off on a server that draws its own (Silo shows quality badges on its cards): "Media server is none of Any Silo server" on the badge layers. When a poster goes to several servers in one send (Batch Edit, webhooks, the editor's send picker, Media Mirror), Simposter draws it once per different result, so Plex and Jellyfin share one render and Silo gets its own. Overlays without this rule are drawn once, as before. In the preview, **Sending to** picks the server to preview for.
 - **Content rating** is the certification in a country, from TMDb (PG-13 or R in the US, 12A or 15 in GB, TV-MA for US shows). Set the country under the rule (US by default). Plex's spelling with a country prefix (`gb/12A`) matches too.
 - **Network** is a TV show's network from TMDb (HBO, Netflix, AMC; a show can have several).
 - **Streaming service** is a subscription service the title is on in a country, from TMDb's watch providers (rent/buy doesn't count). Use the service's name or TMDb's provider id (Netflix is 8); set the country under the rule.

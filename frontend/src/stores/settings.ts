@@ -17,12 +17,12 @@ export type LibraryMapping = {
 
 export type MediaServerEntry = {
   id: string
-  type: 'plex' | 'jellyfin' | 'emby'
+  type: 'plex' | 'jellyfin' | 'emby' | 'silo'
   name?: string    // user-supplied display label, e.g. "jellyfin-main" -- falls back to
                     // a generic type label everywhere it's shown when unset/blank
   url: string
   token?: string   // Plex
-  apiKey?: string  // Jellyfin/Emby
+  apiKey?: string  // Jellyfin/Emby/Silo
   enabled: boolean
 }
 

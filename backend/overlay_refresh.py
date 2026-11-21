@@ -31,6 +31,7 @@ CLEAN_BASE = "clean_base"
 # Metadata keys inject_plex_media_metadata() (re)computes -- a stored send's
 # metadata keeps everything else (season text etc.) and refreshes these.
 _INJECTED_KEYS = {
+    "media_server",  # per copy: set from the copy's own server, never stored
     "rating_key", "video_resolution", "video_codec", "audio_codec", "audio_channels",
     "audio_language", "edition", "tmdb_id", "media_type", "streaming_platform",
     "streaming_platform_logo_url", "studio", "studio_company_id", "file_paths", "lists",
@@ -141,6 +142,8 @@ def record_send(
         if not clean_base and _self_referencing_background(background_url):
             logger.debug("[OVERLAY_REFRESH] Not tracking %s: background is the server's own poster", rating_key)
             return
+        # The "Media server" overlay rule is decided by the server this copy is on.
+        opts["metadata"] = dict(opts.get("metadata") or {}, media_server=server_id)
         facts: Dict[str, Any] = {}
         designs: Dict[str, Any] = {}
         summary = _summary(opts, template_id, facts, designs)
@@ -233,6 +236,7 @@ def _fresh_options(state: Dict[str, Any]) -> Dict[str, Any]:
         is_tv=state.get("media_type") == "tv",
         log_prefix="[OVERLAY_REFRESH] ",
     )
+    opts["metadata"] = dict(opts.get("metadata") or {}, media_server=state.get("server_id"))
     return opts
 
 
@@ -441,6 +445,40 @@ def _find_moved_item(client, server_id: str, state: Dict[str, Any]) -> Optional[
     db.upsert_overlay_state(state)
     logger.info("[OVERLAY_REFRESH] %s moved on its server: %s is now %s", state.get("title") or old_key, old_key, new_key)
     return str(new_key)
+
+
+def render_for_server(source_server: str, rating_key: Optional[str], season_index: Optional[int],
+                      target_server: str, tmdb_id=None, media_type: str = "movie") -> Optional[tuple]:
+    """(bytes, content type) of the poster tracked for `rating_key` on
+    `source_server`, rendered for `target_server`, when an overlay's "Media
+    server" rule comes out differently there. None when nothing is tracked, no
+    overlay uses the rule, or the result is the same (send the shared poster)."""
+    if not rating_key and not tmdb_id:
+        return None
+    try:
+        from .overlay_engine import overlay_elements_for_options, media_server_outcome
+        if rating_key:
+            state = db.get_overlay_state(source_server, str(rating_key), season_index)
+        else:
+            state = db.get_overlay_state_by_tmdb(source_server, media_type, tmdb_id, season_index)
+        if not state or not state.get("background_url"):
+            return None
+        stored = dict(state.get("options") or {})
+        elements = overlay_elements_for_options(stored, state.get("template_id"))
+        if not any(str(c.get("field") or "").lower() == "media_server"
+                   for e in elements for c in (e.get("conditions") or []) if isinstance(c, dict)):
+            return None
+        if media_server_outcome(elements, source_server) == media_server_outcome(elements, target_server):
+            return None
+        from .rendering import render_poster_image
+        from .api.save import encode_poster_for_plex
+        opts = _fresh_options(state)
+        opts["metadata"] = dict(opts.get("metadata") or {}, media_server=target_server)
+        img = render_poster_image(state["template_id"], state["background_url"], state.get("logo_url"), opts)
+        return encode_poster_for_plex(img, for_plex=target_server.startswith("plex"))
+    except Exception as e:
+        logger.warning("[OVERLAY_REFRESH] Couldn't render %s for %s: %s", rating_key, target_server, e)
+        return None
 
 
 def _upload_tracked(client, server_id: str, state: Dict[str, Any], payload: bytes, content_type: str) -> str:

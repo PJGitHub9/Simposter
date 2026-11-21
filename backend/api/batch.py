@@ -83,7 +83,7 @@ def _server_type_label(server_id: str) -> str:
     user-set server name -- generic "Jellyfin"/"Emby" is enough context for
     "what's currently happening," and avoids a settings read per batch item."""
     server_type = (server_id or "").split("-")[0]
-    return {"plex": "Plex", "jellyfin": "Jellyfin", "emby": "Emby"}.get(server_type, server_type.capitalize() or "linked server")
+    return {"plex": "Plex", "jellyfin": "Jellyfin", "emby": "Emby", "silo": "Silo"}.get(server_type, server_type.capitalize() or "linked server")
 
 
 @router.get("/batch-progress")
@@ -182,6 +182,37 @@ def _record_overlay_send(server_id, item_id, req, template_id, render_options, b
         )
     except Exception as e:
         logger.debug("[BATCH] overlay refresh record failed for %s: %s", item_id, e)
+
+
+def _per_server_poster(template_id, preset_id, poster_url, logo_url, render_options, use_cache,
+                       own_server, payload, content_type):
+    """For overlays with a "Media server" rule: a function giving the poster to
+    send to a given server, rendering again only when the rule comes out
+    differently for that server (renders are reused per outcome). None when no
+    overlay uses the rule, so the shared render goes everywhere as before."""
+    from ..overlay_engine import overlay_elements_for_options, media_server_outcome
+    from .save import encode_poster_for_plex
+    elements = overlay_elements_for_options(render_options, template_id)
+    if not any(str(c.get("field") or "").lower() == "media_server"
+               for e in elements for c in (e.get("conditions") or []) if isinstance(c, dict)):
+        return None
+    cache = {media_server_outcome(elements, own_server): (payload, content_type)}
+
+    def poster_for(server_id):
+        outcome = media_server_outcome(elements, server_id)
+        if outcome not in cache:
+            opts = dict(render_options)
+            opts["metadata"] = dict(render_options.get("metadata") or {}, media_server=server_id)
+            try:
+                img = render_with_overlay_cache(template_id, preset_id, poster_url, logo_url, opts, use_cache=use_cache)
+                cache[outcome] = encode_poster_for_plex(img, for_plex=str(server_id).startswith("plex"))
+                logger.info("[BATCH] Rendered a separate poster for %s (its overlays use a Media server rule)", server_id)
+            except Exception as e:
+                logger.warning("[BATCH] Separate render for %s failed, sending the shared poster: %s", server_id, e)
+                cache[outcome] = (payload, content_type)
+        return cache[outcome]
+
+    return poster_for
 
 
 def _process_single_movie(
@@ -431,6 +462,8 @@ def _process_single_movie(
         ui_settings = db.get_ui_settings()
         use_overlay_cache = ui_settings.get("performance", {}).get("useOverlayCache", True)
 
+        # "Media server" overlay rule: this render is for the item's own server.
+        render_options["metadata"] = dict(render_options.get("metadata") or {}, media_server=item_source_server_id or "plex-1")
         img = render_with_overlay_cache(
             template_id,
             preset_id,
@@ -607,6 +640,9 @@ def _process_single_movie(
                     title_hint=title_hint,
                     source_server_id=getattr(req, 'source_server_id', None) or "plex-1",
                     known_item_ids={item_source_server_id: rating_key} if not is_plex_item and item_source_server_id else None,
+                    poster_for_server=_per_server_poster(
+                        template_id, preset_id, poster_url, logo_url if logo_mode != "none" else None,
+                        render_options, use_overlay_cache, item_source_server_id or "plex-1", payload, content_type),
                 )
                 if synced:
                     logger.info("[BATCH] Synced to linked server(s) %s for %s [%s]", [s["server_id"] for s in synced], rating_key, title_hint)
@@ -1724,6 +1760,8 @@ def _render_and_save_poster(
     ui_settings = db.get_ui_settings()
     use_overlay_cache = ui_settings.get("performance", {}).get("useOverlayCache", True)
 
+    # "Media server" overlay rule: this render is for the item's own server.
+    render_options["metadata"] = dict(render_options.get("metadata") or {}, media_server=item_server_id or "plex-1")
     # Use overlay cache rendering (takes URLs directly)
     rendered = render_with_overlay_cache(
         template_id,
@@ -1897,6 +1935,9 @@ def _render_and_save_poster(
                 tvdb_id=tvdb_id,
                 source_server_id=getattr(req, 'source_server_id', None) or "plex-1",
                 known_item_ids={item_server_id: rating_key} if not is_plex_item and item_server_id else None,
+                poster_for_server=_per_server_poster(
+                    template_id, preset_id, poster_url, logo_url, render_options, use_overlay_cache,
+                    item_server_id or "plex-1", payload, content_type),
             )
             if synced:
                 logger.info("[BATCH] Synced to linked server(s) %s for %s", [s["server_id"] for s in synced], display_title)

@@ -19,6 +19,9 @@ const settings = useSettingsStore()
 // Mirrors EditorPane.vue's identical computed (Quirk #68) -- used only for
 // the single-server send-button label below now (see sendButtonLabel).
 const isNonPlexItem = computed(() => !!props.movie.server_id && props.movie.server_id !== 'plex-1')
+// Silo has no upload route for box-set (collection) artwork (Quirk #240).
+const siloCollection = computed(() => (props.movie.server_id || '').startsWith('silo-'))
+const SILO_COLLECTION_MSG = "Silo can't take collection artwork from other apps, so this can't be sent to Silo. Save to Disk still works."
 
 // ── Multi-server preview + send -- mirrors EditorPane.vue's identical block
 // (Quirk #75/#128) exactly, closing the gap that Quirk left deliberately
@@ -1114,14 +1117,14 @@ onMounted(async () => {
                 <span>Send logo</span>
               </label>
               <button
-                title="Send Logo Only" class="btn-send-logo btn-inline" :disabled="logoSending || !logoUrl" @click="doSendLogoOnly"
+                :title="siloCollection ? SILO_COLLECTION_MSG : 'Send Logo Only'" class="btn-send-logo btn-inline" :disabled="logoSending || !logoUrl || siloCollection" @click="doSendLogoOnly"
               >
                 <svg v-if="logoSending" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spin"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
                 <span class="btn-label">{{ logoSending ? 'Sending...' : 'Send Logo' }}</span>
               </button>
               <button title="Save to Disk" class="btn-save btn-inline" :disabled="loading" @click="doSave">💾 <span class="btn-label">Save to Disk</span></button>
               <button
-                :title="sendButtonLabel" class="btn-plex btn-inline" :disabled="loading || posterSending" @click="onSendClick"
+                :title="siloCollection ? SILO_COLLECTION_MSG : sendButtonLabel" class="btn-plex btn-inline" :disabled="loading || posterSending || siloCollection" @click="onSendClick"
               >
                 <svg v-if="posterSending" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spin"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
                 <span v-else>📺</span>

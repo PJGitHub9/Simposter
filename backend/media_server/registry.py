@@ -10,6 +10,7 @@ from ..config import logger, settings
 from .base import MediaServerClient
 from .plex_client import PlexClient
 from .jellyfin_client import JellyfinClient
+from .silo_client import SiloClient
 
 
 def _load_media_servers() -> List[dict]:
@@ -40,6 +41,8 @@ def _build_client(entry: dict) -> Optional[MediaServerClient]:
             api_key=entry.get("apiKey") or entry.get("token") or "",
             is_emby=(server_type == "emby"),
         )
+    if server_type == "silo":
+        return SiloClient(server_id, url=entry.get("url") or "", api_key=entry.get("apiKey") or "")
     logger.debug("[MEDIA_SERVER] No client implementation for server type '%s' (id=%s)", server_type, server_id)
     return None
 
@@ -66,7 +69,7 @@ def get_server_label(server_id: str) -> str:
     text needs to say WHICH server, human-readably (Media Mirror's per-item
     sync log, Quirk #123's follow-up) -- consolidated here so it can't drift
     from what the UI itself already shows for the same server_id."""
-    type_labels = {"jellyfin": "Jellyfin", "emby": "Emby", "plex": "Plex"}
+    type_labels = {"jellyfin": "Jellyfin", "emby": "Emby", "plex": "Plex", "silo": "Silo"}
     for entry in _load_media_servers():
         if entry.get("id") == server_id:
             name = (entry.get("name") or "").strip()

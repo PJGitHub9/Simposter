@@ -7,6 +7,7 @@ import { useArtLibraryCache } from '@/composables/useArtLibraryCache'
 import { usePagedItems } from '@/composables/usePagedItems'
 import { useLibraryGroupPreference } from '@/composables/useLibraryGroupPreference'
 import { compareTitles } from '@/services/sortTitle'
+import { getApiBase } from '@/services/apiBase'
 
 type LogoItem = {
   key: string
@@ -26,6 +27,7 @@ const sortBy = ref<'title_asc' | 'title_desc' | 'year_desc' | 'year_asc' | 'adde
 const filterLabel = ref('')
 const search = ref('')
 const failedImages = ref<Set<string>>(new Set())
+const refreshingKeys = ref<Set<string>>(new Set())
 const selectedItem = ref<LogoItem | null>(null)
 
 const isTV = computed(() => route.name === 'tv-logos')
@@ -108,6 +110,31 @@ function onLogoUpdated(newLogoUrl: string | null) {
     const key = selectedItem.value.key
     updateItem(key, { logo_url: newLogoUrl } as Partial<LogoItem>)
     failedImages.value = new Set([...failedImages.value].filter(k => k !== key))
+  }
+}
+
+// Per-card refresh, like the Backdrops page: downloads this one logo again from
+// its server (the page-level Refresh only re-reads Simposter's own list).
+async function handleRefreshLogo(item: LogoItem) {
+  if (refreshingKeys.value.has(item.key)) return
+  refreshingKeys.value = new Set(refreshingKeys.value).add(item.key)
+  try {
+    const apiBase = getApiBase()
+    const params = new URLSearchParams({ meta: '1', force_refresh: '1', is_tv: isTV.value ? '1' : '0' })
+    const res = await fetch(`${apiBase}/api/logo/${encodeURIComponent(item.key)}?${params.toString()}`)
+    if (res.ok) {
+      const data = await res.json()
+      if (data.url) {
+        updateItem(item.key, { logo_url: `${apiBase}${data.url}` } as Partial<LogoItem>)
+        failedImages.value = new Set([...failedImages.value].filter(k => k !== item.key))
+      }
+    }
+  } catch {
+    /* non-critical -- the card keeps showing what it had */
+  } finally {
+    const next = new Set(refreshingKeys.value)
+    next.delete(item.key)
+    refreshingKeys.value = next
   }
 }
 
@@ -228,6 +255,18 @@ onMounted(() => {
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.35"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9l4-4 4 4 4-4 4 4"/><circle cx="8.5" cy="14.5" r="1.5"/></svg>
             <span>No logo cached</span>
           </div>
+          <button
+            class="refresh-btn"
+            title="Download this logo again from its server"
+            :class="{ spinning: refreshingKeys.has(item.key) }"
+            @click.stop="handleRefreshLogo(item)"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="23 4 23 10 17 10" />
+              <polyline points="1 20 1 14 7 14" />
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+            </svg>
+          </button>
         </div>
         <div class="logo-meta">
           <span class="logo-title">{{ item.title }}</span>
@@ -471,6 +510,42 @@ onMounted(() => {
   justify-content: center;
   padding: 14px;
   position: relative;
+}
+
+.refresh-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 6px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(8px);
+  color: #d7e6ff;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  opacity: 0;
+  transform: translateY(-6px);
+  transition: all 0.18s ease;
+  cursor: pointer;
+  display: flex;
+}
+
+.logo-card:hover .refresh-btn {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.refresh-btn:hover {
+  background: rgba(61, 214, 183, 0.18);
+  color: #3dd6b7;
+  border-color: rgba(61, 214, 183, 0.5);
+}
+
+.refresh-btn.spinning {
+  opacity: 1;
+}
+
+.refresh-btn.spinning svg {
+  animation: spin 0.9s linear infinite;
 }
 
 .logo-img {

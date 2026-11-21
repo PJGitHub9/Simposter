@@ -3,8 +3,9 @@
 // as backend/overlay_engine.py (see services/overlayEngine.ts). Which element wins
 // when several overlap lives in the config-level Badge sets panel.
 import { normalizeListUrl, type OverlayCondition, type OverlayRuleFields } from '@/services/overlayEngine'
-import { computed, onMounted, ref } from 'vue'
-import { FIELDS, FIELD_GROUPS, fieldDef, opsFor, opDef, needsMdblist, needsMaintainerr, rangeParts } from '@/services/overlayFields'
+import { computed, onMounted, ref, watchEffect } from 'vue'
+import { FIELDS, FIELD_GROUPS, fieldDef, opsFor, opDef, needsMdblist, needsMaintainerr, rangeParts, setMediaServerOptions } from '@/services/overlayFields'
+import { mediaServerLabel } from '@/services/mediaServerLabel'
 import DateRangeInput from '@/components/overlay/DateRangeInput.vue'
 import { useSettingsStore } from '@/stores/settings'
 import { listDisplayName, providerLabel, useListSources } from '@/composables/useListSources'
@@ -16,6 +17,11 @@ const what = computed(() => (props.subject === 'overlay' ? 'this overlay' : 'thi
 // Ratings and MDBList lists are only offered once an MDBList API key is set
 // (a condition that already uses one keeps showing its field).
 const settings = useSettingsStore()
+// "Media server" choices: each configured server by name, then each type.
+watchEffect(() => {
+  const servers = settings.savedMediaServers.value || []
+  setMediaServerOptions(servers.map(s => ({ id: s.id, label: mediaServerLabel(s.id, servers) })))
+})
 const hasMdblistKey = computed(() => !!settings.mdblist.value.apiKey)
 // "On a list" works with any list service set up in Settings → Ratings & Lists.
 const hasListSource = computed(() => hasMdblistKey.value || !!settings.wetrakr.value.clientId

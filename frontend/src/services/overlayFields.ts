@@ -23,6 +23,15 @@ export interface FieldDef {
 
 const opts = (pairs: Array<[string, string]>): FieldOption[] => pairs.map(([value, label]) => ({ value, label }))
 
+const MEDIA_SERVER_TYPES: Array<[string, string]> = [['plex', 'Any Plex server'], ['jellyfin', 'Any Jellyfin server'], ['emby', 'Any Emby server'], ['silo', 'Any Silo server']]
+
+/** Fill the "Media server" choices: each configured server by name, then each server type. */
+export const setMediaServerOptions = (servers: Array<{ id: string; label: string }>) => {
+  // FIELDS is defined below; this only runs later, from components.
+  const def = FIELDS.find(f => f.value === 'media_server')
+  if (def) def.options = [...servers.map(s => ({ value: s.id, label: s.label })), ...opts(MEDIA_SERVER_TYPES)]
+}
+
 export const FIELD_GROUPS = ['Video', 'Audio', 'File', 'Ratings', 'Lists', 'Dates', 'Maintainerr', 'Item'] as const
 
 export const FIELDS: FieldDef[] = [
@@ -84,6 +93,11 @@ export const FIELDS: FieldDef[] = [
     options: opts([['movie', 'Movie'], ['tv', 'TV show']]),
   },
   { value: 'year', label: 'Year', group: 'Item', kind: 'number', placeholder: '2024' },
+  {
+    value: 'media_server', label: 'Media server', group: 'Item', kind: 'choice',
+    options: opts([['plex', 'Any Plex server'], ['jellyfin', 'Any Jellyfin server'], ['emby', 'Any Emby server'], ['silo', 'Any Silo server']]),
+    hint: 'The server the poster is being sent to. A poster going to several servers is drawn separately for each server where this changes the result.',
+  },
   {
     value: 'today', label: "Today's date", group: 'Dates', kind: 'today',
     hint: 'For seasonal overlays: "is between Dec 1 and Dec 26" shows it every year in that window. Uses the server time zone; a scheduled Overlay Refresh puts it on and takes it off.',

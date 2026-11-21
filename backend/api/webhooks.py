@@ -1089,9 +1089,10 @@ def _deliver_pending_posters(client, entry: Dict[str, Any], series_item_id: str)
         if db.poster_already_sent(server_id, item_id):
             delivered.append((season_index, item_id, None))
             continue
-        client.upload_image(item_id, ImageType.POSTER, image_bytes, "image/jpeg")
+        ct = "image/png" if image_bytes[1:4] == b"PNG" else "image/jpeg"
+        client.upload_image(item_id, ImageType.POSTER, image_bytes, ct)
         try:
-            _cache_poster_after_upload(item_id, image_bytes, "image/jpeg", is_tv=is_tv)
+            _cache_poster_after_upload(item_id, image_bytes, ct, is_tv=is_tv)
         except Exception:
             pass
         history_title = entry["title"]
@@ -1171,7 +1172,7 @@ def _run_pending_sync(key: tuple) -> None:
                     entry["server_id"], entry["title"], get_server_label(entry["server_id"]))
 
 
-def _sync_poster_to_other_servers(tmdb_id: Optional[int], media_type: str, title_hint: str = "?", library_id: Optional[str] = None, season_index: Optional[int] = None, tvdb_id: Optional[int] = None, template_id: Optional[str] = None, preset_id: Optional[str] = None, year: Optional[int] = None, season_title: Optional[str] = None, image_bytes: Optional[bytes] = None, report: Optional[Dict[str, List[str]]] = None, history_action: str = "sent_to_media_server") -> List[str]:
+def _sync_poster_to_other_servers(tmdb_id: Optional[int], media_type: str, title_hint: str = "?", library_id: Optional[str] = None, season_index: Optional[int] = None, tvdb_id: Optional[int] = None, template_id: Optional[str] = None, preset_id: Optional[str] = None, year: Optional[int] = None, season_title: Optional[str] = None, image_bytes: Optional[bytes] = None, report: Optional[Dict[str, List[str]]] = None, history_action: str = "sent_to_media_server", source_rating_key: Optional[str] = None) -> List[str]:
     """Phase 6 (webhooks) -- after a webhook-triggered Plex render+send
     succeeds, check whether the same title also exists on any OTHER server
     that's actually linked to this Plex library via a Library Group
@@ -1292,6 +1293,13 @@ def _sync_poster_to_other_servers(tmdb_id: Optional[int], media_type: str, title
                 item_id = None
                 if series_item_id:
                     item_id = series_item_id if season_index is None else client.find_season_by_index(series_item_id, season_index)
+                send_bytes, send_type = image_bytes, "image/jpeg"
+                # "Media server" overlay rule: render for this server when it differs from Plex's.
+                from ..overlay_refresh import render_for_server
+                alt = render_for_server("plex-1", source_rating_key, season_index, client.server_id,
+                                        tmdb_id=tmdb_id, media_type=find_media_type)
+                if alt:
+                    send_bytes, send_type = alt
                 if not item_id:
                     # Usually the server hasn't imported the file yet (an upgrade
                     # often gets a new item id there). A follow-up looks again a
@@ -1303,9 +1311,9 @@ def _sync_poster_to_other_servers(tmdb_id: Optional[int], media_type: str, title
                         report.setdefault("pending", []).append(get_server_label(client.server_id))
                     _queue_pending_sync(client.server_id, allowed_servers.get(client.server_id), str(library_id), find_media_type,
                                         tmdb_id, tvdb_id, title_hint, year, template_id, preset_id, history_action,
-                                        season_index, season_title, image_bytes)
+                                        season_index, season_title, send_bytes)
                     continue
-                client.upload_image(item_id, ImageType.POSTER, image_bytes, "image/jpeg")
+                client.upload_image(item_id, ImageType.POSTER, send_bytes, send_type)
                 logger.info("[WEBHOOK_SYNC:%s] Synced poster for tmdb_id=%s [%s]%s -> item_id=%s", client.server_id, tmdb_id, title_hint,
                             f" season {season_index}" if season_index is not None else "", item_id)
                 # Keep the local disk cache/DB row in sync too, so the merged
@@ -1314,7 +1322,7 @@ def _sync_poster_to_other_servers(tmdb_id: Optional[int], media_type: str, title
                 try:
                     # TV shows/seasons use the TV poster cache (see _cache_poster_after_upload)
                     from .media_server_send import _cache_poster_after_upload
-                    _cache_poster_after_upload(item_id, image_bytes, "image/jpeg", is_tv=(media_type == "tv-show"))
+                    _cache_poster_after_upload(item_id, send_bytes, send_type, is_tv=(media_type == "tv-show"))
                 except Exception as cache_err:
                     logger.debug("[WEBHOOK_SYNC:%s] Failed to update local cache for item_id=%s: %s", client.server_id, item_id, cache_err)
                 try:
@@ -1331,7 +1339,7 @@ def _sync_poster_to_other_servers(tmdb_id: Optional[int], media_type: str, title
                         preset_id=preset_id,
                         action=history_action,
                         source="webhook",
-                        poster_data=image_bytes,
+                        poster_data=send_bytes,
                         server_id=client.server_id,
                     )
                 except Exception as history_err:
@@ -1450,7 +1458,7 @@ def process_webhook_poster_generation(
                             _sync_poster_to_other_servers(
                                 _tmdb, "tv-show" if is_tv else "movie", title_hint, library_id=library_id,
                                 tvdb_id=_tvdb, template_id=template_id, preset_id=preset_id, year=_year,
-                                image_bytes=cached, report=_report,
+                                image_bytes=cached, report=_report, source_rating_key=str(rating_key),
                             )
                         except Exception as sync_err:
                             logger.debug("[WEBHOOK] Resend to linked servers failed for %s [%s]: %s", rating_key, title_hint, sync_err)
@@ -1706,6 +1714,7 @@ def process_webhook_poster_generation(
                                 template_id=template_id, preset_id=preset_id,
                                 year=_sync_info.get("year") if _sync_info else None,
                                 season_title=_r.get("season") if _r.get("season_index") is not None else None,
+                                source_rating_key=_r.get("rating_key"),
                             )
                             for _sid in _synced:
                                 if _sid not in _tv_synced_server_ids:
@@ -1834,7 +1843,7 @@ def process_webhook_poster_generation(
                     try:
                         _sync_cached = db.get_cached_movies()
                         _sync_info = next((m for m in _sync_cached if m.get("key") == rating_key or m.get("rating_key") == rating_key), None)
-                        _movie_synced_server_ids = _sync_poster_to_other_servers(_sync_info.get("tmdb_id") if _sync_info else None, "movie", movie_title, library_id=library_id, template_id=template_id, preset_id=preset_id, year=_sync_info.get("year") if _sync_info else None)
+                        _movie_synced_server_ids = _sync_poster_to_other_servers(_sync_info.get("tmdb_id") if _sync_info else None, "movie", movie_title, library_id=library_id, template_id=template_id, preset_id=preset_id, year=_sync_info.get("year") if _sync_info else None, source_rating_key=str(rating_key))
                     except Exception as sync_err:
                         logger.debug("[WEBHOOK] Cross-server poster sync failed for %s [%s]: %s", rating_key, movie_title, sync_err)
                 # Send Discord notification (include poster image)

@@ -113,7 +113,7 @@ def needed_data(elements: List[Dict[str, Any]]) -> Dict[str, Any]:
     rating_fields = _rating_field_names()
     needs = {"paths": False, "ratings": False, "lists": [], "ids": False, "added": False, "status": False,
              "release": False, "rating_fields": [], "network": False, "content_ratings": [], "streaming": [],
-             "maintainerr": False}
+             "maintainerr": False, "media_server": False}
     for element in elements:
         for cond in element.get("conditions") or []:
             if not isinstance(cond, dict):
@@ -121,6 +121,8 @@ def needed_data(elements: List[Dict[str, Any]]) -> Dict[str, Any]:
             field = str(cond.get("field") or "").strip().lower()
             if field in ("filepath", "file_path", "filename"):
                 needs["paths"] = True
+            elif field == "media_server":
+                needs["media_server"] = True
             elif field in rating_fields:
                 needs["ratings"] = True
                 if field not in needs["rating_fields"]:
@@ -287,6 +289,70 @@ _RATING_SOURCE_NAMES = {
 }
 
 
+def media_server_values(server_id: Optional[str]) -> List[str]:
+    """[server id, server type] for the "Media server" rule, so a rule can name
+    one server ("jellyfin-abc") or every server of a type ("silo")."""
+    if not server_id:
+        return []
+    sid = str(server_id)
+    stype = None
+    try:
+        from . import database as db
+        for srv in (db.get_ui_settings() or {}).get("mediaServers") or []:
+            if isinstance(srv, dict) and srv.get("id") == sid:
+                stype = srv.get("type")
+                break
+    except Exception:
+        pass
+    stype = stype or ("plex" if sid == "plex-1" else sid.split("-", 1)[0])
+    return [sid, stype] if stype and stype != sid else [sid]
+
+
+def overlay_elements_for_options(options: Optional[Dict[str, Any]], template_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Every layer of the overlays render options use (above and below the
+    logo, plus a preset's legacy single link), with each overlay's own
+    show-when rules as an extra stand-in element."""
+    opts = options or {}
+    ids: List[str] = []
+    for key in ("overlay_config_ids", "overlay_config_ids_below"):
+        for cid in opts.get(key) or []:
+            if cid and str(cid) not in ids:
+                ids.append(str(cid))
+    try:
+        from . import database as db
+        if template_id and opts.get("preset_id"):
+            linked = (db.get_preset(template_id, opts["preset_id"]) or {}).get("overlay_config_id")
+            if linked and str(linked) not in ids:
+                ids.append(str(linked))
+        elements: List[Dict[str, Any]] = []
+        for cid in ids:
+            cfg = db.get_overlay_config(cid) or {}
+            elements += [e for e in cfg.get("elements") or [] if isinstance(e, dict)]
+            if cfg.get("conditions"):
+                elements.append({"conditions": cfg["conditions"]})
+        return elements
+    except Exception:
+        return []
+
+
+def _media_server_conditions(elements: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [c for e in elements for c in (e.get("conditions") or [])
+            if isinstance(c, dict) and str(c.get("field") or "").strip().lower() == "media_server"]
+
+
+def options_use_media_server(options: Optional[Dict[str, Any]], template_id: Optional[str] = None) -> bool:
+    """Whether any overlay these options use has a "Media server" rule. When
+    not, one render is right for every server and nothing else is checked."""
+    return bool(_media_server_conditions(overlay_elements_for_options(options, template_id)))
+
+
+def media_server_outcome(elements: List[Dict[str, Any]], server_id: Optional[str]) -> Tuple[bool, ...]:
+    """How every "Media server" rule comes out for one server. Two servers with
+    the same outcome get identical posters, so one render serves both."""
+    ctx = {"media_server": media_server_values(server_id)}
+    return tuple(check_condition(c, ctx) for c in _media_server_conditions(elements))
+
+
 def _rating_source_name(field: str, sources: Dict[str, str]) -> str:
     """Which service a rating field reads from, for log notes."""
     if field in ("audience_rating", "critic_rating"):
@@ -318,6 +384,7 @@ def build_context(meta: Dict[str, Any], needs_paths: bool = False,
     needs.setdefault("content_ratings", [])
     needs.setdefault("streaming", [])
     needs.setdefault("maintainerr", False)
+    needs.setdefault("media_server", False)
     needs_paths = needs_paths or needs["paths"]
     ctx = dict(meta or {})
     # Why data a rule needs is missing (shown in the render log by data_summary()).
@@ -334,6 +401,17 @@ def build_context(meta: Dict[str, Any], needs_paths: bool = False,
         ctx["title"] = ctx.get("movie_title")
     labels = ctx.get("labels") or []
     ctx["labels"] = [str(label) for label in labels]
+    # Media server the poster is for: set by whoever renders for a particular
+    # server, else the item's own server (looked up only when a rule uses it).
+    target = ctx.get("media_server")
+    if isinstance(target, str) and target:
+        ctx["media_server"] = media_server_values(target)
+    elif needs["media_server"] and not target and ctx.get("rating_key"):
+        try:
+            from . import database as db
+            ctx["media_server"] = media_server_values(db.get_server_id_for_rating_key(str(ctx["rating_key"])) or "plex-1")
+        except Exception:
+            ctx["media_server"] = []
     if needs_paths and "file_paths" not in ctx:
         paths: List[str] = []
         rating_key = ctx.get("rating_key")
