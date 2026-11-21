@@ -11,6 +11,7 @@ const props = defineProps<{
   tmdbRateLimit: number
   tvdbRateLimit: number
   memoryLimit: number
+  trustedProxies: string
   performanceChanged?: boolean
 }>()
 
@@ -20,6 +21,7 @@ const emit = defineEmits<{
   'update:tmdbRateLimit': [value: number]
   'update:tvdbRateLimit': [value: number]
   'update:memoryLimit': [value: number]
+  'update:trustedProxies': [value: string]
   'clear-frontend-cache': []
   'clear-backend-cache': []
   'save': []
@@ -48,6 +50,11 @@ const localTvdbRateLimit = computed({
 const localMemoryLimit = computed({
   get: () => props.memoryLimit,
   set: (val) => emit('update:memoryLimit', val)
+})
+
+const localTrustedProxies = computed({
+  get: () => props.trustedProxies,
+  set: (val) => emit('update:trustedProxies', val)
 })
 </script>
 
@@ -126,6 +133,34 @@ const localMemoryLimit = computed({
           step="5"
         />
         <span class="help-text">Default: 20 (TVDB free tier: 20 req/10s)</span>
+      </label>
+    </div>
+
+    <!-- Internal rate-limit bypass for trusted reverse proxies -->
+    <div :class="['section', { 'section-unsaved': changed?.rateLimits }]">
+      <h3>Trusted Proxies</h3>
+      <p class="section-description">
+        IPs or CIDR ranges that bypass Simposter's own internal API rate limits entirely —
+        for a reverse proxy sitting in front of Simposter, whose address Simposter sees as
+        one single client. Without this, a page that auto-refreshes (like Logs) can trip a
+        limit meant for one browser tab, especially with more than one tab/device going
+        through the same proxy.
+      </p>
+
+      <label>
+        <span class="label-text">Trusted Proxy IPs</span>
+        <textarea
+          v-model="localTrustedProxies"
+          rows="3"
+          class="trusted-proxies-input"
+          placeholder="10.50.49.4
+172.17.0.0/16"
+        ></textarea>
+        <span class="help-text">
+          One per line, or comma-separated. Exact IPs ("10.50.49.4") or CIDR ranges
+          ("172.17.0.0/16") are both accepted. Leave empty to rate-limit every client
+          normally — this is the address rate-limit warnings in the log already name.
+        </span>
       </label>
     </div>
 
@@ -267,6 +302,19 @@ label {
 .checkbox-help {
   margin-left: 24px;
   margin-top: -12px;
+}
+
+.trusted-proxies-input {
+  width: 100%;
+  max-width: 400px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-family: inherit;
+  resize: vertical;
 }
 
 input[type="range"] {

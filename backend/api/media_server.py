@@ -406,7 +406,22 @@ def _fetch_art_and_media_info_for_scan(items, media_type: str, client) -> None:
     Poster/logo/backdrop use the same disk-cache functions the live serve
     endpoints use (no new "download this asset" logic); media info comes
     from MediaServerClient.get_item_metadata(), already built in Phase 3
-    (CLAUDE.md Quirk #59)."""
+    (CLAUDE.md Quirk #59).
+
+    This is usually the single slowest part of a Jellyfin/Emby/Silo scan (up
+    to 4 requests per item, and on a rate-limited server like Silo -- Quirk
+    #240 -- that can genuinely take minutes for a large library) -- but
+    nothing in here ever reported progress, so the shared scan-progress
+    overlay just kept showing whatever processed/total a PRIOR phase (often
+    the Plex scan that ran right before a linked-library scan, or this
+    endpoint's own coarse step counter) had left behind for the entire
+    duration. User-reported directly: a Silo scan looked "stuck" at
+    "1187/1187 (100%)" the whole time it was actually still fetching art --
+    that 1187/1187 was the just-finished Plex scan's own final numbers,
+    never touched again once the Silo linked-library phase (which only ever
+    updated the "current" text, see _update_scan_status()) took over.
+    Resets and owns processed/total for the duration of this one phase; the
+    caller's own coarse counter (if any) picks back up once this returns."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
     from .. import database as db
     from ..config import logger
@@ -414,7 +429,28 @@ def _fetch_art_and_media_info_for_scan(items, media_type: str, client) -> None:
         fetch_and_cache_poster, fetch_and_cache_logo, fetch_and_cache_backdrop,
         _poster_cache_url as _movie_poster_cache_url, _logo_cache_url, _art_cache_url,
         poster_changed_on_server, record_poster_version, asset_changed_on_server, record_asset_version,
+        scan_status,
     )
+
+    progress_total = len(items)
+    progress_done = 0
+    if progress_total:
+        try:
+            scan_status.update({"total": progress_total, "processed": 0})
+        except Exception:
+            pass
+
+    def _report_progress() -> None:
+        # Called once per completed future, from the single thread driving
+        # as_completed() below -- never from a worker thread -- so the plain
+        # nonlocal counter needs no lock. Best-effort, matches
+        # _update_scan_status()'s own "never allowed to fail the scan" rule.
+        nonlocal progress_done
+        progress_done += 1
+        try:
+            scan_status.update({"processed": progress_done})
+        except Exception:
+            pass
 
     is_tv = media_type != "movie"
     if is_tv:
@@ -557,7 +593,8 @@ def _fetch_art_and_media_info_for_scan(items, media_type: str, client) -> None:
     with ThreadPoolExecutor(max_workers=8) as executor:
         futures = [executor.submit(_one, item) for item in items]
         for _ in as_completed(futures):
-            pass
+            if progress_total:
+                _report_progress()
 
     if skipped:
         logger.info("[MEDIA_SERVER_SCAN] Fetched art + media info for %d %s item(s); %d unchanged since the last scan were skipped",
@@ -630,7 +667,13 @@ def api_scan_media_server(server_id: str, library_id: Optional[str] = None, medi
         try:
             result = _scan_one_library(client, server_id, library_id, media_type, display_name)
             results = [result]
-            scan_status.update({"processed": 1})
+            # _scan_one_library() (via _fetch_art_and_media_info_for_scan())
+            # just took over processed/total to report its own per-item
+            # progress, leaving total set to the item count -- reset it back
+            # to this function's own coarse step count, or a large library
+            # would show a misleading "1/1187"-style regression here instead
+            # of simply "1/2".
+            scan_status.update({"total": total_steps, "processed": 1})
             # Collections have no media_type of their own in this app's model
             # (Quirk #21) -- scan them alongside a movie library, same as
             # api_scan_linked_libraries() does for a Plex-anchored group. Was

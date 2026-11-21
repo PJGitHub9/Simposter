@@ -198,6 +198,22 @@ class PerformanceSettings(BaseModel):
     tvdbRateLimit: int = 20
     memoryLimit: int = 2048  # MB
     useOverlayCache: bool = True  # Pre-generate overlay effects for faster batch rendering
+    trustedProxies: str = "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8,::1/128"
+                                # Comma/newline-separated IPs or CIDR ranges that bypass
+                                # Simposter's own internal per-IP API rate limiter entirely
+                                # -- see RateLimitMiddleware._is_trusted(). Defaults to every
+                                # private/local IP range: this app's whole security model is
+                                # a trusted local network with no auth gate (CLAUDE.md Quirk
+                                # #11), so a request from anywhere on the LAN -- a reverse
+                                # proxy in front of Simposter especially -- should never trip
+                                # a limit meant for one over-eager browser tab (the Logs
+                                # page's auto-refresh being the case that was user-reported).
+                                # This Pydantic default only matters for a brand-new
+                                # UISettings() object built in-process before any DB row
+                                # exists; the real, persisted default every existing/fresh
+                                # install actually gets comes from init_database()'s
+                                # one-time seed (database.py), which the rate limiter's own
+                                # direct db.get_setting() read relies on.
 
 
 _DEFAULT_CLEANUP_CATEGORIES = [

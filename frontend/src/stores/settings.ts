@@ -167,6 +167,7 @@ export type PerformanceSettings = {
   tvdbRateLimit: number
   memoryLimit: number
   useOverlayCache: boolean
+  trustedProxies: string
 }
 
 export type SchedulerSettings = {
@@ -334,7 +335,10 @@ const simkl = ref<SimklSettings>({ clientId: '' })
 const floppy = ref<FloppySettings>({ url: '', token: '' })
 const maintainerr = ref<MaintainerrSettings>({ url: '', apiKey: '' })
 const imageQuality = ref<ImageQualitySettings>({ outputFormat: 'jpg', jpgQuality: 95, pngCompression: 6, webpQuality: 90 })
-const performance = ref<PerformanceSettings>({ concurrentRenders: 2, tmdbRateLimit: 40, tvdbRateLimit: 20, memoryLimit: 2048, useOverlayCache: true })
+// trustedProxies default mirrors backend/database.py's init_database() seed (every
+// private/local IP range) -- the real persisted default for every install comes from
+// that one-time DB seed, this is only the in-memory value before settings.load() resolves.
+const performance = ref<PerformanceSettings>({ concurrentRenders: 2, tmdbRateLimit: 40, tvdbRateLimit: 20, memoryLimit: 2048, useOverlayCache: true, trustedProxies: '10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8,::1/128' })
 const apiOrder = ref<string[]>(['tmdb', 'fanart', 'tvdb'])
 export const DEFAULT_CLEANUP_CATEGORIES = [
   'poster_cache', 'logo_cache', 'backdrop_cache', 'square_art_cache',
@@ -480,7 +484,8 @@ async function doLoadSettings() {
       tmdbRateLimit: data.performance?.tmdbRateLimit ?? 40,
       tvdbRateLimit: data.performance?.tvdbRateLimit ?? 20,
       memoryLimit: data.performance?.memoryLimit ?? 2048,
-      useOverlayCache: data.performance?.useOverlayCache ?? true
+      useOverlayCache: data.performance?.useOverlayCache ?? true,
+      trustedProxies: data.performance?.trustedProxies ?? '10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8,::1/128'
     }
     apiOrder.value = data.apiOrder ?? ['tmdb', 'fanart', 'tvdb']
     scheduler.value = {

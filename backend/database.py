@@ -1728,6 +1728,34 @@ def init_database():
                     _evaluate_groups_async(touched)
         except Exception as ignore_mig_err:
             logger.warning(f"[DB] ignore_labels_to_modes migration failed: {ignore_mig_err}")
+
+        # Default Trusted Proxies to every private/local IP range, for every
+        # install (fresh and existing alike -- unlike cleanupEnabled/mediaServers
+        # above, there's no "existing vs. fresh" distinction here: this app's own
+        # whole security model is a trusted local network with no auth gate
+        # (CLAUDE.md Quirk #11), so defaulting to "trust every private address"
+        # matches that model from the start rather than leaving a fresh install
+        # with nothing trusted and the internal API rate limiter tripping on
+        # perfectly normal LAN traffic (e.g. the Logs page's own auto-refresh,
+        # user-reported directly). Same once-only, never-overwrite-a-value-the-
+        # user-already-set pattern as every other settings seed above -- the
+        # key's mere presence means this already ran (or the user has already
+        # edited the field themselves, even to an empty string), either way
+        # never touched again.
+        try:
+            existing_trusted_proxies = cursor.execute(
+                "SELECT value FROM settings WHERE key = 'performance.trustedProxies' LIMIT 1"
+            ).fetchone()
+            if existing_trusted_proxies is None:
+                cursor.execute("""
+                    INSERT INTO settings (key, value, category)
+                    VALUES ('performance.trustedProxies', ?, 'performance')
+                    ON CONFLICT(key) DO NOTHING
+                """, ("10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8,::1/128",))
+                conn.commit()
+                logger.info("[DB] Seeded performance.trustedProxies with the default private/local IP ranges")
+        except Exception as trusted_proxies_err:
+            logger.warning(f"[DB] Could not seed performance.trustedProxies: {trusted_proxies_err}")
     except Exception as e:
         logger.error(f"[DB] Initialization/migration failed: {e}")
         conn.rollback()

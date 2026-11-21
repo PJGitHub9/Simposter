@@ -5,9 +5,11 @@ Implements sliding window rate limiting to prevent abuse and ensure
 fair resource allocation across API requests.
 """
 
+import ipaddress
+import re
 import time
 from collections import defaultdict, deque
-from typing import Dict, Deque, Tuple
+from typing import Dict, Deque, List, Tuple, Union
 from fastapi import Request, status
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -15,6 +17,18 @@ import logging
 
 # Use the shared logger so logs appear in the main log
 logger = logging.getLogger("simposter")
+
+IPNetwork = Union[ipaddress.IPv4Network, ipaddress.IPv6Network]
+
+# Matches backend/database.py's init_database() one-time seed and
+# PerformanceSettings.trustedProxies' Pydantic default -- every private/local IP
+# range, since this app's whole security model is a trusted local network with no
+# auth gate (CLAUDE.md Quirk #11). Only used here as a defense-in-depth fallback for
+# the (should-never-happen-after-startup) case where the settings table has no row
+# for this key at all yet -- an explicitly-saved empty string (the user deliberately
+# clearing the field) is a real, different choice and must stay empty, not fall back
+# to this.
+_DEFAULT_TRUSTED_PROXIES = "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8,::1/128"
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -121,6 +135,20 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             "/api/scan-progress",
         }
 
+        # Trusted-proxy bypass (Settings -> Performance -> Trusted Proxies). A reverse
+        # proxy sitting in front of Simposter is still just "one client" as far as this
+        # per-IP limiter is concerned — its own auto-refresh/polling pages (Logs in
+        # particular, user-reported) can trip a limit meant for a single browser tab.
+        # Re-read from the DB on a short TTL rather than on every single request: this
+        # middleware runs ahead of EVERY /api call, including high-frequency ones
+        # (/api/movie, /api/logo — thousands/min on a max-density grid page), so a raw
+        # SQLite read per request here is a materially hotter path than the TMDb/TVDB
+        # clients' own per-call settings read (CLAUDE.md Quirk #220's exact lesson about
+        # not calling into settings/DB from a genuinely per-request path).
+        self._trusted_networks: List[IPNetwork] = []
+        self._trusted_checked_at: float = 0.0
+        self._trusted_ttl_seconds: float = 15.0
+
     def _get_endpoint_pattern(self, path: str) -> str:
         """
         Extract endpoint pattern from request path.
@@ -214,6 +242,54 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # Fall back to direct connection IP
         return request.client.host if request.client else "unknown"
 
+    def _refresh_trusted_networks(self) -> None:
+        """Re-parse the trusted-proxies setting at most once per TTL window.
+        Best-effort: a read/parse failure just leaves the previous (possibly
+        empty) list in place rather than ever raising — this must never be
+        allowed to break the actual rate limiting."""
+        now = time.time()
+        if now - self._trusted_checked_at < self._trusted_ttl_seconds:
+            return
+        self._trusted_checked_at = now
+        try:
+            from .. import database as db
+            raw = db.get_setting("performance.trustedProxies")
+            # None = the settings row genuinely doesn't exist (shouldn't happen
+            # once init_database()'s seed has run, but fail open to the trusted
+            # default rather than "trust nothing" if it somehow does) -- an
+            # explicitly-saved "" is the user's own real choice and stays empty.
+            if raw is None:
+                raw = _DEFAULT_TRUSTED_PROXIES
+        except Exception:
+            return
+        networks: List[IPNetwork] = []
+        for entry in re.split(r"[,\n]+", raw):
+            entry = entry.strip()
+            if not entry:
+                continue
+            try:
+                networks.append(ipaddress.ip_network(entry, strict=False))
+            except ValueError:
+                logger.warning(
+                    "Settings -> Performance -> Trusted Proxies: ignoring invalid entry %r (not an IP or CIDR range)",
+                    entry,
+                )
+        self._trusted_networks = networks
+
+    def _is_trusted(self, client_ip: str) -> bool:
+        """True when `client_ip` falls inside any configured trusted-proxy
+        IP/CIDR range — such a client bypasses the internal rate limiter
+        entirely (no request-history tracking either, so it can't grow the
+        in-memory history dict for a client that's deliberately exempt)."""
+        self._refresh_trusted_networks()
+        if not self._trusted_networks:
+            return False
+        try:
+            ip_obj = ipaddress.ip_address(client_ip)
+        except ValueError:
+            return False
+        return any(ip_obj in net for net in self._trusted_networks)
+
     async def dispatch(self, request: Request, call_next):
         """
         Process request and enforce rate limits.
@@ -233,7 +309,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         client_ip = self._get_client_ip(request)
         endpoint = self._get_endpoint_pattern(request.url.path)
 
-        if endpoint in self.exempt_endpoints:
+        if endpoint in self.exempt_endpoints or self._is_trusted(client_ip):
             return await call_next(request)
         limit = self._get_limit_for_endpoint(endpoint)
 

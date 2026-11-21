@@ -171,6 +171,7 @@ const localTmdbRateLimit = ref(40)
 const localTvdbRateLimit = ref(20)
 const localMemoryLimit = ref(2048)
 const localUseOverlayCache = ref(true)
+const localTrustedProxies = ref('')
 // Scan polling itself now lives entirely in App.vue, driven by the shared
 // scan store's own visibility (see its own comment on this) -- this page
 // only ever needs to flip scan.visible.value on/off, never run its own
@@ -339,6 +340,7 @@ const loadLocalSettings = async () => {
   localTvdbRateLimit.value = settings.performance.value.tvdbRateLimit
   localMemoryLimit.value = settings.performance.value.memoryLimit
   localUseOverlayCache.value = settings.performance.value.useOverlayCache
+  localTrustedProxies.value = settings.performance.value.trustedProxies
   localSchedulerEnabled.value = settings.scheduler.value.enabled
   localSchedulerCronExpression.value = settings.scheduler.value.cronExpression
   localSchedulerLibraryIds.value = settings.scheduler.value.libraryIds || []
@@ -419,6 +421,7 @@ const captureSettingsSnapshot = () => {
     tvdbRateLimit: localTvdbRateLimit.value,
     memoryLimit: localMemoryLimit.value,
     useOverlayCache: localUseOverlayCache.value,
+    trustedProxies: localTrustedProxies.value,
     schedulerEnabled: localSchedulerEnabled.value,
     schedulerCronExpression: localSchedulerCronExpression.value,
     schedulerLibraryIds: localSchedulerLibraryIds.value,
@@ -537,6 +540,7 @@ const checkForChanges = () => {
     tvdbRateLimit: localTvdbRateLimit.value,
     memoryLimit: localMemoryLimit.value,
     useOverlayCache: localUseOverlayCache.value,
+    trustedProxies: localTrustedProxies.value,
     schedulerEnabled: localSchedulerEnabled.value,
     schedulerCronExpression: localSchedulerCronExpression.value,
     schedulerLibraryIds: localSchedulerLibraryIds.value,
@@ -671,7 +675,7 @@ const checkForChanges = () => {
   sectionsWithChanges.value.posterApi = differs(['posterApiEnabled'])
   sectionsWithChanges.value.imageQuality = differs(['outputFormat', 'jpgQuality', 'pngCompression', 'webpQuality'])
   sectionsWithChanges.value.performance = differs(['concurrentRenders', 'useOverlayCache', 'memoryLimit'])
-  sectionsWithChanges.value.rateLimits = differs(['tmdbRateLimit', 'tvdbRateLimit'])
+  sectionsWithChanges.value.rateLimits = differs(['tmdbRateLimit', 'tvdbRateLimit', 'trustedProxies'])
   sectionsWithChanges.value.automation = differs([
     'webhookAutoSend', 'webhookAutoLabels', 'labelToAdd', 'webhookAlwaysRegenerateSeason', 'webhookSecret',
     'existingContentMode', 'retryUntilTemplateMet', 'retryIntervalHours', 'retryMaxAttempts', 'reuseCachedPosterDays',
@@ -753,7 +757,8 @@ const saveSettings = async () => {
     tmdbRateLimit: localTmdbRateLimit.value,
     tvdbRateLimit: localTvdbRateLimit.value,
     memoryLimit: localMemoryLimit.value,
-    useOverlayCache: localUseOverlayCache.value
+    useOverlayCache: localUseOverlayCache.value,
+    trustedProxies: localTrustedProxies.value
   }
   settings.scheduler.value = {
     enabled: localSchedulerEnabled.value,
@@ -1468,6 +1473,7 @@ watch([
   localTvdbRateLimit,
   localMemoryLimit,
   localUseOverlayCache,
+  localTrustedProxies,
   localSchedulerEnabled,
   localSchedulerCronExpression,
   localSchedulerLibraryIds,
@@ -1822,12 +1828,14 @@ onMounted(() => {
         :tmdbRateLimit="localTmdbRateLimit"
         :tvdbRateLimit="localTvdbRateLimit"
         :memoryLimit="localMemoryLimit"
+        :trustedProxies="localTrustedProxies"
         :performanceChanged="sectionsWithChanges.performance"
         @update:concurrentRenders="localConcurrentRenders = $event; sectionsWithChanges.performance = true; hasUnsavedChanges = true"
         @update:useOverlayCache="localUseOverlayCache = $event; sectionsWithChanges.performance = true; hasUnsavedChanges = true"
         @update:tmdbRateLimit="localTmdbRateLimit = $event; sectionsWithChanges.performance = true; hasUnsavedChanges = true"
         @update:tvdbRateLimit="localTvdbRateLimit = $event; sectionsWithChanges.performance = true; hasUnsavedChanges = true"
         @update:memoryLimit="localMemoryLimit = $event; sectionsWithChanges.performance = true; hasUnsavedChanges = true"
+        @update:trustedProxies="localTrustedProxies = $event; sectionsWithChanges.rateLimits = true; hasUnsavedChanges = true"
         @clear-frontend-cache="clearCache"
         @clear-backend-cache="clearBackendCache"
         @save="saveSettings"
