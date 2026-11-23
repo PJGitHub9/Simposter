@@ -85,6 +85,7 @@ class MediaServerTestRequest(BaseModel):
     url: str
     token: Optional[str] = None    # Plex
     apiKey: Optional[str] = None   # Jellyfin/Emby
+    pin: Optional[str] = None      # Silo main profile PIN
     # The id of the already-saved mediaServers entry being (re-)tested, if any --
     # needed so a masked credential (see below) can be resolved back to its real
     # stored value. Omitted/blank for a brand-new, not-yet-saved server.
@@ -111,7 +112,8 @@ def api_test_media_server_connection(payload: MediaServerTestRequest):
     credential for `server_id`, when one is given."""
     token = payload.token
     api_key = payload.apiKey
-    if payload.server_id and (token == SECRET_MASK or api_key == SECRET_MASK):
+    pin = payload.pin
+    if payload.server_id and SECRET_MASK in (token, api_key, pin):
         from .. import database as db
         stored = next(
             (s for s in (db.get_ui_settings() or {}).get("mediaServers") or []
@@ -121,7 +123,7 @@ def api_test_media_server_connection(payload: MediaServerTestRequest):
         if stored:
             # The stored credential only goes to the stored address.
             from ..config import same_origin
-            has_stored = bool(stored.get("token") or stored.get("apiKey"))
+            has_stored = bool(stored.get("token") or stored.get("apiKey") or stored.get("pin"))
             if has_stored and not same_origin(payload.url, stored.get("url")):
                 return {"connected": False, "sections": [],
                         "error": "The address changed, so enter the API key again"}
@@ -129,6 +131,8 @@ def api_test_media_server_connection(payload: MediaServerTestRequest):
                 token = stored.get("token") or ""
             if api_key == SECRET_MASK:
                 api_key = stored.get("apiKey") or ""
+            if pin == SECRET_MASK:
+                pin = stored.get("pin") or ""
 
     if payload.type == "plex":
         # PlexClient.test_connection() reads the global settings.PLEX_URL/
@@ -174,7 +178,7 @@ def api_test_media_server_connection(payload: MediaServerTestRequest):
 
     if payload.type == "silo":
         from ..media_server.silo_client import SiloClient
-        client = SiloClient("test", url=payload.url, api_key=api_key or token or "")
+        client = SiloClient("test", url=payload.url, api_key=api_key or token or "", pin=pin or None)
         connected = client.test_connection()
         sections = []
         if connected:
@@ -184,6 +188,8 @@ def api_test_media_server_connection(payload: MediaServerTestRequest):
             except Exception:
                 sections = []
         result = {"connected": connected, "sections": sections}
+        if connected and getattr(client, "profile_name", None):
+            result["profile"] = client.profile_name
         if client.last_error:
             result["error"] = client.last_error
         return result
@@ -383,7 +389,9 @@ def _scan_one_collection_library(client, server_id: str, library_id: str, librar
     rows = [
         {
             "rating_key": i["key"], "title": i.get("title") or "", "year": i.get("year"),
-            "added_at": i.get("addedAt"), "poster_url": i.get("poster"),
+            "added_at": i.get("addedAt"),
+            # "" overwrites a stored URL for a collection with no poster (None keeps it).
+            "poster_url": "" if i.get("has_poster") is False else i.get("poster"),
         }
         for i in items
     ]

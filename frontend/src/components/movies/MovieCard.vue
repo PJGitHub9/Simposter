@@ -139,7 +139,7 @@ async function doResend(includeSeasons: boolean, targetServerIds: string[]) {
 
 <template>
   <article class="card glass" @click="emit('select')">
-    <div class="thumb" :style="{ backgroundImage: `url(${posterThumbUrl(poster)})` }">
+    <div class="thumb" :style="poster ? { backgroundImage: `url(${posterThumbUrl(poster)})` } : undefined">
       <button
         v-if="posterChanged"
         class="changed-badge"

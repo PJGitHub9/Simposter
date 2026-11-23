@@ -804,6 +804,14 @@ def api_collections(force_refresh: bool = False, library_id: str = None, server_
         cached = _poster_cache_path(rating_key)
         return _poster_cache_url(rating_key, cached) if cached else f"/api/movie/{rating_key}/poster"
 
+    def _collection_poster(i: dict):
+        """"" for a collection the server says has no poster (Silo), so the
+        grid shows a placeholder instead of requesting one that 404s. Not
+        None: the cache write keeps the stored URL when given None."""
+        if i.get("has_poster") is False:
+            return ""
+        return i.get("poster") or _resolve_non_plex_collection_poster(i["key"])
+
     group_members = get_library_group_members(server_id, library_id, "movie") if library_id else None
     # Same per-group toggle movies/TV already use (Quirk #120/#121) -- "merge
     # items" now also controls whether a collection present on more than one
@@ -860,7 +868,7 @@ def api_collections(force_refresh: bool = False, library_id: str = None, server_
                             {
                                 "rating_key": i["key"], "title": i.get("title") or "", "year": i.get("year"),
                                 "added_at": i.get("addedAt"),
-                                "poster_url": i.get("poster") or _resolve_non_plex_collection_poster(i["key"]),
+                                "poster_url": _collection_poster(i),
                             }
                             for i in member_items
                         ])
@@ -901,7 +909,7 @@ def api_collections(force_refresh: bool = False, library_id: str = None, server_
                 "title": i.get("title") or "",
                 "year": i.get("year"),
                 "added_at": i.get("addedAt"),
-                "poster_url": i.get("poster") or _resolve_non_plex_collection_poster(i["key"]),
+                "poster_url": _collection_poster(i),
             }
             for i in items
         ])
@@ -914,7 +922,7 @@ def api_collections(force_refresh: bool = False, library_id: str = None, server_
         # fetch_and_cache_poster() (which WOULD correctly route to this
         # server) never runs. See _resolve_non_plex_collection_poster()'s own
         # docstring for the full story.
-        item["poster"] = item.get("poster") or _resolve_non_plex_collection_poster(item["key"])
+        item["poster"] = _collection_poster(item)
     return items
 
 

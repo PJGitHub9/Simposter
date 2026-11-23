@@ -21,7 +21,7 @@ router = APIRouter()
 # Dotted DB keys ("section.field") that hold credentials — see database.save_ui_settings
 # for how the nested UISettings shape gets flattened into these keys.
 _SECRET_DB_KEYS = {f"{section}.{field}" for section, field in SECRET_FIELD_PATHS}
-_MEDIA_SERVER_SECRET_FIELDS = ("token", "apiKey")
+_MEDIA_SERVER_SECRET_FIELDS = ("token", "apiKey", "pin")
 _BACKUP_FORMAT = "simposter-db-backup"
 _BACKUP_VERSION = 2
 

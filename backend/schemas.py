@@ -117,6 +117,7 @@ class MediaServerEntry(BaseModel):
     url: str = ""
     token: Optional[str] = None    # Plex
     apiKey: Optional[str] = None   # Jellyfin/Emby
+    pin: Optional[str] = None      # Silo: PIN of the main profile, if it has one
     enabled: bool = True
 
 

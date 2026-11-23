@@ -15,6 +15,7 @@ the clean copy (overlay_refresh.refresh_state()).
 """
 from __future__ import annotations
 
+import hashlib
 import io
 import os
 import threading
@@ -281,7 +282,7 @@ def has_overlays(server_id: str, rating_key: str, season_index: Optional[int] = 
 
 
 def resolve_base(server_id: str, rating_key: str, season_index: Optional[int], is_tv: bool,
-                 allow_overlaid: bool = False) -> Tuple[Optional[bytes], str]:
+                 allow_overlaid: bool = False, info: Optional[Dict[str, Any]] = None) -> Tuple[Optional[bytes], str]:
     """The image to draw overlays on. The server's poster is looked at first
     (the other app may have changed it since the clean copy was saved):
     - not what Simposter last sent: the other app's poster; it replaces the
@@ -292,7 +293,9 @@ def resolve_base(server_id: str, rating_key: str, season_index: Optional[int], i
       Simposter last rendered from. With nothing else, (None, HAS_OVERLAYS), or
       with allow_overlaid (editor previews) that poster itself, OVERLAID_BASE.
     (None, WAITING) when the poster couldn't be downloaded and nothing else is
-    usable."""
+    usable. `info`, when given, gets server_shows_ours=True when the server's
+    poster is Simposter's own with overlays (so an identical new render needn't
+    be sent again)."""
     existing = clean_base_path(server_id, rating_key, season_index)
 
     from . import media_server, poster_drift
@@ -329,6 +332,8 @@ def resolve_base(server_id: str, rating_key: str, season_index: Optional[int], i
             save_clean_base(server_id, rating_key, season_index, data)
             return data, "Simposter's earlier poster (no overlays)"
         overlaid = True
+        if info is not None:
+            info["server_shows_ours"] = True
 
     if existing is not None:
         try:
@@ -436,7 +441,8 @@ def _legacy_overlay(template_id: str, preset_id: Optional[str]) -> Optional[str]
 
 
 def _notify(source: str, server_id: str, library_id: Optional[str], title: str, year: Any,
-            template_id: str, preset_id: Optional[str], payload: bytes) -> None:
+            template_id: str, preset_id: Optional[str], payload: bytes,
+            synced_server_ids: Optional[List[str]] = None) -> None:
     """The same per-send Discord/Apprise notification other sends use, with
     action "overlay_only_sent" ("Overlays applied"). Batch runs notify once for
     the whole batch, so a batch item doesn't. Never raises."""
@@ -446,7 +452,7 @@ def _notify(source: str, server_id: str, library_id: Optional[str], title: str, 
         from .api.notifications import send_discord_notification, send_apprise_notification
         kwargs = dict(title=title, year=year, template_id=template_id or "", preset_id=preset_id or "",
                       library_id=library_id, source=source, action="overlay_only_sent",
-                      poster_data=payload, server_id=server_id)
+                      poster_data=payload, server_id=server_id, synced_server_ids=synced_server_ids or None)
         send_discord_notification(**kwargs)
         send_apprise_notification(**kwargs)
     except Exception as e:
@@ -459,12 +465,15 @@ def apply_for_item(server_id: str, rating_key: str, library_id: Optional[str], i
                    overlay_lists: Optional[Dict[str, Any]] = None,
                    upload: bool = True, title_hint: Optional[str] = None,
                    year_hint: Any = None, preview: bool = False,
-                   refresh_base: bool = False) -> Dict[str, Any]:
+                   refresh_base: bool = False, notify: bool = True) -> Dict[str, Any]:
     """Draw the preset's overlays (or `overlay_lists`) on this item's clean
     copy and upload the result. Returns {"status": "ok"|"skipped"|"error", ...};
     an ok result carries "image_bytes"/"content_type" (the encoded poster).
     upload=False only renders (nothing is sent, recorded or notified), for a
-    caller that just wants the image (Batch Edit's local save)."""
+    caller that just wants the image (Batch Edit's local save).
+    An upload is skipped ({"unchanged": True}) when the server still shows the
+    poster Simposter last sent there and the new render is byte-identical.
+    notify=False leaves the notification to the caller (apply_for_title)."""
     template_id = template_id or "uniformlogo"
     ids, below = _overlay_lists(template_id, preset_id, season_index, overlay_lists)
     if not ids and not _legacy_overlay(template_id, preset_id):
@@ -475,7 +484,8 @@ def apply_for_item(server_id: str, rating_key: str, library_id: Optional[str], i
         upload = False
         base, base_from = _preview_base(server_id, rating_key, season_index, is_tv, refresh=refresh_base)
     else:
-        base, base_from = resolve_base(server_id, rating_key, season_index, is_tv)
+        base_info: Dict[str, Any] = {}
+        base, base_from = resolve_base(server_id, rating_key, season_index, is_tv, info=base_info)
         _forget_preview_base(server_id, rating_key, season_index)
     if base is None:
         return {"status": "skipped", "reason": base_from}
@@ -520,6 +530,12 @@ def apply_for_item(server_id: str, rating_key: str, library_id: Optional[str], i
     if not upload:
         return {"status": "ok", "uploaded": False, "item_id": str(rating_key), "rating_key": str(rating_key),
                 "base": base_from, "image_bytes": payload, "content_type": content_type}
+    digest = hashlib.sha256(payload).hexdigest()
+    if base_info.get("server_shows_ours") and db.get_overlay_only_hash(server_id, str(rating_key)) == digest:
+        logger.info("[OVERLAY_ONLY] %s: overlays unchanged on %s, not sent again", log_title, server_id)
+        return {"status": "ok", "unchanged": True, "item_id": str(rating_key), "rating_key": str(rating_key),
+                "base": base_from, "title": title, "year": year, "library_id": library_id,
+                "image_bytes": payload, "content_type": content_type}
     try:
         if server_id == "plex-1":
             _upload_poster_and_verify(client, server_id, rating_key, payload, content_type)
@@ -539,6 +555,7 @@ def apply_for_item(server_id: str, rating_key: str, library_id: Optional[str], i
 
     # Our own upload is never "the other app changed it" on the next scan.
     poster_drift.record_sent(server_id, item_id, payload)
+    db.set_overlay_only_hash(server_id, item_id, digest)
     _cache_poster_after_upload(item_id, payload, content_type, is_tv=bool(is_tv))  # display + resend cache
 
     display = title
@@ -560,10 +577,12 @@ def apply_for_item(server_id: str, rating_key: str, library_id: Optional[str], i
         tmdb_id=tmdb_id, title=title, year=year, source_kind=overlay_refresh.CLEAN_BASE,
     )
 
-    _notify(source, server_id, library_id, display, year, template_id, preset_id, payload)
+    if notify:
+        _notify(source, server_id, library_id, display, year, template_id, preset_id, payload)
     logger.info("[OVERLAY_ONLY] %s: overlays applied on %s (base: %s)", log_title, server_id, base_from)
     return {"status": "ok", "item_id": item_id, "rating_key": current_key, "base": base_from,
-            "image_bytes": payload, "content_type": content_type}
+            "image_bytes": payload, "content_type": content_type,
+            "title": title, "year": year, "library_id": library_id}
 
 
 def apply_for_title(server_id: str, rating_key: str, library_id: Optional[str], is_tv: bool,
@@ -609,7 +628,7 @@ def apply_for_title(server_id: str, rating_key: str, library_id: Optional[str], 
         if not up and not (render_unsent_own and ci == 0):
             continue
         if not is_tv or include_series:
-            r = apply_for_item(sid, rk, lib, is_tv, template_id, preset_id, source, upload=up, **hints)
+            r = apply_for_item(sid, rk, lib, is_tv, template_id, preset_id, source, upload=up, notify=False, **hints)
             results.append({**r, "server_id": sid, "season_index": None})
         if is_tv and include_seasons:
             try:
@@ -624,11 +643,35 @@ def apply_for_title(server_id: str, rating_key: str, library_id: Optional[str], 
                 if affected_seasons and s["index"] not in affected_seasons:
                     continue
                 r = apply_for_item(sid, s["key"], lib, True, template_id, preset_id, source,
-                                   season_index=s["index"], upload=up, **hints)
+                                   season_index=s["index"], upload=up, notify=False, **hints)
                 results.append({**r, "server_id": sid, "season_index": s["index"]})
+    _notify_title(results, source, template_id, preset_id, library_id, title_hint, year_hint)
     statuses = [r.get("status") for r in results]
     status = "ok" if "ok" in statuses else ("error" if "error" in statuses else "skipped")
     return {"status": status, "results": results}
+
+
+def _notify_title(results: List[Dict[str, Any]], source: str, template_id: str, preset_id: Optional[str],
+                  library_id: Optional[str], title_hint: Optional[str], year_hint: Any) -> None:
+    """One notification for a whole title (every server and season it reached),
+    instead of one per upload. Nothing when nothing was sent, or for a batch
+    (Batch Edit sends one notification for the whole run)."""
+    if source == "batch":
+        return
+    sent = [r for r in results if r.get("status") == "ok" and r.get("image_bytes")
+            and not r.get("unchanged") and r.get("uploaded", True) is not False]
+    if not sent:
+        return
+    servers: List[str] = []
+    for r in sent:
+        if r.get("server_id") and r["server_id"] not in servers:
+            servers.append(r["server_id"])
+    primary = "plex-1" if "plex-1" in servers else (servers[0] if servers else "plex-1")
+    series = next((r for r in sent if r.get("season_index") is None), sent[0])
+    _notify(source, primary, series.get("library_id") or library_id,
+            series.get("title") or title_hint or "", series.get("year") or year_hint,
+            template_id, preset_id, series["image_bytes"],
+            synced_server_ids=[s for s in servers if s != primary])
 
 
 def on_external_poster(server_id: str, rating_key: str, season_index: Optional[int] = None) -> Dict[str, Any]:

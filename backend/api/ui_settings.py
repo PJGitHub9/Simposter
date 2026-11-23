@@ -55,8 +55,7 @@ def _mask_media_server_secrets(data: dict) -> dict:
         return data
     masked = dict(data)
     masked["mediaServers"] = [
-        {**s, "token": SECRET_MASK} if isinstance(s, dict) and s.get("token") else
-        ({**s, "apiKey": SECRET_MASK} if isinstance(s, dict) and s.get("apiKey") else s)
+        {**s, **{f: SECRET_MASK for f in ("token", "apiKey", "pin") if s.get(f)}} if isinstance(s, dict) else s
         for s in servers
     ]
     return masked
@@ -77,6 +76,8 @@ def _restore_unchanged_media_server_secrets(incoming: dict, current: dict) -> di
             entry["token"] = existing.get("token", "") if same else ""
         if entry.get("apiKey") == SECRET_MASK:
             entry["apiKey"] = existing.get("apiKey", "") if same else ""
+        if entry.get("pin") == SECRET_MASK:
+            entry["pin"] = existing.get("pin", "") if same else ""
     return incoming
 
 

@@ -35,8 +35,9 @@
         {{ group.label }}
         <span v-if="group.type === 'emby'" class="coming-soon-badge testing-badge">Testing required</span>
       </h3>
+      <p v-if="group.type === 'silo' && siloSharedNote" class="scan-hint silo-shared-hint">{{ siloSharedNote }}</p>
       <p v-if="group.type === 'silo'" class="scan-hint">
-        Needs an admin API key from Silo (Settings → API keys). Silo keeps one poster per title, so libraries sharing a title share its poster. If you use Simposter's overlays, turn off Silo's own card overlays so badges don't appear twice.
+        Needs an API key from Silo's admin API keys page: create it on an admin account, leave every permission unticked (that gives full access; a key with permissions ticked can't upload images), and don't tie it to a profile. Silo keeps one poster per title, so libraries sharing a title share its poster. If you use Simposter's overlays, turn off Silo's own card overlays so badges don't appear twice.
       </p>
       <p v-if="group.type === 'emby'" class="scan-hint">
         Emby support uses the same calls as Jellyfin and hasn't been tested on a real Emby server yet.
@@ -114,6 +115,10 @@
               placeholder="API Key"
               class="server-credential-input"
             />
+          </div>
+          <div v-if="server.type === 'silo'" class="server-card-row">
+            <input v-model="server.pin" type="password" autocomplete="off" placeholder="Profile PIN" class="server-credential-input" />
+            <span class="scan-hint pin-hint">Only if Silo's main profile has a PIN. Simposter reads your libraries as that profile.</span>
           </div>
           <p
             v-if="keyNeedsReentry(server.url, server.type === 'plex' ? server.token : server.apiKey, settingsStore.savedServerUrls.value[`ms:${server.id}`])"
@@ -202,6 +207,10 @@
             class="server-credential-input"
           />
         </div>
+        <div v-if="group.type === 'silo'" class="add-server-row">
+          <input v-model="newServerState.silo.pin" type="password" autocomplete="off" placeholder="Profile PIN (optional)" class="server-credential-input" />
+          <span class="scan-hint pin-hint">Only if Silo's main profile has a PIN.</span>
+        </div>
         <div class="add-server-row">
           <button
             class="secondary"
@@ -265,6 +274,7 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref } from 'vue'
 import PlexSignIn from '@/components/PlexSignIn.vue'
+import { siloGroupNames, siloSharedImageNote } from '@/services/siloGroups'
 import { useSettingsStore, type MediaServerEntry } from '@/stores/settings'
 import { getApiBase } from '@/services/apiBase'
 import { mediaServerId } from '@/services/mediaServerId'
@@ -344,6 +354,10 @@ function togglePosterApi(enabled: boolean) {
   settingsStore.posterApi.value = { ...settingsStore.posterApi.value, enabled }
 }
 const servers = settingsStore.mediaServers
+const siloSharedNote = computed(() => {
+  const names = siloGroupNames(settingsStore.libraryGroups.value, servers.value)
+  return names.length > 1 ? siloSharedImageNote(names) : ''
+})
 
 // The primary Plex connection can be named too, same as any other server --
 // stored on its own 'plex-1' entry inside the mediaServers list (not a new
@@ -479,11 +493,12 @@ function buildConnectionMessage(sections: ServerSection[]): string {
 // docstring on /api/media-server/test-connection) back to the real stored
 // value -- harmless to always send even for a brand-new, not-yet-saved
 // server (no matching id, so nothing to resolve).
-async function testConnectionRequest(type: string, url: string, credential: string, serverId?: string): Promise<{ ok: boolean; message: string }> {
+async function testConnectionRequest(type: string, url: string, credential: string, serverId?: string, pin?: string): Promise<{ ok: boolean; message: string }> {
   const body: Record<string, string> = { type, url }
   if (type === 'plex') body.token = credential
   else body.apiKey = credential
   if (serverId) body.server_id = serverId
+  if (pin) body.pin = pin
   try {
     const res = await fetch(`${apiBase}/api/media-server/test-connection`, {
       method: 'POST',
@@ -493,7 +508,8 @@ async function testConnectionRequest(type: string, url: string, credential: stri
     if (!res.ok) return { ok: false, message: '✗ Could not connect' }
     const data = await res.json()
     if (!data.connected) return { ok: false, message: `✗ ${data.error || 'Could not connect'}` }
-    return { ok: true, message: buildConnectionMessage(data.sections || []) }
+    const profile = data.profile ? ` Reading Silo as the profile ${data.profile}.` : ''
+    return { ok: true, message: buildConnectionMessage(data.sections || []) + profile }
   } catch {
     return { ok: false, message: '✗ Could not connect' }
   }
@@ -515,7 +531,7 @@ async function testServerConnection(server: MediaServerEntry) {
   testingId.value = server.id
   try {
     const credential = server.type === 'plex' ? (server.token || '') : (server.apiKey || '')
-    testResults[server.id] = await testConnectionRequest(server.type, server.url, credential, server.id)
+    testResults[server.id] = await testConnectionRequest(server.type, server.url, credential, server.id, server.pin)
   } catch {
     testResults[server.id] = { ok: false, message: '✗ Could not connect' }
   } finally {
@@ -527,11 +543,12 @@ interface NewServerState {
   name: string
   url: string
   credential: string
+  pin: string
   testing: boolean
   testResult: { ok: boolean; message: string } | null
 }
 function freshNewServerState(): NewServerState {
-  return { name: '', url: '', credential: '', testing: false, testResult: null }
+  return { name: '', url: '', credential: '', pin: '', testing: false, testResult: null }
 }
 // One independent add-a-server form per type now, instead of a single shared
 // form with a type dropdown -- the type is implied by which section the form
@@ -572,7 +589,7 @@ async function testNewServer(type: 'plex' | 'jellyfin' | 'emby' | 'silo') {
   state.testing = true
   state.testResult = null
   try {
-    state.testResult = await testConnectionRequest(type, state.url, state.credential)
+    state.testResult = await testConnectionRequest(type, state.url, state.credential, undefined, state.pin)
   } catch {
     state.testResult = { ok: false, message: '✗ Could not connect' }
   } finally {
@@ -610,6 +627,7 @@ function addServer(type: 'plex' | 'jellyfin' | 'emby' | 'silo') {
   }
   if (type === 'plex') entry.token = state.credential
   else entry.apiKey = state.credential
+  if (type === 'silo' && state.pin) entry.pin = state.pin
   servers.value = [...servers.value, entry]
   newServerState[type] = freshNewServerState()
   addFormOpen[type] = false
@@ -922,6 +940,14 @@ h3 {
   color: var(--text-secondary);
   font-size: 12px;
   margin: 4px 0 0 0;
+}
+
+.silo-shared-hint { color: #e5a00d; }
+
+.pin-hint {
+  margin: 0;
+  flex: 1;
+  min-width: 180px;
 }
 
 /* Bottom row for the "Remove Server" action -- deliberately separated from

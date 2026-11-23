@@ -10,6 +10,35 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.92',
+    date: '2026-11-23',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Silo: if your main Silo profile has a PIN, enter it in the new PIN field so Simposter can read your libraries. Test Connection now says which profile Simposter reads as.',
+          'Silo: audio language for movies (language badges and rules now work on Silo copies). Your next Silo scan fetches it for every movie once, so it takes a little longer.',
+        ],
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Silo TV shows had no folder, so {folder} in save paths and file-name overlay rules didn’t work for them.',
+          'Silo collections without a poster showed broken tiles. They now show a plain tile until they have a poster.',
+          'A scan could send a season poster to a server again right after a webhook had already sent it.',
+          'Overlay only: every Sonarr episode import re-sent the same poster to every server, with one notification per server. An unchanged poster is no longer re-sent, and you get one notification per title.',
+        ],
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Silo setup explains which API key to create (admin account, no permissions ticked), and Test Connection says so when a key with permissions ticked can’t upload images.',
+          'Settings shows a note when Silo libraries are in more than one library group: Silo keeps one poster per title for all its libraries.',
+        ],
+      },
+    ],
+  },
+  {
     version: 'v1.8.91',
     date: '2026-11-22',
     sections: [

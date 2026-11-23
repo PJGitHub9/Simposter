@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.8.92 (2026-11-23) — `dev-silo` branch
+
+### New Features
+- **Silo profile PIN** — Silo reads the catalog as the primary profile (`X-Profile-Id`); a profile with `has_pin` also needs `X-Profile-Token` from `POST /profiles/{id}/verify-pin`. Optional `pin` on the Silo media server entry (masked on read, kept only for the same address, removed from database exports without keys). The client verifies once, caches the token per server and profile until `expires_at`, never sends a PIN Silo rejected again (Silo locks the profile for 5 minutes after 5 wrong tries) and reports a 429 lock. Test Connection names the profile.
+- **Silo audio language** — the admin listing has no audio tracks; `get_item_metadata()` reads `/catalog/items/{id}` and takes this library's file (matched by `file_id`), default track else first. A one-time migration (`silo_audio_language_v1`) clears Silo's stored scan Etags so the next scan fetches it for every movie.
+
+### Bug Fixes
+- **Silo TV shows had no file path** — Silo lists no files for a series. `list_items()` and `get_folder_name()` take the show folder from an episode's path (one level up from a `Season N`/`Specials` folder).
+- **Silo collections without a poster** — `list_collections()` reports `has_poster` (Silo's `poster_url`); a collection without one is stored and returned with poster `""` (not `None`, which the cache write ignores), so the grid shows its placeholder instead of requesting a poster that 404s. `MovieCard` no longer sets `url(null)` as a background.
+- **Scan re-sent a season a webhook already sent** — `_deliver_cached_plex_render()` now skips targets `poster_already_sent()` covers.
+- **Overlay only on every episode import** — `apply_for_item()` skips the upload when the server still shows Simposter's own overlaid poster and the new render's sha256 equals the last one sent there (new table `overlay_only_hashes`); `apply_for_title()` sends one notification per title (servers in "Also synced to"); Overlay Refresh's per-item overlay-only call no longer notifies (the run has its own summary).
+
+### Improvements
+- **Silo API keys** — the Silo section says to create the key on an admin account with no permissions ticked (full access) and not tied to a profile; a key with permissions ticked can't upload images (Silo admits scoped keys only to the routes their scopes name). Test Connection reports such a key (403 on `admin/collections/capabilities`); listings retry without `include_file_paths` after a 403.
+- **Silo ids checked before they go into a URL** — the Silo client refuses an item id with anything but letters, digits, `-` and `_` (a `/` or `..` could have reached another Silo admin route).
+- **Silo in more than one library group** — Settings → Media Servers and the library group cards note that Silo keeps one poster, logo and backdrop per title for all its libraries.
+
 ## v1.8.91 (2026-11-22) — `dev-silo` branch
 
 ### New Features

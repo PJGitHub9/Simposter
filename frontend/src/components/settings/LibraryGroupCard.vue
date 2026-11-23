@@ -87,6 +87,7 @@
         </select>
       </div>
       <p class="link-hint">Picking a library adds it to this group. Click Save Changes to keep it.</p>
+      <p v-if="siloSharedNote" class="link-hint silo-shared-hint">{{ siloSharedNote }}</p>
       <p v-if="!pickerGroups.length && !group.members.length" class="no-labels-hint">
         No media servers configured yet, or none reachable — add one in Settings → Media Servers.
       </p>
@@ -243,6 +244,7 @@
 // consumers to LibraryGroup directly is real, separate, larger work).
 import { computed, nextTick, ref, watch } from 'vue'
 import { KOMETA_LABEL } from '@/services/labelsToRemove'
+import { isSiloServer, siloGroupNames, siloSharedImageNote } from '@/services/siloGroups'
 import { useSettingsStore, type LibraryGroup, type LibraryGroupMember, type PosterModeRule } from '@/stores/settings'
 import { mediaServerLabel } from '@/services/mediaServerLabel'
 import PosterModeRules from './PosterModeRules.vue'
@@ -427,6 +429,14 @@ const emit = defineEmits<{
 
 const settingsStore = useSettingsStore()
 const groups = settingsStore.libraryGroups
+// Silo shares one image per title across its libraries; say so when this
+// group's Silo library isn't the only one in a group.
+const siloSharedNote = computed(() => {
+  const servers = settingsStore.mediaServers.value
+  if (!props.group.members.some(m => isSiloServer(m.serverId, servers))) return ''
+  const names = siloGroupNames(groups.value, servers)
+  return names.length > 1 ? siloSharedImageNote(names) : ''
+})
 const apiBase = getApiBase()
 const scan = useScanStore()
 
@@ -1081,6 +1091,7 @@ function removeGroup() {
   margin: 0;
   padding: 0 12px 10px;
 }
+.silo-shared-hint { color: #e5a00d; }
 
 .group-status {
   display: flex;

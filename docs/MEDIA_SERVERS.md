@@ -14,7 +14,7 @@ Simposter works with **Plex, Jellyfin, Emby and Silo**, in any combination: Plex
 
 - **Plex**: the server URL and an X-Plex-Token. Or click **Sign in with Plex**: sign in at plex.tv, pick your server, and Simposter fills both in (it checks which of the server's addresses it can reach). Then Test Connection and Save.
 - **Jellyfin / Emby**: the server URL and an API key (in Jellyfin: Dashboard → API Keys).
-- **Silo**: the server URL (its web port, usually 8090) and an **admin** API key from Silo (admin settings → API keys). See [Silo](#silo) below.
+- **Silo**: the server URL (its web port, usually 8090) and an API key from Silo's admin API keys page, created on an admin account with **no permissions ticked** and not tied to a profile. See [Silo](#silo) below.
 
 Give each server a **name** (e.g. "Jellyfin-main"). The name appears throughout the app, which matters once you have more than one server of the same type.
 
@@ -117,13 +117,14 @@ History and your saved poster files are kept. If you remove Plex, Simposter stop
 
 [Silo](https://github.com/Silo-Server/silo-server) works like Jellyfin in Simposter: link its libraries into library groups, browse, edit, send, Batch Edit, webhooks, Media Mirror, Overlay Refresh and drift detection all apply. Simposter uses Silo's own API, not its Jellyfin-compatible one.
 
-- **One poster per title.** Silo keeps a single entry per title, so a movie with a 1080p file in one Silo library and a 4K file in another is one title with one poster, backdrop and logo. Simposter shows it in both libraries (each with its own quality badges), but sending from either one changes Silo's poster for both. If the two library groups use different presets, the last send wins.
+- **One poster per title.** Silo keeps a single entry per title, so a movie with a 1080p file in one Silo library and a 4K file in another is one title with one poster, backdrop and logo. Simposter shows it in both libraries (each with its own quality badges), but sending from either one changes Silo's poster for both. If the two library groups use different presets, the last send wins. Settings shows a note when Silo libraries are in more than one library group.
 - **One Silo server** can be added.
-- **Admin key needed.** A non-admin key can read but not upload; Test Connection says so.
-- Silo can't take square art, thumb art, season logos or box-set (collection) artwork from other apps, and has no labels.
+- **API key.** Create it on an admin account, leave every permission unticked (in Silo that means full access) and don't tie it to a profile. A non-admin key, or one with permissions ticked, can't upload images; Test Connection says so.
+- **Profile PIN.** Simposter reads your libraries as Silo's main profile, and Test Connection names it. If that profile has a PIN, enter it in the PIN field. Silo locks a profile for 5 minutes after 5 wrong PINs, so Simposter tries a rejected PIN only once.
+- Silo can't take square art, thumb art, season logos or TMDb box-set artwork from other apps, and has no labels. Collections you made in Silo take a poster and a backdrop.
 - Titles Silo hasn't matched yet still show, but only merge with Plex/Jellyfin copies once Silo matches them.
 - **Silo's own overlays.** Silo can draw its own badges on cards. If you use Simposter's overlays, turn Silo's card overlays off so the badges don't appear twice.
-- Silo lists at most 20 box sets per library, so Collections shows no more than that.
+- Collections you made in Silo without a poster show a plain tile until they have one.
 - Silo is pre-release software, so its API may still change.
 
 ---

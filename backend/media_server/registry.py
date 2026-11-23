@@ -42,7 +42,8 @@ def _build_client(entry: dict) -> Optional[MediaServerClient]:
             is_emby=(server_type == "emby"),
         )
     if server_type == "silo":
-        return SiloClient(server_id, url=entry.get("url") or "", api_key=entry.get("apiKey") or "")
+        return SiloClient(server_id, url=entry.get("url") or "", api_key=entry.get("apiKey") or "",
+                          pin=entry.get("pin") or None)
     logger.debug("[MEDIA_SERVER] No client implementation for server type '%s' (id=%s)", server_type, server_id)
     return None
 

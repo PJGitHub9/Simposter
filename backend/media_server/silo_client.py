@@ -37,6 +37,9 @@ _TIMEOUT = (10, 30)
 _PAGE_LIMIT = 200  # Silo answers 422 above this
 _MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 COLLECTION_PREFIX = "collection-"
+SCOPED_KEY_MESSAGE = ("This API key has permissions ticked, so Silo won't let Simposter upload images. "
+                      "Create a key with no permissions ticked (full access), on an admin account, "
+                      "not tied to a profile.")
 
 # Silo rate-limits API keys (default "standard" tier: 20 requests/second,
 # 1200/minute; internal/ratelimit/config.go) and answers 429 with Retry-After.
@@ -47,6 +50,9 @@ _MAX_RETRIES = 3
 _pace_lock = threading.Lock()
 _next_slot: Dict[str, float] = {}
 _EPISODE_CACHE_SECONDS = 600
+# Server URLs whose key Silo refused include_file_paths for (shared by every
+# client instance, so the 403 and its warning happen once per run).
+_paths_refused: set = set()
 
 
 def _pace(base: str) -> None:
@@ -56,6 +62,31 @@ def _pace(base: str) -> None:
         _next_slot[base] = slot + _MIN_INTERVAL
     if slot > now:
         time.sleep(slot - now)
+
+
+class SiloPinError(Exception):
+    """The primary profile has a PIN and Simposter has none, or Silo refused it."""
+
+
+# Profile tokens per (server URL, profile id): (token, expiry epoch or None),
+# and PINs Silo rejected per (server URL, profile id, PIN hash).
+_profile_tokens: Dict[Tuple[str, str], Tuple[str, Optional[int]]] = {}
+_rejected_pins: set = set()
+# One PIN check at a time: scan workers share a client, and several wrong PINs
+# sent at once would count as several tries toward Silo's 5-try lockout.
+_pin_lock = threading.Lock()
+
+
+def _wrong_pin_message(name: str) -> str:
+    return (f"Silo rejected the PIN for the profile {name}. Check it; Silo locks the profile "
+            "for 5 minutes after 5 wrong tries.")
+
+
+def _retry_after_seconds(resp) -> float:
+    try:
+        return float((getattr(resp, "headers", None) or {}).get("Retry-After") or 300)
+    except (TypeError, ValueError):
+        return 300.0
 
 
 def _retry_after(resp) -> float:
@@ -91,6 +122,19 @@ def split_key(key: str) -> Tuple[str, Optional[str]]:
         content_id, lib = s.rsplit(_KEY_SEP, 1)
         return content_id, _with_prefix(lib)
     return s, None
+
+
+_SAFE_ID = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _url_id(value: str) -> str:
+    """An id about to go into a Silo URL path. Silo's ids are letters, digits,
+    "-" and "_"; anything else (a "/" or "..") could reach another admin
+    route, so it is refused."""
+    s = str(value or "")
+    if not _SAFE_ID.match(s):
+        raise ValueError(f"Not a Silo id: {s[:40]!r}")
+    return s
 
 
 def _iso_to_epoch(value: Any) -> Optional[int]:
@@ -140,18 +184,23 @@ def _rating10(value: Any) -> Optional[float]:
 
 
 class SiloClient(MediaServerClient):
-    def __init__(self, server_id: str, url: str, api_key: str):
+    def __init__(self, server_id: str, url: str, api_key: str, pin: Optional[str] = None):
         self.server_id = server_id
         self.url = (url or "").strip().rstrip("/")
         self.api_key = api_key or ""
+        self.pin = (pin or "").strip() or None
         self.session = requests.Session()
         self._profile_id: Optional[str] = None
+        self.profile_name: Optional[str] = None
+        self._has_pin = False
         self.last_error: Optional[str] = None
         self._episodes: Dict[str, Tuple[float, List[dict]]] = {}
         self._listings: Dict[Tuple[str, str], Tuple[float, List[dict]]] = {}
         # Keys Silo just answered 404 for (the title was re-matched under a new
         # id); the scan cache still has them, so lookups must skip them.
         self._gone: set = set()
+        # False once Silo refused include_file_paths (a key with permissions ticked).
+        self._paths_allowed: Optional[bool] = False if self.url in _paths_refused else None
 
     def _request(self, method: str, url: str, **kw):
         """GET/POST with pacing; a 429 waits Retry-After and retries."""
@@ -174,20 +223,66 @@ class SiloClient(MediaServerClient):
             pid = self._profile()
             if pid:
                 h["X-Profile-Id"] = pid
+                if self._has_pin:
+                    h["X-Profile-Token"] = self._profile_token(pid)
         return h
 
     def _profile(self) -> Optional[str]:
+        """The primary profile, which Simposter reads the catalog as."""
         if self._profile_id is None:
             r = self._request("GET", f"{self.url}/api/v2/profiles", headers=self._headers(), timeout=_TIMEOUT)
             r.raise_for_status()
             items = (r.json() or {}).get("items") or []
             primary = next((p for p in items if p.get("is_primary")), items[0] if items else None)
             self._profile_id = str(primary["id"]) if primary else ""
+            self.profile_name = (primary or {}).get("name") or None
+            self._has_pin = bool((primary or {}).get("has_pin"))
         return self._profile_id or None
+
+    def _profile_token(self, pid: str) -> str:
+        """X-Profile-Token for a PIN-locked profile (POST /profiles/{id}/verify-pin).
+        Cached per server and profile until it expires, shared by every client
+        instance. Silo locks the profile for 5 minutes after 5 wrong PINs, so a
+        PIN Silo rejected is never sent again (until it changes)."""
+        name = self.profile_name or "main"
+        if not self.pin:
+            raise SiloPinError(f"Silo's main profile ({name}) has a PIN. Enter it in the PIN field so "
+                               "Simposter can read your libraries.")
+        with _pin_lock:
+            return self._profile_token_locked(pid, name)
+
+    def _profile_token_locked(self, pid: str, name: str) -> str:
+        key = (self.url, pid)
+        cached = _profile_tokens.get(key)
+        if cached and (cached[1] is None or cached[1] > time.time() + 60):
+            return cached[0]
+        rejected = (self.url, pid, hashlib.sha256(self.pin.encode()).hexdigest())
+        if rejected in _rejected_pins:
+            raise SiloPinError(_wrong_pin_message(name))
+        _pace(self.url)
+        r = self.session.post(f"{self.url}/api/v2/profiles/{pid}/verify-pin", json={"pin": self.pin},
+                              headers=self._headers(), timeout=_TIMEOUT)
+        if r.status_code == 429:
+            minutes = max(1, round(_retry_after_seconds(r) / 60))
+            raise SiloPinError(f"Silo has locked the profile {name} after too many wrong PINs. "
+                               f"Try again in about {minutes} minute{'s' if minutes != 1 else ''}.")
+        r.raise_for_status()
+        body = r.json() or {}
+        token = body.get("profile_token")
+        if not token:
+            _rejected_pins.add(rejected)
+            raise SiloPinError(_wrong_pin_message(name))
+        _profile_tokens[key] = (token, _iso_to_epoch(body.get("expires_at")))
+        return token
 
     def _get(self, path: str, params: Optional[dict] = None, profile: bool = False) -> Any:
         r = self._request("GET", f"{self.url}/api/v2{path}", params=params, headers=self._headers(profile),
                           timeout=_TIMEOUT)
+        if profile and self._has_pin and r.status_code in (401, 403) and self._profile_id:
+            # The token expired or the PIN changed: get a new one, once.
+            _profile_tokens.pop((self.url, self._profile_id), None)
+            r = self._request("GET", f"{self.url}/api/v2{path}", params=params, headers=self._headers(profile),
+                              timeout=_TIMEOUT)
         r.raise_for_status()
         return r.json()
 
@@ -207,13 +302,24 @@ class SiloClient(MediaServerClient):
 
     # ---- catalog helpers ---------------------------------------------
     def _catalog_items(self, library_id: Optional[str], kind: Optional[str], content_id: Optional[str] = None) -> Iterator[dict]:
-        params: Dict[str, Any] = {"include_file_paths": "true"}
+        params: Dict[str, Any] = {}
         if library_id:
             params["library_id"] = native_library_id(library_id)
         if kind:
             params["type"] = kind
         if content_id:
             params["content_ids"] = content_id
+        if self._paths_allowed is not False:
+            try:
+                # Fetched whole, so a 403 on the first page can fall back cleanly.
+                return iter(list(self._paged("/admin/catalog/items", dict(params, include_file_paths="true"))))
+            except requests.HTTPError as e:
+                if getattr(getattr(e, "response", None), "status_code", None) != 403:
+                    raise
+                self._paths_allowed = False
+                _paths_refused.add(self.url)
+                logger.warning("[SILO_CLIENT:%s] This API key can't read file paths (Silo answered 403); "
+                               "listing without them. Use a key with no permissions ticked.", self.server_id)
         return self._paged("/admin/catalog/items", params)
 
     def _catalog_item(self, key: str) -> Optional[dict]:
@@ -232,7 +338,8 @@ class SiloClient(MediaServerClient):
                 return v
         return versions[0] if versions and native is None else None
 
-    def _to_media_item(self, item: dict, library_id: str, art: Optional[Dict[str, Tuple]] = None) -> MediaItem:
+    def _to_media_item(self, item: dict, library_id: str, art: Optional[Dict[str, Tuple]] = None,
+                       file_path: Optional[str] = None) -> MediaItem:
         version = self._version(item, library_id) or {}
         # Only Silo's own (Rotten Tomatoes) score; a TMDb score is left to the
         # TMDb rating source so the overlay log credits it to TMDb.
@@ -246,7 +353,7 @@ class SiloClient(MediaServerClient):
             tvdb_id=item.get("tvdb_id") or None,
             added_at=_iso_to_epoch(item.get("added_at")),
             library_id=_with_prefix(library_id),
-            file_path=version.get("file_path"),
+            file_path=version.get("file_path") or file_path,
             image_version=_url_version(item.get("poster_url")),
             audience_rating=audience,
             critic_rating=_rating10(item.get("rating_rt_critic")),
@@ -272,6 +379,28 @@ class SiloClient(MediaServerClient):
         if me.get("role") != "admin":
             self.last_error = "This API key isn't an admin key, so Simposter can't upload posters"
             return False
+        # A key with permissions ticked is only let into the routes they name,
+        # and none covers admin collections or image uploads (Silo's
+        # internal/auth/api_key_scopes.go): it gets 403 here.
+        try:
+            r = self._request("GET", f"{self.url}/api/v2/admin/collections/capabilities",
+                              headers=self._headers(), timeout=_TIMEOUT)
+            if r.status_code == 403:
+                self.last_error = SCOPED_KEY_MESSAGE
+                return False
+        except Exception as e:
+            logger.debug("[SILO_CLIENT:%s] Permission check failed: %s", self.server_id, e)
+        # Simposter reads the catalog as the primary profile; a PIN on it needs
+        # the PIN here too.
+        try:
+            pid = self._profile()
+            if pid and self._has_pin:
+                self._profile_token(pid)
+        except SiloPinError as e:
+            self.last_error = str(e)
+            return False
+        except Exception as e:
+            logger.debug("[SILO_CLIENT:%s] Profile check failed: %s", self.server_id, e)
         return True
 
     def list_libraries(self) -> List[Library]:
@@ -288,7 +417,31 @@ class SiloClient(MediaServerClient):
         kind = "movie" if media_type == "movie" else "series"
         items = [i for i in self._catalog_items(library_id, kind) if i.get("content_id")]
         art = self._artwork_versions(library_id)
-        return [self._to_media_item(i, library_id, art) for i in items]
+        folders = self._series_folders(library_id) if kind == "series" else {}
+        return [self._to_media_item(i, library_id, art, folders.get(i["content_id"])) for i in items]
+
+    def _series_folders(self, library_id: str) -> Dict[str, str]:
+        """{series content_id: show folder} for a library. Silo lists no files
+        for a series, only for its episodes: the show folder is an episode's
+        folder, one level up when that is a Season/Specials folder. Empty on
+        any failure."""
+        out: Dict[str, str] = {}
+        try:
+            for ep in self._library_episodes(library_id):
+                sid = ep.get("series_id")
+                if not sid or sid in out:
+                    continue
+                path = (self._version(ep, library_id) or {}).get("file_path")
+                if not path:
+                    continue
+                folder = os.path.dirname(path.replace("\\", "/"))
+                if re.match(r"^(season\s*\d+|specials?)$", os.path.basename(folder), re.I):
+                    folder = os.path.dirname(folder)
+                if folder:
+                    out[sid] = folder
+        except Exception as e:
+            logger.debug("[SILO_CLIENT:%s] Show folders failed for %s: %s", self.server_id, library_id, e)
+        return out
 
     def _artwork_versions(self, library_id: str) -> Dict[str, Tuple[Optional[str], Optional[str]]]:
         """{content_id: (logo version, backdrop version)} for a library. The
@@ -330,8 +483,29 @@ class SiloClient(MediaServerClient):
             video_codec=(v.get("codec_video") or "").lower() or None,
             audio_codec=(v.get("codec_audio") or "").lower() or None,
             audio_channels=str(channels) if channels else None,
+            audio_language=self._audio_language(item.get("content_id") or "", v.get("file_id")),
             edition=v.get("edition") or None,
         )
+
+    def _audio_language(self, content_id: str, file_id: Any) -> Optional[str]:
+        """The admin listing has no audio tracks; the item's detail does, per
+        file. This library's file (by file_id), its default track else the
+        first. None on any failure."""
+        try:
+            detail = self._get(f"/catalog/items/{_url_id(content_id)}", profile=True) or {}
+            versions = detail.get("versions") or []
+            version = next((x for x in versions if file_id and x.get("file_id") == file_id), None)
+            if version is None and len(versions) == 1:
+                version = versions[0]
+            tracks = (version or {}).get("audio_tracks") or []
+            track = next((t for t in tracks if t.get("default")), tracks[0] if tracks else None)
+            if not track:
+                return None
+            from .jellyfin_client import JellyfinClient
+            return JellyfinClient._normalize_language(track.get("language"))
+        except Exception as e:
+            logger.debug("[SILO_CLIENT:%s] Audio language for %s failed: %s", self.server_id, content_id, e)
+            return None
 
     def item_exists(self, item_id: str) -> Optional[bool]:
         try:
@@ -400,6 +574,11 @@ class SiloClient(MediaServerClient):
         return items
 
     def get_folder_name(self, item_id: str, is_tv: bool = False) -> Optional[str]:
+        content_id, lib = split_key(item_id)
+        if is_tv and lib:
+            folder = self._series_folders(lib).get(content_id)
+            if folder:
+                return os.path.basename(folder) or None
         item = self._catalog_item(item_id)
         if not item:
             return None
@@ -417,6 +596,7 @@ class SiloClient(MediaServerClient):
     def upload_image(self, item_id: str, image_type: ImageType, image_bytes: bytes,
                      content_type: str = "image/jpeg", is_collection: bool = False) -> None:
         content_id, _lib = split_key(item_id)
+        _url_id(content_id)
         if is_collection or content_id.startswith(COLLECTION_PREFIX):
             self._upload_collection_image(item_id, image_type, image_bytes, content_type)
             return
@@ -451,7 +631,7 @@ class SiloClient(MediaServerClient):
             raise NotImplementedError("Silo collections take a poster or backdrop only")
         if len(image_bytes or b"") > _MAX_UPLOAD_BYTES:
             raise ValueError("Silo accepts images up to 10 MB")
-        coll_id = content_id[len(COLLECTION_PREFIX):]
+        coll_id = _url_id(content_id[len(COLLECTION_PREFIX):])
         ext = ".png" if "png" in (content_type or "") else ".webp" if "webp" in (content_type or "") else ".jpg"
         r = self._request(
             "PUT", f"{self.url}/api/v2/admin/collections/{coll_id}/{slot}",
@@ -510,6 +690,7 @@ class SiloClient(MediaServerClient):
             return None
         content_id, _lib = split_key(item_id)
         try:
+            _url_id(content_id)
             if content_id.startswith(COLLECTION_PREFIX):
                 if image_type not in (ImageType.POSTER, ImageType.BACKDROP):
                     return None
@@ -531,7 +712,7 @@ class SiloClient(MediaServerClient):
     # ---- seasons / episodes ------------------------------------------
     def _seasons(self, series_key: str) -> List[dict]:
         content_id, lib = split_key(series_key)
-        data = self._get(f"/catalog/series/{content_id}/seasons", profile=True) or {}
+        data = self._get(f"/catalog/series/{_url_id(content_id)}/seasons", profile=True) or {}
         out = []
         for s in data.get("items") or []:
             if s.get("content_id") and s.get("season_number") is not None:
@@ -612,15 +793,20 @@ class SiloClient(MediaServerClient):
             lib = _with_prefix(lib) if lib else None
             out.append({"key": qualify(f"{COLLECTION_PREFIX}{c['id']}", lib) if lib else f"{COLLECTION_PREFIX}{c['id']}",
                         "title": c.get("title") or "", "year": None, "addedAt": None, "poster": None,
-                        "library_id": lib})
+                        "library_id": lib,
+                        # No poster_url (e.g. a collage Silo draws itself): nothing to download.
+                        "has_poster": bool(c.get("poster_url"))})
         return out
 
     def list_collection_members(self, collection_item_id: str) -> List[dict]:
         content_id, lib = split_key(collection_item_id)
         if not content_id.startswith(COLLECTION_PREFIX) or not lib:
             return []
-        coll_id = content_id[len(COLLECTION_PREFIX):]
-        native = native_library_id(lib)
+        try:
+            coll_id = _url_id(content_id[len(COLLECTION_PREFIX):])
+            native = _url_id(native_library_id(lib))
+        except ValueError:
+            return []
         out, cursor = [], None
         try:
             for _ in range(50):

@@ -23,6 +23,7 @@ export type MediaServerEntry = {
   url: string
   token?: string   // Plex
   apiKey?: string  // Jellyfin/Emby/Silo
+  pin?: string     // Silo: PIN of the main profile, if it has one
   enabled: boolean
 }
 
@@ -308,6 +309,7 @@ function clearKeysWithChangedAddress() {
     const next = { ...s }
     if (next.token === SECRET_MASK) next.token = ''
     if (next.apiKey === SECRET_MASK) next.apiKey = ''
+    if (next.pin === SECRET_MASK) next.pin = ''
     return next
   })
   arrInstances.value = arrInstances.value.map(i =>

@@ -530,6 +530,13 @@ def _deliver_cached_plex_render(server_id: str, library_id: str, media_type: str
                     targets.append((season["key"], p, int(idx)))
         except Exception as e:
             logger.debug("[AUTO_GEN] Couldn't list seasons for %s on %s: %s", item.get("title"), server_id, e)
+    # A season (or show) this server already got, e.g. from the webhook that
+    # reached it straight away (Silo counts any copy of a title as sent).
+    already = [t for t in targets if db.poster_already_sent(server_id, t[0])]
+    if already:
+        targets = [t for t in targets if t not in already]
+        logger.debug("[AUTO_GEN] %s: %d poster(s) already on %s, not sent again",
+                     item.get("title"), len(already), server_id)
     if not targets:
         return False
 

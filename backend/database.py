@@ -1190,6 +1190,17 @@ def init_database():
         # skips the (expensive) re-encode + upload when nothing changed. Keyed
         # by target_rating_key too, so a target item that gets re-created under
         # a new id is always copied again.
+        # Overlay only (backend/overlay_only.py): hash of the poster last sent
+        # to each server copy, so an identical re-render isn't uploaded again.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS overlay_only_hashes (
+                server_id TEXT NOT NULL,
+                rating_key TEXT NOT NULL,
+                sha256 TEXT NOT NULL,
+                sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (server_id, rating_key)
+            )
+        """)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS mirror_sync_state (
                 source_server_id TEXT NOT NULL,
@@ -1716,6 +1727,17 @@ def init_database():
                 logger.info(f"[DB] Seeded libraryGroups with {len(all_groups)} auto-migrated single-member group(s) from existing Plex library mappings")
         except Exception as library_groups_err:
             logger.warning(f"[DB] Could not seed libraryGroups: {library_groups_err}")
+
+        # Silo items got an audio language in v1.8.92; scans skip items whose
+        # Etag hasn't changed, so forget Silo's once and the next scan fetches
+        # every item's details again.
+        try:
+            if not cursor.execute("SELECT 1 FROM applied_migrations WHERE name = 'silo_audio_language_v1'").fetchone():
+                cursor.execute("DELETE FROM media_server_item_etags WHERE server_id LIKE 'silo-%'")
+                cursor.execute("INSERT INTO applied_migrations (name) VALUES ('silo_audio_language_v1')")
+                conn.commit()
+        except Exception as silo_etag_err:
+            logger.warning(f"[DB] silo_audio_language_v1 migration failed: {silo_etag_err}")
 
         # Plex "webhook ignore labels" become Leave alone poster-mode rules on
         # the library's group (created here for an ungrouped Plex library).
@@ -5295,6 +5317,29 @@ def get_poster_history_by_id(history_id: int) -> Optional[Dict[str, Any]]:
     }
 
 
+def get_overlay_only_hash(server_id: str, rating_key: str) -> Optional[str]:
+    """sha256 of the overlay-only poster last uploaded to this server copy."""
+    try:
+        with get_db() as conn:
+            row = conn.execute("SELECT sha256 FROM overlay_only_hashes WHERE server_id = ? AND rating_key = ?",
+                               (server_id, str(rating_key))).fetchone()
+        return row[0] if row else None
+    except Exception:
+        return None
+
+
+def set_overlay_only_hash(server_id: str, rating_key: str, sha256: str) -> None:
+    try:
+        with get_db() as conn:
+            conn.execute(
+                "INSERT INTO overlay_only_hashes (server_id, rating_key, sha256, sent_at) "
+                "VALUES (?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(server_id, rating_key) "
+                "DO UPDATE SET sha256 = excluded.sha256, sent_at = excluded.sent_at",
+                (server_id, str(rating_key), sha256))
+    except Exception as e:
+        logger.debug(f"[DB] Couldn't store the overlay-only hash for {rating_key}: {e}")
+
+
 def poster_already_sent(server_id: str, rating_key: str) -> bool:
     """True if History has a successful poster send to this item on this server.
 
@@ -5575,6 +5620,7 @@ def purge_server_cache(server_id: str) -> Dict[str, Any]:
         cursor.execute("DELETE FROM overlay_state WHERE server_id = ?", (server_id,))
         counts["overlay_state"] = cursor.rowcount
         cursor.execute("DELETE FROM overlay_state_parked WHERE server_id = ?", (server_id,))
+        cursor.execute("DELETE FROM overlay_only_hashes WHERE server_id = ?", (server_id,))
 
     logger.info("[MEDIA_SERVER] Purged DB cache for removed server %s: %s", server_id, counts)
     try:

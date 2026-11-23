@@ -595,6 +595,7 @@ def _refresh_overlay_only(state: Dict[str, Any], source: str) -> Dict[str, Any]:
         state["server_id"], str(state["rating_key"]), state.get("library_id"), state.get("media_type") == "tv",
         state.get("template_id") or "uniformlogo", state.get("preset_id"), source,
         season_index=state.get("season_index"), overlay_lists=lists if lists["ids"] else None,
+        notify=False,  # the refresh run sends its own summary
     )
     if res.get("status") == "ok":
         return {"status": "updated", "detail": "overlays drawn on the clean copy"}
