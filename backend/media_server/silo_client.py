@@ -12,6 +12,10 @@ CLAUDE.md Quirk #240):
     item keys as    <content_id>@silo-<library>   (one per library copy, no ":" so it works as a Windows file name)
   and strips both before calling Silo.
 - Only poster/backdrop/logo can be uploaded (seasons: poster/backdrop).
+- Collections are Silo's curated library collections (GET /admin/collections),
+  keyed as collection-<id>@silo-<library>; they take a poster or backdrop
+  (PUT /admin/collections/{id}/poster|backdrop). TMDb box sets are not listed:
+  Silo only searches those (/catalog/box-sets needs q) and takes no artwork for them.
 """
 import hashlib
 import json
@@ -32,7 +36,7 @@ _KEY_SEP = "@"
 _TIMEOUT = (10, 30)
 _PAGE_LIMIT = 200  # Silo answers 422 above this
 _MAX_UPLOAD_BYTES = 10 * 1024 * 1024
-_BOX_SET_LIMIT = 20  # Silo's maximum for /catalog/box-sets
+COLLECTION_PREFIX = "collection-"
 
 # Silo rate-limits API keys (default "standard" tier: 20 requests/second,
 # 1200/minute; internal/ratelimit/config.go) and answers 429 with Retry-After.
@@ -151,7 +155,7 @@ class SiloClient(MediaServerClient):
 
     def _request(self, method: str, url: str, **kw):
         """GET/POST with pacing; a 429 waits Retry-After and retries."""
-        send = self.session.get if method == "GET" else self.session.post
+        send = getattr(self.session, method.lower())
         resp = None
         for attempt in range(_MAX_RETRIES + 1):
             _pace(self.url)
@@ -413,9 +417,9 @@ class SiloClient(MediaServerClient):
     def upload_image(self, item_id: str, image_type: ImageType, image_bytes: bytes,
                      content_type: str = "image/jpeg", is_collection: bool = False) -> None:
         content_id, _lib = split_key(item_id)
-        if is_collection:
-            # Silo's API has no upload route for box-set artwork (checked 2026-11-20).
-            raise NotImplementedError("Silo can't take box-set artwork from other apps yet")
+        if is_collection or content_id.startswith(COLLECTION_PREFIX):
+            self._upload_collection_image(item_id, image_type, image_bytes, content_type)
+            return
         slot = _UPLOAD_TYPE.get(image_type)
         if not slot:
             raise NotImplementedError(f"Silo has no {getattr(image_type, 'value', image_type)} image")
@@ -436,6 +440,27 @@ class SiloClient(MediaServerClient):
         r.raise_for_status()
         logger.info("[SILO_CLIENT:%s] Uploaded %s for %s (%d bytes)", self.server_id, slot, item_id, len(image_bytes))
         self._after_upload(item_id, image_type, image_bytes, content_type)
+
+    def _upload_collection_image(self, item_id: str, image_type: ImageType, image_bytes: bytes, content_type: str) -> None:
+        content_id, _lib = split_key(item_id)
+        if not content_id.startswith(COLLECTION_PREFIX):
+            # A TMDb box set: Silo has no upload route for those (checked 2026-11-22).
+            raise NotImplementedError("Silo can't take box-set artwork from other apps")
+        slot = {ImageType.POSTER: "poster", ImageType.BACKDROP: "backdrop"}.get(image_type)
+        if not slot:
+            raise NotImplementedError("Silo collections take a poster or backdrop only")
+        if len(image_bytes or b"") > _MAX_UPLOAD_BYTES:
+            raise ValueError("Silo accepts images up to 10 MB")
+        coll_id = content_id[len(COLLECTION_PREFIX):]
+        ext = ".png" if "png" in (content_type or "") else ".webp" if "webp" in (content_type or "") else ".jpg"
+        r = self._request(
+            "PUT", f"{self.url}/api/v2/admin/collections/{coll_id}/{slot}",
+            headers=self._headers(),
+            files={"image": (f"image{ext}", image_bytes, content_type or "application/octet-stream")},
+            timeout=(10, 60),
+        )
+        r.raise_for_status()
+        logger.info("[SILO_CLIENT:%s] Uploaded collection %s for %s (%d bytes)", self.server_id, slot, item_id, len(image_bytes))
 
     def _after_upload(self, item_id: str, image_type: ImageType, image_bytes: bytes, content_type: str) -> None:
         """Silo has one image per title, shared by every library the title is
@@ -485,7 +510,12 @@ class SiloClient(MediaServerClient):
             return None
         content_id, _lib = split_key(item_id)
         try:
-            detail = self._get(f"/catalog/items/{content_id}", {"image_size": "original"}, profile=True) or {}
+            if content_id.startswith(COLLECTION_PREFIX):
+                if image_type not in (ImageType.POSTER, ImageType.BACKDROP):
+                    return None
+                detail = self._get(f"/admin/collections/{content_id[len(COLLECTION_PREFIX):]}") or {}
+            else:
+                detail = self._get(f"/catalog/items/{content_id}", {"image_size": "original"}, profile=True) or {}
             url = detail.get(field)
             if not url:
                 return None
@@ -560,37 +590,52 @@ class SiloClient(MediaServerClient):
         self._episodes[key] = (time.monotonic(), episodes)
         return episodes
 
-    # ---- collections (Silo box sets; read only) -------------------------
+    # ---- collections (Silo's curated library collections) ----------------
     def list_collections(self, library_id: Optional[str] = None) -> List[dict]:
+        """Curated collections of one library (or every library). Errors are
+        logged as warnings: an empty list here empties the Collections page."""
+        native = native_library_id(library_id) if library_id else None
         try:
-            libs = {str(l.get("id")): l for l in (self._get("/libraries") or {}).get("items") or []}
-            native = native_library_id(library_id) if library_id else None
-            if native and not (libs.get(native) or {}).get("box_sets_enabled"):
-                return []
-            params = {"library_id": native} if native else {}
-            # Silo returns at most 20 box sets and has no paging for them.
-            data = self._get("/catalog/box-sets", dict(params, limit=_BOX_SET_LIMIT), profile=True) or {}
-            if len(data.get("items") or []) >= _BOX_SET_LIMIT:
-                logger.info("[SILO_CLIENT:%s] Silo lists at most %d box sets per library; more may exist",
-                            self.server_id, _BOX_SET_LIMIT)
-            out = []
-            for b in data.get("items") or []:
-                lib = _with_prefix(b.get("library_id") or native)
-                out.append({"key": qualify(b["id"], lib), "title": b.get("title") or "",
-                            "year": b.get("first_year"), "addedAt": None, "poster": None, "library_id": lib})
-            return out
+            data = self._get("/admin/collections", {"library_id": native} if native else None) or {}
         except Exception as e:
-            logger.debug("[SILO_CLIENT:%s] list_collections failed: %s", self.server_id, e)
+            logger.warning("[SILO_CLIENT:%s] Couldn't list collections for library %s: %s",
+                           self.server_id, library_id or "(all)", e)
             return []
+        out = []
+        for c in data.get("items") or []:
+            if not c.get("id"):
+                continue
+            libs = [str(x) for x in (c.get("library_ids") or [])] or [str(c.get("library_id") or "")]
+            lib = native if native else (libs[0] if libs and libs[0] else None)
+            if native and native not in libs and str(c.get("library_id") or "") != native:
+                continue
+            lib = _with_prefix(lib) if lib else None
+            out.append({"key": qualify(f"{COLLECTION_PREFIX}{c['id']}", lib) if lib else f"{COLLECTION_PREFIX}{c['id']}",
+                        "title": c.get("title") or "", "year": None, "addedAt": None, "poster": None,
+                        "library_id": lib})
+        return out
 
     def list_collection_members(self, collection_item_id: str) -> List[dict]:
-        box_id, lib = split_key(collection_item_id)
+        content_id, lib = split_key(collection_item_id)
+        if not content_id.startswith(COLLECTION_PREFIX) or not lib:
+            return []
+        coll_id = content_id[len(COLLECTION_PREFIX):]
+        native = native_library_id(lib)
+        out, cursor = [], None
         try:
-            params = {"library_id": native_library_id(lib)} if lib else None
-            data = self._get(f"/catalog/box-sets/{box_id}", params, profile=True) or {}
-            return [{"key": qualify(i["content_id"], lib) if lib else i["content_id"],
-                     "title": i.get("title") or "", "year": i.get("year")}
-                    for i in data.get("items") or [] if i.get("content_id")]
+            for _ in range(50):
+                params: Dict[str, Any] = {"limit": _PAGE_LIMIT}
+                if cursor:
+                    params["cursor"] = cursor
+                data = self._get(f"/library/{native}/collections/{coll_id}/items", params, profile=True) or {}
+                for i in data.get("items") or []:
+                    if i.get("content_id") and i.get("type") in (None, "movie", "series"):
+                        out.append({"key": qualify(i["content_id"], lib), "title": i.get("title") or "",
+                                    "year": i.get("year")})
+                page = data.get("page") or {}
+                cursor = page.get("next_cursor")
+                if not page.get("has_more") or not cursor:
+                    break
         except Exception as e:
             logger.debug("[SILO_CLIENT:%s] list_collection_members failed: %s", self.server_id, e)
-            return []
+        return out

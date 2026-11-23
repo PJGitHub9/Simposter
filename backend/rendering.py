@@ -271,6 +271,11 @@ def render_poster_image(
     """
     if options is None:
         options = {}
+    # "No Logo" means no logo, whatever logo_url a caller passes. /api/preview
+    # always did this; /api/plex/send and the other render paths didn't, so a
+    # season whose preset says No Logo got the series logo when sent (Quirk #242).
+    if str(options.get("logo_mode") or "").lower() == "none":
+        logo_url = None
 
     if template_id == "kometa":
         # Collections have no photo background source (no TMDb/Fanart art for a
@@ -356,6 +361,9 @@ def render_with_overlay_cache(
 
     from .templates.universal import _resize_cover, _hex_to_rgb, _solid_color_logo, _render_text_overlay, _add_grain
     from PIL import ImageOps
+
+    if str((render_options or {}).get("logo_mode") or "").lower() == "none":
+        logo_url = None
 
     # Keyed by preset AND the effect settings + canvas (backend/overlay_cache.py),
     # so a season config or a square canvas never reuses another variant's layer.

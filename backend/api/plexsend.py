@@ -51,8 +51,14 @@ def api_plex_send(req: PlexSendRequest):
         template_presets = presets_data.get(req.template_id, {}).get("presets", [])
         preset = next((p for p in template_presets if p.get("id") == req.preset_id), None)
         if preset:
-            # Use preset options, but allow req.options to override
+            # Use preset options, but allow req.options to override. A season
+            # uses the preset's season options, as /api/preview does, so a
+            # season sent from the editor renders the same as its preview.
             preset_options = preset.get("options", {})
+            is_season = req.season_index is not None or bool(str(options.get("season_text") or "").strip())
+            if is_season and isinstance(preset.get("season_options"), dict):
+                from .. import database as _db_season
+                preset_options = _db_season.resolve_season_options(preset_options, preset.get("season_options", {}))
             options = {**preset_options, **options}
             logger.debug("[PLEX] Using preset '%s' options for template '%s'", req.preset_id, req.template_id)
         else:

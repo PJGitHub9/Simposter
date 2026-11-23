@@ -2020,6 +2020,125 @@ const doPreview = async (skipBackgroundRender = false) => {
   }
 }
 
+// What the "Rendered Posters" strip renders for a season or the series that
+// isn't the one on screen: its own poster (picked by the poster filter unless
+// one was chosen for it), the logo, and the preset's season options. The send
+// loops use the same inputs, so what's sent is what the strip shows. They used
+// to switch the editor to each season instead, which kept the previous item's
+// poster for a season never opened (so every season got the series poster).
+type SeasonRenderInputs = { bg: string; logo: string | null; options: Record<string, any>; cacheKey: string }
+const seasonRenderInputs = (season: Season, baseOptions: Record<string, any>, currentLogoUrl: string | null): SeasonRenderInputs | null => {
+  const seasonKey = season.key
+  const seasonTitle = season.title
+  const seasonIsSeries = season.isSeries
+  const seasonIndex = season.index
+
+  // Get the poster URL for this specific season
+  const seasonPosterUrl = season.thumb || season.poster || posterUrlForRatingKey(seasonKey)
+  if (!seasonPosterUrl) return null
+
+  // Check if user manually selected a different poster for this season
+  const cachedPoster = selectedPosterCache.value[seasonKey]
+  let seasonBgUrl = cachedPoster || seasonPosterUrl
+
+  // Only apply poster filter if we don't have a manually selected poster
+  // and we have assets cached for this season
+  if (!cachedPoster) {
+    const seasonAssets = seasonAssetsCache.value[seasonKey]
+    const seasonPosters = seasonAssets?.posters || []
+    const seriesPosters = showLevelAssets.value.posters || []
+    const isSeason = !seasonIsSeries
+
+    // Apply poster filter based on available assets
+    // For textless filter: check season posters first, then fall back to series textless
+    if (posterFilter.value === 'textless') {
+      // Find textless poster for this season
+      const seasonTextless = seasonPosters.find((p) => p.has_text === false)
+      // For seasons (not series), also consider series textless posters as fallback
+      const seriesTextless = isSeason ? seriesPosters.find((p: any) => p.has_text === false) : null
+      const choice = seasonTextless || seriesTextless
+
+      if (choice) {
+        seasonBgUrl = choice.url
+      }
+    } else if (seasonPosters.length > 0) {
+      // For text/all filters, only use season-specific posters if available
+      if (posterFilter.value === 'text') {
+        // Find poster with text for this season
+        const withText = seasonPosters.find((p) => p.has_text === true)
+        if (withText) {
+          seasonBgUrl = withText.url
+        }
+      } else {
+        // Filter is 'all' - use first available TMDB/Fanart poster
+        seasonBgUrl = seasonPosters[0]?.url || seasonPosterUrl
+      }
+    }
+    // If no cached assets, just use the season's default Plex poster
+  }
+
+  // Get cached settings for this season
+  const cachedSettings = settingsCache.value[seasonKey]
+
+  // Build options using preset defaults + any cached customizations
+  let seasonOptions = { ...baseOptions }
+
+  // Add season_text/season_number for season-specific rendering
+  let thisSeasonText = ''
+  let thisSeasonNumber = ''
+  if (!seasonIsSeries) {
+    thisSeasonText = seasonTitle.includes('Special') ? 'Specials' : `Season ${seasonIndex}`
+    thisSeasonNumber = String(seasonIndex)
+    seasonOptions.season_text = thisSeasonText
+    seasonOptions.season_number = thisSeasonNumber
+  }
+
+  // For background renders, don't send text overlay, logo mode, or custom text
+  // Let the backend preset's season_options define these per-season
+  // Only send season_text so backend can use it for {season} placeholder replacement
+  // markFieldModified() only ever tracks changes for actual seasons, never the series
+  // (see its own isSeason check) -- userModifiedFields is deliberately empty for a
+  // series key. saveCurrentSettings() caches the series' full live state unconditionally
+  // (no preset-field stripping, unlike seasons), so for the series what matters is simply
+  // whether cached data exists at all, not whether a specific field was flagged modified.
+  const hasUserModifications = seasonIsSeries ? !!cachedSettings : cachedSettings && (userModifiedFields.value[seasonKey]?.size ?? 0) > 0
+
+  if (!hasUserModifications) {
+    // No user modifications - let backend preset season_options handle everything
+    // Remove fields that should come from preset season_options
+    const fieldsToRemove = [
+      'text_overlay_enabled', 'custom_text', 'logo_mode', 'font_size', 'font_family',
+      'font_weight', 'text_color', 'text_align', 'text_transform', 'letter_spacing', 'line_height',
+      'position_y', 'shadow_enabled', 'shadow_blur', 'shadow_offset_x', 'shadow_offset_y',
+      'shadow_color', 'shadow_opacity', 'stroke_enabled', 'stroke_width', 'stroke_color',
+      'text_bbox_enabled', ...TEXT_BOX_KEYS
+    ]
+    seasonOptions = Object.keys(seasonOptions).reduce((acc, key) => {
+      if (!fieldsToRemove.includes(key)) {
+        (acc as any)[key] = (seasonOptions as any)[key]
+      }
+      return acc
+    }, {} as any)
+    // Keep season_text/season_number for backend placeholder replacement (only if not empty)
+    if (thisSeasonText) {
+      seasonOptions.season_text = thisSeasonText
+      seasonOptions.season_number = thisSeasonNumber
+    }
+  } else {
+    // User has modified this season - apply all of their season-specific customizations,
+    // not just a hand-picked subset (see applyCachedPresetFields()'s own comment for why).
+    applyCachedPresetFields(seasonOptions, cachedSettings)
+  }
+
+  const seasonLogoUrl = cachedSettings?.selectedLogo || currentLogoUrl
+
+  seasonOptions = withBgAdjust(seasonOptions, seasonBgUrl)
+
+  // Generate cache key
+  const cacheKey = `${seasonKey}_${seasonBgUrl}_${seasonLogoUrl}_${JSON.stringify(seasonOptions)}`
+  return { bg: seasonBgUrl, logo: seasonLogoUrl || null, options: seasonOptions, cacheKey }
+}
+
 // Render all selected seasons in the background so they're ready when user clicks them
 const renderAllSelectedSeasons = async () => {
   if (overlayOnly.value) return
@@ -2050,115 +2169,13 @@ const renderAllSelectedSeasons = async () => {
     // Capture season details early to avoid race conditions
     const seasonKey = season.key
     const seasonTitle = season.title
-    const seasonIsSeries = season.isSeries
-    const seasonIndex = season.index
 
-    // Get the poster URL for this specific season
-    const seasonPosterUrl = season.thumb || season.poster || posterUrlForRatingKey(seasonKey)
-    if (!seasonPosterUrl) {
+    const inputs = seasonRenderInputs(season, baseOptions, currentLogoUrl)
+    if (!inputs) {
       console.warn('[BACKGROUND RENDER] No poster URL for', seasonTitle)
       return
     }
-
-    // Check if user manually selected a different poster for this season
-    const cachedPoster = selectedPosterCache.value[seasonKey]
-    let seasonBgUrl = cachedPoster || seasonPosterUrl
-
-    // Only apply poster filter if we don't have a manually selected poster
-    // and we have assets cached for this season
-    if (!cachedPoster) {
-      const seasonAssets = seasonAssetsCache.value[seasonKey]
-      const seasonPosters = seasonAssets?.posters || []
-      const seriesPosters = showLevelAssets.value.posters || []
-      const isSeason = !seasonIsSeries
-
-      // Apply poster filter based on available assets
-      // For textless filter: check season posters first, then fall back to series textless
-      if (posterFilter.value === 'textless') {
-        // Find textless poster for this season
-        const seasonTextless = seasonPosters.find((p) => p.has_text === false)
-        // For seasons (not series), also consider series textless posters as fallback
-        const seriesTextless = isSeason ? seriesPosters.find((p: any) => p.has_text === false) : null
-        const choice = seasonTextless || seriesTextless
-
-        if (choice) {
-          seasonBgUrl = choice.url
-        }
-      } else if (seasonPosters.length > 0) {
-        // For text/all filters, only use season-specific posters if available
-        if (posterFilter.value === 'text') {
-          // Find poster with text for this season
-          const withText = seasonPosters.find((p) => p.has_text === true)
-          if (withText) {
-            seasonBgUrl = withText.url
-          }
-        } else {
-          // Filter is 'all' - use first available TMDB/Fanart poster
-          seasonBgUrl = seasonPosters[0]?.url || seasonPosterUrl
-        }
-      }
-      // If no cached assets, just use the season's default Plex poster
-    }
-
-    // Get cached settings for this season
-    const cachedSettings = settingsCache.value[seasonKey]
-
-    // Build options using preset defaults + any cached customizations
-    let seasonOptions = { ...baseOptions }
-
-    // Add season_text/season_number for season-specific rendering
-    let thisSeasonText = ''
-    let thisSeasonNumber = ''
-    if (!seasonIsSeries) {
-      thisSeasonText = seasonTitle.includes('Special') ? 'Specials' : `Season ${seasonIndex}`
-      thisSeasonNumber = String(seasonIndex)
-      seasonOptions.season_text = thisSeasonText
-      seasonOptions.season_number = thisSeasonNumber
-    }
-
-    // For background renders, don't send text overlay, logo mode, or custom text
-    // Let the backend preset's season_options define these per-season
-    // Only send season_text so backend can use it for {season} placeholder replacement
-    // markFieldModified() only ever tracks changes for actual seasons, never the series
-    // (see its own isSeason check) -- userModifiedFields is deliberately empty for a
-    // series key. saveCurrentSettings() caches the series' full live state unconditionally
-    // (no preset-field stripping, unlike seasons), so for the series what matters is simply
-    // whether cached data exists at all, not whether a specific field was flagged modified.
-    const hasUserModifications = seasonIsSeries ? !!cachedSettings : cachedSettings && (userModifiedFields.value[seasonKey]?.size ?? 0) > 0
-
-    if (!hasUserModifications) {
-      // No user modifications - let backend preset season_options handle everything
-      // Remove fields that should come from preset season_options
-      const fieldsToRemove = [
-        'text_overlay_enabled', 'custom_text', 'logo_mode', 'font_size', 'font_family',
-        'font_weight', 'text_color', 'text_align', 'text_transform', 'letter_spacing', 'line_height',
-        'position_y', 'shadow_enabled', 'shadow_blur', 'shadow_offset_x', 'shadow_offset_y',
-        'shadow_color', 'shadow_opacity', 'stroke_enabled', 'stroke_width', 'stroke_color',
-        'text_bbox_enabled', ...TEXT_BOX_KEYS
-      ]
-      seasonOptions = Object.keys(seasonOptions).reduce((acc, key) => {
-        if (!fieldsToRemove.includes(key)) {
-          (acc as any)[key] = (seasonOptions as any)[key]
-        }
-        return acc
-      }, {} as any)
-      // Keep season_text/season_number for backend placeholder replacement (only if not empty)
-      if (thisSeasonText) {
-        seasonOptions.season_text = thisSeasonText
-        seasonOptions.season_number = thisSeasonNumber
-      }
-    } else {
-      // User has modified this season - apply all of their season-specific customizations,
-      // not just a hand-picked subset (see applyCachedPresetFields()'s own comment for why).
-      applyCachedPresetFields(seasonOptions, cachedSettings)
-    }
-
-    const seasonLogoUrl = cachedSettings?.selectedLogo || currentLogoUrl
-
-    seasonOptions = withBgAdjust(seasonOptions, seasonBgUrl)
-
-    // Generate cache key
-    const cacheKey = `${seasonKey}_${seasonBgUrl}_${seasonLogoUrl}_${JSON.stringify(seasonOptions)}`
+    const { bg: seasonBgUrl, logo: seasonLogoUrl, options: seasonOptions, cacheKey } = inputs
 
     // Skip only if THIS exact combination of poster/logo/options was already rendered --
     // checking renderedPreviews by seasonKey alone (the old check) meant a season with
@@ -2406,9 +2423,54 @@ const posterSending = ref(false)
 // reuse the already-rendered client preview, matching that established
 // pattern rather than building a second render pipeline for a non-Plex
 // destination.
-async function sendPosterToServer(serverId: string, ratingKey: string): Promise<boolean> {
+// One season or the series to send. Omitted = the item on screen.
+type SendItem = { bg: string; logo: string | null; options: Record<string, any>; image: string | null; seasonIndex: number | null }
+
+function currentSendItem(): SendItem {
+  return {
+    bg: bgUrl.value,
+    logo: logoUrl.value || null,
+    options: withBgAdjust(optionsPayload.value, bgUrl.value),
+    image: lastPreview.value || null,
+    seasonIndex: currentSeason.value && !currentSeason.value.isSeries ? currentSeason.value.index : null,
+  }
+}
+
+// Base options for the per-season send items: the screen's options without the
+// values that belong to the season on screen (as renderAllSelectedSeasons()).
+function sendBaseOptions(): Record<string, any> {
+  const base: Record<string, any> = { ...optionsPayload.value }
+  delete base.custom_text
+  delete base.season_text
+  delete base.season_number
+  return base
+}
+
+// The send item for one selected season/series: the one on screen sends what's
+// on screen; any other sends what the "Rendered Posters" strip shows for it
+// (its cached render, or a fresh one from the same inputs).
+async function sendItemFor(season: Season, base: Record<string, any>, focusedKey: string | undefined, currentLogo: string | null): Promise<SendItem | null> {
+  if (season.key === focusedKey) return currentSendItem()
+  const inputs = seasonRenderInputs(season, base, currentLogo)
+  if (!inputs) return null
+  let image = renderedPreviewCache.value[inputs.cacheKey] || null
+  if (!image) {
+    try {
+      const result = await render.preview(props.movie, inputs.bg, inputs.logo, inputs.options, selectedTemplate.value, selectedPreset.value, false, true)
+      if (result?.image_base64) {
+        image = `data:image/jpeg;base64,${result.image_base64}`
+        renderedPreviewCache.value[inputs.cacheKey] = image
+      }
+    } catch (err) {
+      console.error(`[SEND] ${season.title} - render failed:`, err)
+    }
+  }
+  return { bg: inputs.bg, logo: inputs.logo, options: inputs.options, image, seasonIndex: season.isSeries ? null : season.index }
+}
+
+async function sendPosterToServer(serverId: string, ratingKey: string, item: SendItem = currentSendItem()): Promise<boolean> {
   if (serverId === 'plex-1') {
-    if (!bgUrl.value) return false
+    if (!item.bg) return false
     try {
       const targetMovie = {
         ...props.movie,
@@ -2416,17 +2478,13 @@ async function sendPosterToServer(serverId: string, ratingKey: string): Promise<
         server_id: 'plex-1',
         library_id: ratingKey === props.movie.key ? props.movie.library_id : undefined,
       }
-      // The season being sent is the one currently in context (doSend() switches
-      // to each selected item before calling this), so its number goes along,
-      // as the Plex-only loop does.
-      const seasonIndex = currentSeason.value && !currentSeason.value.isSeries ? currentSeason.value.index : null
-      await render.send(targetMovie, bgUrl.value, logoUrl.value, withBgAdjust(optionsPayload.value, bgUrl.value), Array.from(selectedLabels.value), selectedTemplate.value, selectedPreset.value, false, seasonIndex, false)
+      await render.send(targetMovie, item.bg, item.logo, item.options, Array.from(selectedLabels.value), selectedTemplate.value, selectedPreset.value, false, item.seasonIndex, false)
       return true
     } catch {
       return false
     }
   }
-  if (!lastPreview.value) return false
+  if (!item.image) return false
   try {
     // server_id is required for a season item id -- it's never individually
     // cached with its own server_id row (only the series-level item is), so
@@ -2436,15 +2494,15 @@ async function sendPosterToServer(serverId: string, ratingKey: string): Promise<
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        rating_key: ratingKey, image_data: lastPreview.value, is_tv: true, server_id: serverId, notify: false,
+        rating_key: ratingKey, image_data: item.image, is_tv: true, server_id: serverId, notify: false,
         // What the preview was rendered from, for overlay refresh tracking.
         render: {
           template_id: selectedTemplate.value, preset_id: selectedPreset.value,
-          background_url: bgUrl.value, logo_url: logoUrl.value || null,
-          options: withBgAdjust(optionsPayload.value, bgUrl.value),
+          background_url: item.bg, logo_url: item.logo,
+          options: item.options,
           library_id: props.movie.library_id ?? null, source_server_id: props.movie.server_id || 'plex-1',
           meta_rating_key: props.movie.key, media_type: 'tv',
-          season_index: currentSeason.value && !currentSeason.value.isSeries ? currentSeason.value.index : null,
+          season_index: item.seasonIndex,
           title: props.movie.title, year: props.movie.year ?? null, tmdb_id: tmdbId.value,
         },
       })
@@ -2455,13 +2513,13 @@ async function sendPosterToServer(serverId: string, ratingKey: string): Promise<
   }
 }
 
-async function sendLogoToServer(serverId: string, ratingKey: string): Promise<boolean> {
-  if (!logoUrl.value) return false
+async function sendLogoToServer(serverId: string, ratingKey: string, logo: string | null = logoUrl.value || null): Promise<boolean> {
+  if (!logo) return false
   try {
     const endpoint = serverId === 'plex-1' ? '/api/plex/send-logo' : '/api/media-server/send-logo'
     const body: Record<string, unknown> = serverId === 'plex-1'
-      ? { rating_key: ratingKey, logo_url: logoUrl.value, is_tv: true, notify: false }
-      : { rating_key: ratingKey, image_url: logoUrl.value, is_tv: true, server_id: serverId, notify: false }
+      ? { rating_key: ratingKey, logo_url: logo, is_tv: true, notify: false }
+      : { rating_key: ratingKey, image_url: logo, is_tv: true, server_id: serverId, notify: false }
     const res = await fetch(`${apiBase}${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2780,12 +2838,12 @@ const doSend = async () => {
     const failed: string[] = []
     const notOnServer: string[] = []  // picked a server that doesn't have this season
 
-    // Preserve the currently-focused item so it can be restored once the
-    // loop finishes, matching the Plex-only loop below.
+    // Each item is sent from its own inputs (sendItemFor()); the editor stays
+    // on the item on screen.
     saveCurrentSettings()
-    const originalKey = currentTargetKey.value
-    const originalSettings = getCurrentSettings()
-    const originalPoster = selectedPoster.value
+    const sendBase = sendBaseOptions()
+    const focusedKey = currentSeason.value?.key
+    const currentLogo = logoUrl.value || null
 
     try {
       // Context-switching (fetchImagesForCurrentSeason/restoreSettingsForKey)
@@ -2830,27 +2888,10 @@ const doSend = async () => {
         const season = seasons.value.find(s => s.key === seasonKey)
         if (!season) continue
         try {
-          // Switch editing context to THIS item before doing anything else --
-          // without this, every item in the loop reused whatever was still
-          // sitting in bgUrl/optionsPayload/lastPreview from whichever
-          // season was last focused when Send was clicked, so every target
-          // silently got the SAME (wrong) image. User-reported directly:
-          // "it sent the season poster to the series poster."
-          const idxInSelected = Array.from(selectedSeasons.value).findIndex(k => k === seasonKey)
-          if (idxInSelected >= 0) currentSeasonIndex.value = idxInSelected
-          await fetchImagesForCurrentSeason()
-          await restoreSettingsForKey(seasonKey)
-
-          // Reuse an already-rendered preview for this item when one exists
-          // (the common case -- selecting a season already triggers a
-          // background render via renderAllSelectedSeasons()) instead of
-          // paying for a redundant re-render; only render fresh here if
-          // nothing's cached yet for it.
-          const cachedImage = renderedPreviews.value.find(p => p.seasonKey === seasonKey)?.imageUrl
-          if (cachedImage) {
-            lastPreview.value = cachedImage
-          } else {
-            await doPreview(true)
+          const item = await sendItemFor(season, sendBase, focusedKey, currentLogo)
+          if (!item) {
+            failed.push(season.title)
+            continue
           }
 
           const itemLinkedServers = await getLinkedServersForItem(season)
@@ -2873,10 +2914,10 @@ const doSend = async () => {
           // capture point for this item's bgUrl/logoUrl/optionsPayload/
           // lastPreview, happening before the loop's next iteration can
           // switch context again.
-          const posterPromises = targets.map(t => sendPosterToServer(t.server_id, t.rating_key))
-          const logoPromises = (sendLogo.value && logoUrl.value) ? targets.map(t => sendLogoToServer(t.server_id, t.rating_key)) : []
+          const posterPromises = targets.map(t => sendPosterToServer(t.server_id, t.rating_key, item))
+          const logoPromises = (sendLogo.value && item.logo) ? targets.map(t => sendLogoToServer(t.server_id, t.rating_key, item.logo)) : []
           const seasonTitle = season.title
-          const itemImage = lastPreview.value
+          const itemImage = item.image
           const isSeriesItem = !!season.isSeries
           pendingSends.push((async () => {
             try {
@@ -2907,15 +2948,6 @@ const doSend = async () => {
       }
       sendSummaryNotification(notifyServers, notifyAssets, succeeded, notifyImage)
 
-      // Restore original editing context, matching the Plex-only loop below.
-      if (originalKey) {
-        settingsCache.value[originalKey] = originalSettings
-        if (originalPoster) selectedPosterCache.value[originalKey] = originalPoster
-        await restoreSettingsForKey(originalKey)
-        const origIdx = Array.from(selectedSeasons.value).findIndex(k => k === originalKey)
-        if (origIdx >= 0) currentSeasonIndex.value = origIdx
-      }
-
       if (succeeded.length > 0) success(`Successfully sent ${succeeded.length} poster(s): ${succeeded.join(', ')}`)
       if (failed.length > 0) notifyError(`Failed to send ${failed.length} poster(s): ${failed.join(', ')}`)
       if (notOnServer.length > 0) notifyError(`Skipped where the server doesn't have it (scan that library?): ${notOnServer.join('; ')}`)
@@ -2945,11 +2977,9 @@ const doSend = async () => {
   try {
     // Save the current target settings before iterating
     saveCurrentSettings()
-
-    // Preserve current target settings to restore after send
-    const originalKey = currentTargetKey.value
-    const originalSettings = getCurrentSettings()
-    const originalPoster = selectedPoster.value
+    const sendBase = sendBaseOptions()
+    const focusedKey = currentSeason.value?.key
+    const currentLogo = logoUrl.value || null
 
     let plexNotifyImage: string | null = null
     // Send for each selected season
@@ -2958,34 +2988,21 @@ const doSend = async () => {
       if (!season) continue
 
       try {
-        // Switch context to the target season/series and load its cached settings
-        const idxInSelected = Array.from(selectedSeasons.value).findIndex(k => k === seasonKey)
-        if (idxInSelected >= 0) currentSeasonIndex.value = idxInSelected
-        await fetchImagesForCurrentSeason()
-        await restoreSettingsForKey(seasonKey)
+        // This season's own poster, logo and options (what the strip shows).
+        const item = await sendItemFor(season, sendBase, focusedKey, currentLogo)
+        if (!item || !item.bg) throw new Error('No poster for this season')
 
         // Create a temporary movie object for this season. title is always the real show
         // name -- see the identical fix/comment in doSave()'s equivalent line.
         const seasonMovie = { ...props.movie, key: seasonKey, title: props.movie.title }
-        const seasonIndex = season.isSeries ? null : season.index
-        await render.send(seasonMovie, bgUrl.value, logoUrl.value, withBgAdjust(optionsPayload.value, bgUrl.value), Array.from(selectedLabels.value), selectedTemplate.value, selectedPreset.value, sendLogo.value, seasonIndex, false)
+        await render.send(seasonMovie, item.bg, item.logo, item.options, Array.from(selectedLabels.value), selectedTemplate.value, selectedPreset.value, sendLogo.value, item.seasonIndex, false)
 
         succeeded.push(season.title)
-        plexNotifyImage = plexNotifyImage || renderedPreviews.value.find(p => p.seasonKey === seasonKey)?.imageUrl || null
+        plexNotifyImage = plexNotifyImage || item.image
       } catch (err) {
         failed.push(season.title)
         console.error(`[SEND TO PLEX] ${season.title} - Failed:`, err)
       }
-    }
-
-    // Restore original editing context/settings/poster
-    if (originalKey) {
-      settingsCache.value[originalKey] = originalSettings
-      if (originalPoster) selectedPosterCache.value[originalKey] = originalPoster
-      await restoreSettingsForKey(originalKey)
-      // Restore current season index to the original selection if possible
-      const origIdx = Array.from(selectedSeasons.value).findIndex(k => k === originalKey)
-      if (origIdx >= 0) currentSeasonIndex.value = origIdx
     }
 
     if (succeeded.length > 0) {

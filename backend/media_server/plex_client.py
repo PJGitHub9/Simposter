@@ -227,11 +227,13 @@ class PlexClient(MediaServerClient):
                                   media_type: str, library_id: Optional[str] = None) -> Optional[str]:
         try:
             if media_type == "movie" and tmdb_id:
-                guid_target = f"tmdb://{tmdb_id}"
+                guid_targets = {f"tmdb://{tmdb_id}"}
                 item_tag = "Video"
                 section_type = "movie"
-            elif media_type == "tv" and tvdb_id:
-                guid_target = f"tvdb://{tvdb_id}"
+            elif media_type == "tv" and (tvdb_id or tmdb_id):
+                # TVDB or TMDb: Plex stops using TheTVDB on Dec 3, 2026, so
+                # shows it matches after that may have no tvdb:// id.
+                guid_targets = {f"{k}://{v}" for k, v in (("tvdb", tvdb_id), ("tmdb", tmdb_id)) if v}
                 item_tag = "Directory"
                 section_type = "show"
             else:
@@ -258,7 +260,7 @@ class PlexClient(MediaServerClient):
                 for el in root.findall(f".//{item_tag}"):
                     rating_key = el.get("ratingKey")
                     for guid in el.findall("Guid"):
-                        if guid.get("id", "") == guid_target:
+                        if guid.get("id", "") in guid_targets:
                             return rating_key
             return None
         except Exception as e:

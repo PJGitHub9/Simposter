@@ -413,9 +413,11 @@ def find_plex_movie_by_tmdb_id(tmdb_id: int, library_id: Optional[str] = None) -
         return None
 
 
-def find_plex_show_by_tvdb_id(tvdb_id: int, library_id: Optional[str] = None) -> Optional[tuple]:
+def find_plex_show_by_tvdb_id(tvdb_id: int, library_id: Optional[str] = None, tmdb_id: Optional[int] = None) -> Optional[tuple]:
     """
-    Find a Plex TV show's rating_key by its TVDb ID.
+    Find a Plex TV show's rating_key by its TVDb ID, or by the show's TMDb ID
+    (given, or looked up from the TVDB id). Plex stops using TheTVDB on
+    December 3, 2026, so shows it matches after that may have no tvdb:// id.
 
     Args:
         tvdb_id: The TVDb ID to search for
@@ -424,6 +426,15 @@ def find_plex_show_by_tvdb_id(tvdb_id: int, library_id: Optional[str] = None) ->
     Returns:
         Tuple of (rating_key, library_id) if found, None otherwise
     """
+    if not tmdb_id:
+        try:
+            from ..tmdb_client import find_tmdb_tv_id_by_tvdb
+            tmdb_id = find_tmdb_tv_id_by_tvdb(tvdb_id)
+        except Exception:
+            tmdb_id = None
+    wanted = {f"tvdb://{tvdb_id}"}
+    if tmdb_id:
+        wanted.add(f"tmdb://{tmdb_id}")
     try:
         # Get Plex library to search
         if library_id:
@@ -454,8 +465,8 @@ def find_plex_show_by_tvdb_id(tvdb_id: int, library_id: Optional[str] = None) ->
                 # fix/comment in find_plex_movie_by_tmdb_id() above.
                 for guid in video.findall("Guid"):
                     guid_id = guid.get("id", "")
-                    if guid_id == f"tvdb://{tvdb_id}":
-                        logger.info("[WEBHOOK] Found TV show rating_key=%s [%s] in library=%s for TVDb ID %s", rating_key, video.get("title", "?"), lib_key, tvdb_id)
+                    if guid_id in wanted:
+                        logger.info("[WEBHOOK] Found TV show rating_key=%s [%s] in library=%s for TVDb ID %s (matched %s)", rating_key, video.get("title", "?"), lib_key, tvdb_id, guid_id)
                         return (rating_key, lib_key)
 
         logger.warning(f"[WEBHOOK] Could not find Plex TV show with TVDb ID {tvdb_id}")

@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.8.91 (2026-11-22) — `dev-silo` branch
+
+### New Features
+- **Silo collections** — Silo's `/catalog/box-sets` is a search (`q` is required), so the old listing always failed (error swallowed) and Collections stayed empty; Silo also has no upload route for TMDb box sets. `SiloClient.list_collections()` now lists Silo's curated library collections (`GET /admin/collections?library_id=`), keyed `collection-<id>@silo-<lib>`; members come from `GET /library/{lib}/collections/{id}/items`; posters/backdrops upload with `PUT /admin/collections/{id}/poster|backdrop` (multipart `image`) and download from the collection's `poster_url`/`backdrop_url`. Send is enabled for Silo collections in the Simposter and Kometa Creators (Send Logo stays off: no logo slot). A list failure is logged as a warning. Checked against Silo's source (2026-11-22); Posterizarr uses the same routes.
+
+### Bug Fixes
+- **TV editor multi-season send sent the series poster** — the send loops switched the editor to each season and read the live `selectedPoster`/`lastPreview`; `restoreSettingsForKey()` only sets a poster for a season opened before, so others kept the previous item's (series) poster, and the `watch(currentSeason)` handler re-rendered in the middle of the loop. New `seasonRenderInputs()` (what `renderAllSelectedSeasons()` renders for a season, now shared) and `sendItemFor()`: each item is sent from its own background/logo/options and its strip image (cached, or rendered from the same inputs); the editor no longer switches context. Both the multi-server loop and the Plex-only loop.
+- **`/api/plex/send` ignored a preset's season options** — it merged only the base options, while `/api/preview` uses `resolve_season_options()` for a season. Now the same when `season_index` or `season_text` is set.
+- **No Logo was only honored by `/api/preview`** — the renderer draws any `logo_url` it gets; only `/api/preview` dropped it for `logo_mode: none`. `render_poster_image()` and `render_with_overlay_cache()` now do it themselves, so Plex sends, editor re-renders for other servers, Overlay Refresh and Save to Disk match the preview (seasons sent with the strip's inputs got the series logo over their text).
+- **TMDb id used as a TVDB id** — five `external_ids.get("tvdb_id") or external_ids.get("id")` fallbacks (`batch.py`, `preview.py`, `tv_shows.py` ×3) used TMDb's own id when TMDb has no TVDB id (Quirk #217's "pre-existing bug 2").
+
+### Improvements
+- **Plex dropping TheTVDB (Dec 3, 2026)** — shows Plex matches afterwards may have no `tvdb://` id. `find_plex_show_by_tvdb_id()` also matches `tmdb://` (id passed in or from new `tmdb_client.find_tmdb_tv_id_by_tvdb()`, TMDb `/find?external_source=tvdb_id`); `PlexClient`/`JellyfinClient.find_item_by_external_id()` match a show by TVDB id, else TMDb id.
+
 ## v1.8.90 (2026-11-20) — `dev-silo` branch
 
 ### New Features

@@ -363,7 +363,7 @@ def api_tv_show_select_poster(
     if tmdb_id and not tvdb_id:
         try:
             external_ids = get_tv_external_ids(tmdb_id)
-            tvdb_id = external_ids.get("tvdb_id") or external_ids.get("id")
+            tvdb_id = external_ids.get("tvdb_id")
         except Exception:
             pass
 
@@ -540,7 +540,7 @@ def api_tv_show_tmdb(rating_key: str):
     if tmdb_id and not tvdb_id:
         try:
             external_ids = get_tv_external_ids(tmdb_id)
-            tvdb_id = external_ids.get("tvdb_id") or external_ids.get("id")
+            tvdb_id = external_ids.get("tvdb_id")
         except Exception:
             tvdb_id = tvdb_id
 
@@ -641,7 +641,7 @@ def api_tmdb_tv_images(tmdb_id: int, season: Optional[int] = None, tvdb_id: Opti
             provided_tvdb_id = tvdb_id
             try:
                 external_ids = get_tv_external_ids(tmdb_id)
-                tvdb_id = provided_tvdb_id or external_ids.get("tvdb_id") or external_ids.get("id")
+                tvdb_id = provided_tvdb_id or external_ids.get("tvdb_id")
             except Exception:
                 tvdb_id = provided_tvdb_id or None
 
@@ -728,7 +728,7 @@ def api_tmdb_tv_images(tmdb_id: int, season: Optional[int] = None, tvdb_id: Opti
 
             try:
                 external_ids = get_tv_external_ids(tmdb_id)
-                tvdb_id = provided_tvdb_id or external_ids.get("tvdb_id") or external_ids.get("id")
+                tvdb_id = provided_tvdb_id or external_ids.get("tvdb_id")
             except Exception:
                 tvdb_id = provided_tvdb_id or None
 

@@ -496,10 +496,13 @@ class JellyfinClient(MediaServerClient):
         # be, but correct without relying on unverified API surface. Revisit
         # with a server-side filter once Jellyfin's own OpenAPI spec is
         # checked (plan doc sec13's closing recommendation).
+        # A show is matched by TVDB id, else TMDb id: Plex stops using TheTVDB
+        # on Dec 3, 2026, so a Plex copy's cached show may only have a TMDb id.
         if media_type == "movie" and tmdb_id:
-            item_type, target_key, target_val = "Movie", "Tmdb", str(tmdb_id)
-        elif media_type == "tv" and tvdb_id:
-            item_type, target_key, target_val = "Series", "Tvdb", str(tvdb_id)
+            item_type, checks = "Movie", [("Tmdb", str(tmdb_id))]
+        elif media_type == "tv" and (tvdb_id or tmdb_id):
+            item_type = "Series"
+            checks = [(k, str(v)) for k, v in (("Tvdb", tvdb_id), ("Tmdb", tmdb_id)) if v]
         else:
             return None
 
@@ -522,9 +525,11 @@ class JellyfinClient(MediaServerClient):
                 params["ParentId"] = library_id
             r = requests.get(f"{self.url}/Items", headers=self._headers(), params=params, timeout=30)
             r.raise_for_status()
-            for item in r.json().get("Items", []):
-                if str((item.get("ProviderIds") or {}).get(target_key, "")) == target_val:
-                    return item.get("Id")
+            items = r.json().get("Items", [])
+            for target_key, target_val in checks:
+                for item in items:
+                    if str((item.get("ProviderIds") or {}).get(target_key, "")) == target_val:
+                        return item.get("Id")
             return None
         except Exception as e:
             logger.error("[JELLYFIN_CLIENT:%s] find_item_by_external_id failed (tmdb=%s tvdb=%s): %s", self.server_id, tmdb_id, tvdb_id, e)

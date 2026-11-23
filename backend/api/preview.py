@@ -492,7 +492,7 @@ def api_preview(req: PreviewRequest):
                 if tmdb_id and not tvdb_id:
                     try:
                         external_ids = get_tv_external_ids(tmdb_id)
-                        tvdb_id = external_ids.get("tvdb_id") or external_ids.get("id")
+                        tvdb_id = external_ids.get("tvdb_id")
                     except Exception:
                         pass
 

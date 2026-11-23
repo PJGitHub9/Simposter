@@ -10,6 +10,33 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.91',
+    date: '2026-11-22',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Silo collections: the Collections page lists the collections you made in Silo, and you can send a poster to them.',
+        ],
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'TV editor: sending several seasons at once sent the series poster to seasons you hadn’t opened. Each season now gets the poster shown for it under Rendered Posters, to every server you pick, Silo included.',
+          'A season sent to Plex from the editor now uses the preset’s season settings, the same as its preview, including No Logo (seasons got the series logo on top of their text).',
+          'Collections from Silo never appeared (Simposter asked Silo for box sets in a way Silo doesn’t support).',
+        ],
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Ready for Plex dropping TheTVDB on December 3: Sonarr webhooks, Batch Edit and webhook syncing also find a show by its TMDb id when Plex has no TVDB id for it.',
+          'A show TMDb has no TVDB id for no longer gets TMDb’s own id used as a TVDB id.',
+        ],
+      },
+    ],
+  },
+  {
     version: 'v1.8.90',
     date: '2026-11-20',
     sections: [

@@ -100,6 +100,24 @@ def find_tmdb_ids_by_imdb(imdb_id: str) -> List[int]:
     return [int(r["id"]) for key in ("movie_results", "tv_results") for r in (data.get(key) or []) if r.get("id")]
 
 
+def find_tmdb_tv_id_by_tvdb(tvdb_id: Any) -> Optional[int]:
+    """TMDb's show id for a TVDB id, or None. Plex is dropping TheTVDB
+    (Dec 3, 2026), so shows Plex matches from then on may carry only
+    tmdb:// and imdb:// ids; lookups that start from a TVDB id (Sonarr) use
+    this to match them by TMDb id instead."""
+    if tvdb_id in (None, "", 0):
+        return None
+    try:
+        data = _cached_tmdb_get(f"/find/{tvdb_id}", {"external_source": "tvdb_id"})
+    except Exception as e:
+        logger.debug("[TMDB] TVDB %s -> TMDb lookup failed: %s", tvdb_id, e)
+        return None
+    for r in data.get("tv_results") or []:
+        if r.get("id"):
+            return int(r["id"])
+    return None
+
+
 def _tmdb_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
     if not settings.TMDB_API_KEY:
         logger.error("[TMDB] TMDB_API_KEY not set")
