@@ -1106,6 +1106,9 @@ def _deliver_pending_posters(client, entry: Dict[str, Any], series_item_id: str)
             _cache_poster_after_upload(item_id, image_bytes, ct, is_tv=is_tv)
         except Exception:
             pass
+        from ..overlay_refresh import track_synced_copy
+        track_synced_copy("plex-1", None, season_index, server_id, item_id, tmdb_id=entry["tmdb_id"],
+                          media_type=entry["media_type"], library_id=entry.get("member_library_id"))
         history_title = entry["title"]
         if season_index is not None:
             history_title = f"{history_title} - {season_title or ('Specials' if season_index == 0 else f'Season {season_index}')}"
@@ -1327,6 +1330,10 @@ def _sync_poster_to_other_servers(tmdb_id: Optional[int], media_type: str, title
                 client.upload_image(item_id, ImageType.POSTER, send_bytes, send_type)
                 logger.info("[WEBHOOK_SYNC:%s] Synced poster for tmdb_id=%s [%s]%s -> item_id=%s", client.server_id, tmdb_id, title_hint,
                             f" season {season_index}" if season_index is not None else "", item_id)
+                from ..overlay_refresh import track_synced_copy
+                track_synced_copy("plex-1", source_rating_key, season_index, client.server_id, item_id,
+                                  tmdb_id=tmdb_id, media_type=find_media_type,
+                                  library_id=allowed_servers.get(client.server_id))
                 # Keep the local disk cache/DB row in sync too, so the merged
                 # grid (Quirk #65/#67) reflects this without needing a rescan --
                 # mirrors media_server_send.py's identical post-upload pattern.

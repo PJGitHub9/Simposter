@@ -856,7 +856,7 @@ const startScanPolling = () => {
     } catch {
       /* ignore */
     }
-  }, 3000)
+  }, 1000)
 }
 
 const stopScanPolling = () => {
@@ -1209,7 +1209,7 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
               :style="{ width: Math.min(100, Math.round((scan.progress.value.processed / scan.progress.value.total) * 100)) + '%' }"
             ></div>
           </div>
-          <span class="progress-text">{{ scan.progress.value.processed }} / {{ scan.progress.value.total }}</span>
+          <span class="progress-text">{{ Math.min(100, Math.round((scan.progress.value.processed / scan.progress.value.total) * 100)) }}%</span>
         </div>
         <ul class="scan-list">
           <li v-for="line in scan.log.value" :key="line">{{ line }}</li>

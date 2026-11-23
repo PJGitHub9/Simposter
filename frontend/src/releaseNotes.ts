@@ -10,6 +10,30 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.93',
+    date: '2026-11-23',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'The scan popup’s percentage is now for the whole scan. It used to start again from 0% for each linked Jellyfin, Emby or Silo library, and stayed at 0% while movie labels were read.',
+          'Scanning a library from Settings scanned its linked Jellyfin/Emby/Silo libraries twice, the second time after the popup said done.',
+          'Starting a scan while one was running marked the running scan as failed.',
+          'The popup could freeze at the start of a scan, before Plex had listed its libraries.',
+          'A webhook for a movie that came back under a new id (for example a UMTK placeholder replaced by the real file) re-sent its old poster instead of rendering a new one, so a released movie could keep its "upcoming" overlay. With "Reuse cached poster" on, a preset that uses overlays now always renders fresh.',
+          'When \"Reuse cached poster\" sends a cached poster to a re-added item, Simposter now checks what that poster was made with. A fallback preset, or a different preset than the one asked for, puts the item back in the retry queue (if retrying is on); a poster you sent by hand from the editor is kept as is. History now names the preset the reused poster was really made with, and the movie’s title instead of its id.',
+          'Posters a webhook or scan sent to Jellyfin, Emby or Silo copies were not tracked by Overlay Refresh, so only the Plex copy got updated when an overlay changed. They are now tracked too.',
+        ],
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'The scan popup updates every second and shows a percentage, with the library it is working on.',
+        ],
+      },
+    ],
+  },
+  {
     version: 'v1.8.92',
     date: '2026-11-23',
     sections: [

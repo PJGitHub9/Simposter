@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from ..schemas import BatchRequest, MovieBatchRequest, TVShowBatchRequest
-from ..config import settings, plex_remove_label, plex_add_label, get_label_to_add, logger, get_movie_tmdb_id, get_movie_folder_name, get_media_folder_name, save_render_cache_by_tmdb, load_render_cache_by_tmdb, get_reuse_cached_poster_days
+from ..config import settings, plex_remove_label, plex_add_label, get_label_to_add, logger, get_movie_tmdb_id, get_movie_folder_name, get_media_folder_name, save_render_cache_by_tmdb, load_render_cache_by_tmdb, load_render_cache_info_by_tmdb, get_reuse_cached_poster_days
 from ..config import load_presets
 from .notifications import send_batch_notification, send_apprise_notification, start_batch_progress_notification, update_batch_progress_notification, complete_batch_progress_notification
 import time
@@ -93,7 +93,61 @@ def api_batch_progress():
         return dict(batch_status)
 
 
-def _resend_cached_bytes_for_movie(rating_key: str, title_hint: str, cached_bytes: bytes, req, source: str) -> dict:
+def _retry_reason(logo_missing: bool, poster_fallback: bool, logo_fallback: bool) -> Optional[str]:
+    if logo_missing and poster_fallback:
+        return "no_logo_and_poster_fallback"
+    if logo_missing:
+        return "no_logo"
+    if poster_fallback:
+        return "poster_fallback"
+    if logo_fallback:
+        return "logo_fallback"
+    return None
+
+
+def _cached_render_info(template_id, preset_id, source, needs_retry: bool, retry_reason: Optional[str]) -> dict:
+    """Stored next to the by-tmdb cached poster (config.save_render_cache_by_tmdb)."""
+    return {"template_id": template_id, "preset_id": preset_id, "source": source,
+            "needs_retry": bool(needs_retry), "retry_reason": retry_reason if needs_retry else None}
+
+
+def _log_reuse_retry(title: str, reuse: tuple, wanted_preset: Optional[str]) -> None:
+    needs, reason, made_with = reuse
+    if needs:
+        logger.info("[BATCH] %s: the reused poster was made with preset '%s' (%s), not '%s' as asked; "
+                    "it still needs a retry", title, made_with[1] or "unknown", reason, wanted_preset)
+
+
+# A poster sent by hand (the editor) is what the user chose: reusing it for a
+# re-added item never puts the item in the retry queue.
+_MANUAL_SOURCES = ("manual",)
+
+
+def reused_poster_retry(info: Optional[dict], template_id: Optional[str], preset_id: Optional[str],
+                        media_type: str, tmdb_id, season_index: Optional[int] = None) -> tuple:
+    """(needs_retry, retry_reason, made_with) for a by-tmdb cached poster about
+    to be reused for a re-added item. needs_retry when it was a fallback render
+    or was made with another template/preset than the one asked for, unless it
+    was a manual send. made_with = (template_id, preset_id) it was rendered with,
+    or (None, None) when unknown."""
+    if info is None:
+        info = db.get_last_render_info_for_tmdb(media_type, tmdb_id, season_index)
+    if not info:
+        # Nothing says what the image is: treat it like a fallback so the retry
+        # queue gets another look rather than silently accepting it.
+        return True, "unknown_cached_poster", (None, None)
+    made_with = (info.get("template_id"), info.get("preset_id"))
+    if info.get("source") in _MANUAL_SOURCES:
+        return False, None, made_with
+    if info.get("needs_retry"):
+        return True, info.get("retry_reason") or "poster_fallback", made_with
+    if template_id and preset_id and made_with != (template_id, preset_id):
+        return True, "cached_other_preset", made_with
+    return False, None, made_with
+
+
+def _resend_cached_bytes_for_movie(rating_key: str, title_hint: str, cached_bytes: bytes, req, source: str,
+                                   reuse: tuple = (False, None, (None, None))) -> dict:
     """Upload previously-rendered poster bytes to a movie's (possibly brand-new)
     rating_key instead of rendering fresh — the "reuseCachedPosterDays" path, see the
     call site in _process_single_movie(). Deliberately mirrors the shape of the
@@ -139,7 +193,7 @@ def _resend_cached_bytes_for_movie(rating_key: str, title_hint: str, cached_byte
         try:
             db.record_poster_history(
                 rating_key=rating_key, library_id=str(req.library_id or ""), title=title_hint,
-                year=None, template_id=req.template_id, preset_id=req.preset_id,
+                year=None, template_id=reuse[2][0] or req.template_id, preset_id=reuse[2][1] or req.preset_id,
                 action="resent_to_plex", source=source, poster_data=cached_bytes,
             )
         except Exception as history_err:
@@ -151,9 +205,10 @@ def _resend_cached_bytes_for_movie(rating_key: str, title_hint: str, cached_byte
             pass
 
         logger.info("[BATCH] Reused cached poster sent to Plex for %s [%s]", rating_key, title_hint)
+        _log_reuse_retry(title_hint, reuse, req.preset_id)
         result = {
             "rating_key": rating_key, "title": title_hint, "status": "ok",
-            "poster_fallback": False, "logo_fallback": False, "needs_retry": False, "retry_reason": None,
+            "poster_fallback": False, "logo_fallback": False, "needs_retry": reuse[0], "retry_reason": reuse[1],
         }
         if source in ("webhook", "auto_generate"):
             result["poster_data"] = cached_bytes
@@ -327,6 +382,13 @@ def _process_single_movie(
         if source in ("webhook", "auto_generate") and req.send_to_plex and not getattr(req, "send_only_if_ideal", False):
             reuse_days = get_reuse_cached_poster_days()
             if reuse_days > 0:
+                from ..resend_policy import reuse_check
+                _reuse_ok, _reuse_why = reuse_check(template_id, preset_id)
+                if not _reuse_ok:
+                    logger.info("[BATCH] Not reusing the cached poster for tmdb_id=%s [%s]: %s; rendering fresh",
+                                tmdb_id, title_hint, _reuse_why)
+                    reuse_days = 0
+            if reuse_days > 0:
                 cached_bytes = load_render_cache_by_tmdb("movie", tmdb_id, reuse_days)
                 if cached_bytes:
                     logger.info(
@@ -335,7 +397,14 @@ def _process_single_movie(
                         "within the last %.0f day(s))",
                         tmdb_id, rating_key, title_hint, reuse_days,
                     )
-                    return _resend_cached_bytes_for_movie(rating_key, title_hint, cached_bytes, req, source)
+                    if title_hint == rating_key:
+                        try:
+                            title_hint = get_movie_details(tmdb_id).get("title") or title_hint
+                        except Exception:
+                            pass
+                    reuse = reused_poster_retry(load_render_cache_info_by_tmdb("movie", tmdb_id),
+                                                template_id, preset_id, "movie", tmdb_id)
+                    return _resend_cached_bytes_for_movie(rating_key, title_hint, cached_bytes, req, source, reuse)
 
         # Fetch movie details for template variables
         movie_details = get_movie_details(tmdb_id)
@@ -715,7 +784,10 @@ def _process_single_movie(
             # reuse this poster — see reuseCachedPosterDays / config.py's by-tmdb cache.
             # Populated on every successful send, not just auto-generate ones, so a
             # manually-tuned poster is exactly as reusable as an auto-generated one.
-            save_render_cache_by_tmdb("movie", tmdb_id, payload)
+            save_render_cache_by_tmdb("movie", tmdb_id, payload, info=_cached_render_info(
+                template_id, preset_id, source, bool(needs_retry),
+                _retry_reason(logo_was_expected and logo_url is None,
+                              poster_fallback_action_used == "template", logo_fallback_used)))
 
             # Manual batch send resolves any pending retry for this item
             if source == "batch":
@@ -1553,7 +1625,8 @@ def _render_all_tv_seasons(
     }
 
 
-def _resend_cached_bytes_for_tv(rating_key: str, display_title: str, title: str, cached_bytes: bytes, req, source: str, is_tv: bool, season_index: Optional[int]) -> dict:
+def _resend_cached_bytes_for_tv(rating_key: str, display_title: str, title: str, cached_bytes: bytes, req, source: str, is_tv: bool, season_index: Optional[int],
+                                reuse: tuple = (False, None, (None, None))) -> dict:
     """TV/season counterpart to _resend_cached_bytes_for_movie() — see that function's
     docstring for the rationale. Uploads previously-rendered bytes to a (possibly
     brand-new) rating_key instead of rendering fresh."""
@@ -1597,7 +1670,7 @@ def _resend_cached_bytes_for_tv(rating_key: str, display_title: str, title: str,
         try:
             db.record_poster_history(
                 rating_key=rating_key, library_id=str(req.library_id or ""), title=display_title,
-                year=None, template_id=req.template_id, preset_id=req.preset_id,
+                year=None, template_id=reuse[2][0] or req.template_id, preset_id=reuse[2][1] or req.preset_id,
                 action="resent_to_plex", source=source, poster_data=cached_bytes,
             )
         except Exception as history_err:
@@ -1614,10 +1687,11 @@ def _resend_cached_bytes_for_tv(rating_key: str, display_title: str, title: str,
             pass
 
         logger.info("[BATCH] Reused cached poster sent to Plex for %s [%s]", rating_key, display_title)
+        _log_reuse_retry(display_title, reuse, req.preset_id)
         return {
             "rating_key": rating_key, "season": title if season_index is None else f"Season {season_index}",
             "title": display_title, "status": "ok",
-            "poster_fallback": False, "logo_fallback": False, "needs_retry": False,
+            "poster_fallback": False, "logo_fallback": False, "needs_retry": reuse[0], "retry_reason": reuse[1],
         }
     except Exception as e:
         logger.error("[BATCH] Reused-cached-poster send failed for %s [%s]: %s", rating_key, display_title, e)
@@ -1712,6 +1786,13 @@ def _render_and_save_poster(
             and not getattr(req, "send_only_if_ideal", False)):
         reuse_days = get_reuse_cached_poster_days()
         if reuse_days > 0:
+            from ..resend_policy import reuse_check
+            _reuse_ok, _reuse_why = reuse_check(template_id, preset_id)
+            if not _reuse_ok:
+                logger.info("[BATCH] Not reusing the cached poster for tmdb_id=%s [%s]: %s; rendering fresh",
+                            tmdb_id, display_title, _reuse_why)
+                reuse_days = 0
+        if reuse_days > 0:
             cached_bytes = load_render_cache_by_tmdb("tv-show" if is_tv else "movie", tmdb_id, reuse_days, season_index if is_tv else None)
             if cached_bytes:
                 logger.info(
@@ -1719,7 +1800,10 @@ def _render_and_save_poster(
                     "(rating_key=%s [%s] looked new, but a poster was sent within the last %.0f day(s))",
                     tmdb_id, f" season={season_index}" if season_index is not None else "", rating_key, display_title, reuse_days,
                 )
-                return _resend_cached_bytes_for_tv(rating_key, display_title, title, cached_bytes, req, source, is_tv, season_index)
+                _media = "tv-show" if is_tv else "movie"
+                reuse = reused_poster_retry(load_render_cache_info_by_tmdb(_media, tmdb_id, season_index if is_tv else None),
+                                            template_id, preset_id, _media, tmdb_id, season_index if is_tv else None)
+                return _resend_cached_bytes_for_tv(rating_key, display_title, title, cached_bytes, req, source, is_tv, season_index, reuse)
 
     # Inject Plex media metadata (resolution/codec/audio/edition) plus
     # tmdb_id/media_type for studio/streaming-platform badges
@@ -2010,7 +2094,11 @@ def _render_and_save_poster(
             # still find and reuse this poster — see reuseCachedPosterDays / config.py's
             # by-tmdb cache. Populated on every successful send, not just auto-generate
             # ones, so a manually-tuned poster is exactly as reusable as an auto-generated one.
-            save_render_cache_by_tmdb("tv-show" if is_tv else "movie", tmdb_id, payload, season_index if is_tv else None)
+            save_render_cache_by_tmdb("tv-show" if is_tv else "movie", tmdb_id, payload, season_index if is_tv else None,
+                                      info=_cached_render_info(
+                                          template_id, preset_id, source, bool(needs_retry),
+                                          _retry_reason(logo_was_expected and logo_url is None,
+                                                        poster_fallback_used, logo_fallback_used)))
 
             # Manual batch send resolves any pending retry for this item
             if source == "batch":

@@ -5317,6 +5317,27 @@ def get_poster_history_by_id(history_id: int) -> Optional[Dict[str, Any]]:
     }
 
 
+def count_cached_items(server_id: str, library_id: str, media_type: str,
+                       include_collections: bool = True) -> int:
+    """How many items the last scan cached for one server library (movies plus
+    collections for a movie library, shows for a TV library). Used to estimate
+    a linked library's share of the scan progress bar before it's listed."""
+    try:
+        with get_db() as conn:
+            if media_type == "movie":
+                n = conn.execute("SELECT COUNT(*) FROM movie_cache WHERE server_id = ? AND library_id = ?",
+                                 (server_id, str(library_id))).fetchone()[0]
+                if not include_collections:
+                    return int(n)
+                n += conn.execute("SELECT COUNT(*) FROM collection_cache WHERE server_id = ? AND library_id = ?",
+                                  (server_id, str(library_id))).fetchone()[0]
+                return int(n)
+            return int(conn.execute("SELECT COUNT(*) FROM tv_cache WHERE server_id = ? AND library_id = ?",
+                                    (server_id, str(library_id))).fetchone()[0])
+    except Exception:
+        return 0
+
+
 def get_overlay_only_hash(server_id: str, rating_key: str) -> Optional[str]:
     """sha256 of the overlay-only poster last uploaded to this server copy."""
     try:
@@ -5368,6 +5389,57 @@ def poster_already_sent(server_id: str, rating_key: str) -> bool:
             return cursor.fetchone() is not None
     except Exception:
         return False
+
+
+def get_last_render_info_for_tmdb(media_type: str, tmdb_id, season_index: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    """What the last real render of this TMDb id (any server, any item id it has
+    had) was made with, from History: {template_id, preset_id, source,
+    needs_retry, retry_reason}, or None. Used when a by-tmdb cached poster has
+    no stored info (cached before v1.8.93). Matches by the cached title too,
+    since an item that came back under a new id has lost its old cache row.
+    Resends are skipped (they only re-upload an older image)."""
+    if not tmdb_id:
+        return None
+    table = "tv_cache" if media_type in ("tv", "tv-show", "show") else "movie_cache"
+    try:
+        with get_db() as conn:
+            rows = conn.execute(f"SELECT rating_key, title, year FROM {table} WHERE tmdb_id = ?", (tmdb_id,)).fetchall()
+            keys = [r["rating_key"] for r in rows if r["rating_key"]]
+            titles = sorted({r["title"] for r in rows if r["title"]})
+            if season_index is not None:
+                label = "Specials" if season_index == 0 else f"Season {season_index}"
+                titles = [f"{t} - {label}" for t in titles]
+                keys = []  # a season's own id isn't in the cache; match by title
+            if not keys and not titles:
+                return None
+            where, params = [], []
+            if keys:
+                where.append(f"rating_key IN ({','.join('?' * len(keys))})")
+                params += keys
+            if titles:
+                where.append(f"title IN ({','.join('?' * len(titles))})")
+                params += titles
+            row = conn.execute(
+                f"""SELECT template_id, preset_id, source, COALESCE(poster_fallback_used, 0) AS pfb,
+                           COALESCE(logo_fallback_used, 0) AS lfb
+                    FROM poster_history
+                    WHERE ({' OR '.join(where)})
+                      AND action IN ('sent_to_plex', 'sent_to_media_server', 'overlay_refresh', 'overlay_only_sent')
+                      AND COALESCE(status, 'success') = 'success'
+                      AND (template_id IS NOT NULL OR preset_id IS NOT NULL)
+                    ORDER BY datetime(created_at) DESC LIMIT 1""",
+                params,
+            ).fetchone()
+            if not row:
+                return None
+            pfb, lfb = bool(row["pfb"]), bool(row["lfb"])
+            return {
+                "template_id": row["template_id"], "preset_id": row["preset_id"], "source": row["source"],
+                "needs_retry": pfb or lfb,
+                "retry_reason": "poster_fallback" if pfb else "logo_fallback" if lfb else None,
+            }
+    except Exception:
+        return None
 
 
 def get_last_plex_send_preset(media_type: str, tmdb_id: Optional[int]) -> Optional[Dict[str, Any]]:

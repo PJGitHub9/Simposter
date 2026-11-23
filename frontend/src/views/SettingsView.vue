@@ -1139,38 +1139,19 @@ const scanLibrary = async (libraryId?: string, forceRefresh = false) => {
       }
     }
 
-    // If this Plex library is linked to another server's library via a Library
-    // Group (Settings -> Libraries -> "Linked Libraries", see CLAUDE.md's
-    // merged-grid Quirk), scan that linked library too -- a single "Scan" click
-    // on a linked row covers Plex AND Jellyfin/Emby, instead of needing a
-    // separate whole-server import from Media Servers. A silent no-op for any
-    // library that isn't linked to anything (the common case).
-    if (libraryId) {
-      try {
-        const linkedRes = await fetch(`${apiBase}/api/media-server/scan-linked?server_id=plex-1&library_id=${encodeURIComponent(libraryId)}`, { method: 'POST' })
-        if (linkedRes.ok) {
-          const linkedData = await linkedRes.json()
-          // A non-empty errors array (e.g. the linked server_id no longer
-          // resolves to any configured server -- Quirk #70, found live when
-          // re-adding a server issued it a new id and silently orphaned an
-          // existing link) previously had nothing surfacing it at all; the
-          // scan looked like it succeeded while quietly doing nothing for
-          // the linked side. Surface it the same way other scan failures on
-          // this page already are.
-          if (Array.isArray(linkedData.errors) && linkedData.errors.length) {
-            const detail = linkedData.errors.map((e: any) => `${e.server_id}: ${e.error}`).join('; ')
-            saved.value = `Linked library scan had errors: ${detail}`
-            setTimeout(() => (saved.value = ''), 6000)
-          }
-        }
-      } catch (err) {
-        console.error('Failed to scan linked libraries', err)
-      }
+    // /api/scan-library already scanned the libraries linked to this one (a
+    // second /scan-linked call here scanned them again after the popup said
+    // done, Quirk #244); it returns their errors (e.g. a linked server that's
+    // no longer configured, Quirk #70).
+    if (Array.isArray(data.linked_errors) && data.linked_errors.length) {
+      const detail = data.linked_errors.map((e: any) => `${e.server_id}: ${e.error}`).join('; ')
+      saved.value = `Linked library scan had errors: ${detail}`
+      setTimeout(() => (saved.value = ''), 6000)
+    } else {
+      saved.value = `Rescanned ${data.count || 0} items`
+      setTimeout(() => (saved.value = ''), 2000)
     }
-
-    saved.value = `Rescanned ${data.count || 0} items`
-    setTimeout(() => (saved.value = ''), 2000)
-    scan.log.value = [`Done: ${scan.progress.value.processed || data.count || 0} items`]
+    scan.log.value = ['Done']
     scan.running.value = false
     scanCooldown.value = false
     setTimeout(() => {

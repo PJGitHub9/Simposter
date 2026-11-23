@@ -1707,7 +1707,8 @@ def _render_cache_path_by_tmdb(media_type: str, tmdb_id: int, season_index: Opti
     return Path(settings.CONFIG_DIR) / "cache" / "poster_renders_by_tmdb" / f"{media_type}_{tmdb_id}{season_part}.jpg"
 
 
-def save_render_cache_by_tmdb(media_type: str, tmdb_id: Optional[int], img_bytes: bytes, season_index: Optional[int] = None) -> None:
+def save_render_cache_by_tmdb(media_type: str, tmdb_id: Optional[int], img_bytes: bytes, season_index: Optional[int] = None,
+                              info: Optional[dict] = None) -> None:
     """Persist rendered poster bytes under the TMDb ID, so a future rating_key
     rotation for the same title can still find and reuse it. Called alongside
     (not instead of) save_render_cache() at every successful send -- this is
@@ -1719,8 +1720,37 @@ def save_render_cache_by_tmdb(media_type: str, tmdb_id: Optional[int], img_bytes
         p = _render_cache_path_by_tmdb(media_type, tmdb_id, season_index)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_bytes(shrink_render(img_bytes))
+        # What the poster was made with (template/preset, fallback, source), read
+        # by the "reuse cached poster" shortcut to decide whether the new item
+        # still needs a retry. Removed when not given, so it never describes an
+        # older image.
+        side = render_cache_info_path(p)
+        if info:
+            import json as _json
+            side.write_text(_json.dumps(info), encoding="utf-8")
+        elif side.exists():
+            side.unlink()
     except Exception as e:
         logger.debug("[RENDER_CACHE] Failed to save by-tmdb cache for %s tmdb_id=%s: %s", media_type, tmdb_id, e)
+
+
+def render_cache_info_path(cache_path: Path) -> Path:
+    return cache_path.with_suffix(".json")
+
+
+def load_render_cache_info_by_tmdb(media_type: str, tmdb_id: Optional[int], season_index: Optional[int] = None) -> Optional[dict]:
+    """What the by-tmdb cached poster was made with, or None when unknown
+    (cached before v1.8.93, or nothing cached)."""
+    if not tmdb_id:
+        return None
+    try:
+        import json as _json
+        side = render_cache_info_path(_render_cache_path_by_tmdb(media_type, tmdb_id, season_index))
+        if side.exists():
+            return _json.loads(side.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.debug("[RENDER_CACHE] Failed to read by-tmdb cache info for %s tmdb_id=%s: %s", media_type, tmdb_id, e)
+    return None
 
 
 def load_render_cache_by_tmdb(media_type: str, tmdb_id: Optional[int], max_age_days: float, season_index: Optional[int] = None) -> Optional[bytes]:
@@ -1763,6 +1793,9 @@ def purge_stale_render_cache_by_tmdb(max_age_days: float) -> None:
                 p = _render_cache_path_by_tmdb(row["media_type"], row["tmdb_id"], row["season_index"])
                 if p.exists():
                     p.unlink()
+                side = render_cache_info_path(p)
+                if side.exists():
+                    side.unlink()
             except Exception as e:
                 logger.debug("[RENDER_CACHE] Failed to purge by-tmdb cache file for %s: %s", row, e)
         if stale:

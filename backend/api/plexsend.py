@@ -194,6 +194,22 @@ def api_plex_send(req: PlexSendRequest):
     except Exception:
         cache_ctx = None
     save_or_cache_render(req.rating_key, payload, cache_ctx)
+    # Also under the TMDb id, marked manual: if the item comes back under a new
+    # id, the reuse-cached-poster shortcut sends this one and doesn't re-queue it.
+    # Not for seasons: a season's own Plex metadata may carry the season's TMDb
+    # id rather than the show's, which would file it under the wrong title.
+    if not req.is_collection and not (is_tv and req.season_index is not None):
+        try:
+            from ..config import save_render_cache_by_tmdb
+            _tmdb = (options.get("metadata") or {}).get("tmdb_id")
+            if _tmdb:
+                save_render_cache_by_tmdb(
+                    "tv-show" if is_tv else "movie", int(_tmdb), payload, None,
+                    info={"template_id": req.template_id, "preset_id": req.preset_id, "source": "manual",
+                          "needs_retry": False, "retry_reason": None},
+                )
+        except Exception as e:
+            logger.debug("[PLEX] Couldn't save the by-tmdb cache for %s: %s", req.rating_key, e)
 
     # Manual send always resolves any pending retry — the user chose this poster
     try:

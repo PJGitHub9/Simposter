@@ -68,6 +68,24 @@ def _last_real_send(rating_key: str) -> Optional[dict]:
     return None
 
 
+def reuse_check(template_id: Optional[str], preset_id: Optional[str]) -> Tuple[bool, str]:
+    """May "Reuse cached poster" (a render cached by TMDb id, sent to an older
+    item id) go to a new item id instead of rendering fresh? Not when the
+    preset draws overlays: the new item is usually a different file (UMTK
+    placeholder replaced by the real one, a Radarr upgrade), so quality,
+    "upcoming"/date rules, ratings and lists may all come out differently."""
+    try:
+        if not template_id or not preset_id:
+            return True, ""
+        preset = _preset_row(template_id, preset_id)
+        if preset and _uses_overlays(preset):
+            return False, f"preset '{preset_id}' uses overlays, which may come out differently for the new file"
+        return True, ""
+    except Exception as e:
+        logger.debug("[RESEND] reuse check failed for %s: %s", preset_id, e)
+        return False, "could not check the preset"
+
+
 def resend_check(rating_key: str, template_id: Optional[str], preset_id: Optional[str]) -> Tuple[bool, str]:
     """(ok_to_resend, reason). reason explains a refusal, for the log."""
     try:

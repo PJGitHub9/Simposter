@@ -481,6 +481,39 @@ def render_for_server(source_server: str, rating_key: Optional[str], season_inde
         return None
 
 
+def track_synced_copy(source_server: str, source_rating_key: Optional[str], season_index: Optional[int],
+                      target_server: str, target_key: str, *, tmdb_id=None, media_type: str = "movie",
+                      library_id: Optional[str] = None) -> None:
+    """A webhook/scan sent another server the poster `source_server` got (same
+    render, or a per-server one from render_for_server()). Track that copy the
+    same way, so Overlay Refresh keeps it up to date too. Without this only the
+    source copy was refreshed and the others kept an old overlay (a released
+    movie still showing "upcoming" on Silo). Never raises."""
+    try:
+        state = None
+        if source_rating_key:
+            state = db.get_overlay_state(source_server, str(source_rating_key), season_index)
+        if not state and tmdb_id:
+            state = db.get_overlay_state_by_tmdb(source_server, "tv" if media_type in ("tv", "tv-show", "show") else "movie",
+                                                 tmdb_id, season_index)
+        if not state or not state.get("template_id"):
+            return
+        if is_clean_base(state):
+            return  # overlay-only copies are tracked by overlay_only.py per server
+        opts = _fresh_options(state)
+        record_send(
+            target_server, str(target_key),
+            template_id=state["template_id"], options=opts,
+            background_url=state.get("background_url"), logo_url=state.get("logo_url"),
+            media_type=state.get("media_type") or media_type,
+            library_id=library_id, season_index=season_index,
+            tmdb_id=state.get("tmdb_id") or tmdb_id, title=state.get("title"), year=state.get("year"),
+            is_collection=bool(state.get("is_collection")), add_label=False,
+        )
+    except Exception as e:
+        logger.debug("[OVERLAY_REFRESH] Couldn't track %s copy %s: %s", target_server, target_key, e)
+
+
 def _upload_tracked(client, server_id: str, state: Dict[str, Any], payload: bytes, content_type: str) -> str:
     """Upload a re-rendered poster for a tracked item. If the server says the
     id no longer exists (404), find the item again by TMDb/TVDB id (Jellyfin/

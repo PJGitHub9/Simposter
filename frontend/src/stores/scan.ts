@@ -88,13 +88,11 @@ export function useScanStore() {
         log.value = status.log
       } else if (isRunning && progress.value.total) {
         const pct = Math.min(100, Math.round((progress.value.processed / progress.value.total) * 100))
-        log.value = [`${progress.value.processed}/${progress.value.total} (${pct}%) ${current.value}`]
+        log.value = [`${pct}% ${current.value}`.trim()]
       }
       checking.value = false
       if (showCompletion) {
-        const processed = progress.value.processed
-        const total = progress.value.total
-        log.value = [`Done${total ? `: ${processed}/${total}` : ''}`]
+        log.value = ['Done']
         lastFinishedAt.value = status.finished_at || new Date().toISOString()
         activeRunStarted.value = false
         running.value = false

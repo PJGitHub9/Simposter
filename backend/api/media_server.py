@@ -245,7 +245,8 @@ def _update_scan_status(message: str) -> None:
         pass
 
 
-def _scan_one_library(client, server_id: str, library_id: str, media_type: str, library_name: str = "") -> dict:
+def _scan_one_library(client, server_id: str, library_id: str, media_type: str, library_name: str = "",
+                      progress=None) -> dict:
     """Scan exactly one library on one non-Plex server and upsert its items.
     The shared building block for both the per-library scan (the normal UI
     path, per CLAUDE.md's Quirk about not scanning a whole server
@@ -303,8 +304,10 @@ def _scan_one_library(client, server_id: str, library_id: str, media_type: str, 
     # square-art concept at all (Quirk #59), and this app's label-based
     # dedup/removal mechanism doesn't apply to non-Plex items either
     # (Quirk #59's remove_label()/add_label() no-ops).
+    if progress is not None:
+        progress.resize(len(items))  # the real size, now that the library is listed
     if items:
-        _fetch_art_and_media_info_for_scan(items, media_type, client)
+        _fetch_art_and_media_info_for_scan(items, media_type, client, progress)
 
     # Poster mode rules apply to the whole library group; re-apply them now
     # that this member's rows are current. Never fails the scan.
@@ -363,7 +366,8 @@ def _scan_one_library(client, server_id: str, library_id: str, media_type: str, 
     }
 
 
-def _scan_one_collection_library(client, server_id: str, library_id: str, library_name: str = "") -> dict:
+def _scan_one_collection_library(client, server_id: str, library_id: str, library_name: str = "",
+                                 progress=None) -> dict:
     """Collections mirror of _scan_one_library() above -- a genuinely separate
     function rather than a media_type="collection" branch inside it, since
     list_items()/upsert_media_server_movies()/_tv_shows() all have no concept
@@ -396,6 +400,9 @@ def _scan_one_collection_library(client, server_id: str, library_id: str, librar
         for i in items
     ]
     counts = db.upsert_media_server_collections(server_id, library_id, rows)
+    if progress is not None:
+        progress.resize(len(items))
+        progress.finish()
     return {
         "library_id": library_id,
         "library_name": library_name,
@@ -405,7 +412,7 @@ def _scan_one_collection_library(client, server_id: str, library_id: str, librar
     }
 
 
-def _fetch_art_and_media_info_for_scan(items, media_type: str, client) -> None:
+def _fetch_art_and_media_info_for_scan(items, media_type: str, client, progress=None) -> None:
     """Concurrently fetches poster/logo/backdrop + video/audio media info for
     a just-upserted batch of Jellyfin/Emby items, mirroring the exact
     concurrent-fetch pattern movies.py's Plex scan already uses (same
@@ -442,11 +449,6 @@ def _fetch_art_and_media_info_for_scan(items, media_type: str, client) -> None:
 
     progress_total = len(items)
     progress_done = 0
-    if progress_total:
-        try:
-            scan_status.update({"total": progress_total, "processed": 0})
-        except Exception:
-            pass
 
     def _report_progress() -> None:
         # Called once per completed future, from the single thread driving
@@ -455,10 +457,11 @@ def _fetch_art_and_media_info_for_scan(items, media_type: str, client) -> None:
         # _update_scan_status()'s own "never allowed to fail the scan" rule.
         nonlocal progress_done
         progress_done += 1
-        try:
-            scan_status.update({"processed": progress_done})
-        except Exception:
-            pass
+        if progress is not None:
+            try:
+                progress.advance(1, f"{progress.label} ({progress_done}/{progress_total})" if progress.label else None)
+            except Exception:
+                pass
 
     is_tv = media_type != "movie"
     if is_tv:
@@ -663,25 +666,19 @@ def api_scan_media_server(server_id: str, library_id: Optional[str] = None, medi
         # against a concurrent Plex scan the same way movies.py's own
         # api_scan_library() guards against a concurrent run of itself.
         from .movies import scan_status
-        from datetime import datetime, timezone
+        from .. import database as db, scan_progress
         if scan_status.get("state") == "running":
             raise HTTPException(409, "A scan is already in progress")
-        total_steps = 2 if media_type == "movie" else 1
-        scan_status.update({
-            "state": "running", "total": total_steps, "processed": 0,
-            "current": f"Scanning {server_label}: {display_name} ({'TV shows' if media_type == 'tv' else 'movies'})",
-            "started_at": datetime.now(timezone.utc).isoformat(), "finished_at": None, "error": None,
-        })
+        # One bar for the whole scan (Quirk #244): the library's items and, for a
+        # movie library, its collections; sized from the last scan, then corrected.
+        item_label = f"Scanning {server_label}: {display_name} ({'TV shows' if media_type == 'tv' else 'movies'})"
+        est_items = db.count_cached_items(server_id, library_id, media_type, include_collections=False)
+        est_colls = db.count_cached_items(server_id, library_id, "movie") - est_items if media_type == "movie" else 0
+        scan_progress.start(est_items + est_colls, item_label)
         try:
-            result = _scan_one_library(client, server_id, library_id, media_type, display_name)
+            result = _scan_one_library(client, server_id, library_id, media_type, display_name,
+                                       progress=scan_progress.phase(est_items, item_label))
             results = [result]
-            # _scan_one_library() (via _fetch_art_and_media_info_for_scan())
-            # just took over processed/total to report its own per-item
-            # progress, leaving total set to the item count -- reset it back
-            # to this function's own coarse step count, or a large library
-            # would show a misleading "1/1187"-style regression here instead
-            # of simply "1/2".
-            scan_status.update({"total": total_steps, "processed": 1})
             # Collections have no media_type of their own in this app's model
             # (Quirk #21) -- scan them alongside a movie library, same as
             # api_scan_linked_libraries() does for a Plex-anchored group. Was
@@ -689,14 +686,14 @@ def api_scan_media_server(server_id: str, library_id: Optional[str] = None, medi
             # scan path never wired up" gap -- user-reported directly for a
             # Plex-less (standalone) movie group specifically.
             if media_type == "movie":
-                _update_scan_status(f"Scanning {server_label}: {display_name} (collections)")
-                results.append(_scan_one_collection_library(client, server_id, library_id, display_name))
-                scan_status.update({"processed": 2})
+                coll_label = f"Scanning {server_label}: {display_name} (collections)"
+                results.append(_scan_one_collection_library(client, server_id, library_id, display_name,
+                                                            progress=scan_progress.phase(est_colls, coll_label)))
             from .. import poster_drift
             poster_drift.flush_notifications()
-            scan_status.update({"state": "done", "finished_at": datetime.now(timezone.utc).isoformat()})
+            scan_progress.finish_scan("done")
         except Exception as e:
-            scan_status.update({"state": "error", "error": str(e), "finished_at": datetime.now(timezone.utc).isoformat()})
+            scan_progress.finish_scan("error", str(e))
             raise
         return {
             "server_id": server_id,
@@ -790,6 +787,7 @@ def api_scan_linked_libraries(server_id: str, library_id: str):
     making a real, working Jellyfin movie/TV scan look like it never ran."""
     from ..config import get_library_group_for
     from ..media_server import get_client, get_server_label
+    from .. import database as db, scan_progress
 
     scanned = []
     errors = []
@@ -809,30 +807,78 @@ def api_scan_linked_libraries(server_id: str, library_id: str):
                 errors.append({"server_id": member_server_id, "library_id": member_library_id, "error": "server not configured or unsupported"})
                 continue
             server_label = get_server_label(member_server_id)
+            # This library's share of the scan's progress bar (Quirk #244),
+            # added to the total up front by linked_scan_budget().
+            est_items = db.count_cached_items(member_server_id, member_library_id, media_type, include_collections=False)
+            # Sized before scanning, the same way linked_scan_budget() sized them.
+            est_colls = (db.count_cached_items(member_server_id, member_library_id, "movie") - est_items
+                         if media_type == "movie" else 0)
+            item_label = f"Scanning {server_label}: {member_library_name} ({'TV shows' if media_type == 'tv' else 'movies'})"
+            item_phase = scan_progress.phase(est_items, item_label)
             try:
-                _update_scan_status(f"Scanning {server_label}: {member_library_name} ({'TV shows' if media_type == 'tv' else 'movies'})")
-                result = _scan_one_library(client, member_server_id, member_library_id, media_type, member_library_name)
+                result = _scan_one_library(client, member_server_id, member_library_id, media_type, member_library_name,
+                                           progress=item_phase)
                 scanned.append({"server_id": member_server_id, **result})
             except Exception as e:
                 errors.append({"server_id": member_server_id, "library_id": member_library_id, "error": str(e)})
+            item_phase.finish()
             # Collections are a movie-only Plex concept (Quirk #21) with no
             # media_type of their own in the Library Group model -- scan them
             # alongside a linked member's movie library, not as a separate
             # loop iteration. See _scan_one_collection_library()'s own
             # docstring for why this was missing entirely until now.
             if media_type == "movie":
+                coll_phase = scan_progress.phase(est_colls, f"Scanning {server_label}: {member_library_name} (collections)")
                 try:
-                    _update_scan_status(f"Scanning {server_label}: {member_library_name} (collections)")
-                    coll_result = _scan_one_collection_library(client, member_server_id, member_library_id, member_library_name)
+                    coll_result = _scan_one_collection_library(client, member_server_id, member_library_id,
+                                                               member_library_name, progress=coll_phase)
                     scanned.append({"server_id": member_server_id, **coll_result})
                 except Exception as e:
                     errors.append({"server_id": member_server_id, "library_id": member_library_id, "media_type": "collection", "error": str(e)})
+                coll_phase.finish()
         # A Plex library_id only ever belongs to one media type's groups (movie
         # libraries and TV libraries are tracked in separate lists) -- once a
         # match is found, the other media_type has nothing left to check.
         break
 
     return {"scanned": scanned, "errors": errors}
+
+
+def _linked_members(library_id: Optional[str]) -> list:
+    """[(plex library id, media type, member)] for every non-Plex member linked
+    to a Plex library (all of them, or one `library_id`), in the order
+    scan_all_linked_plex_libraries() scans them."""
+    from .. import database as db
+    from ..config import get_library_group_for
+    groups = (db.get_ui_settings() or {}).get("libraryGroups") or []
+    plex_ids = []
+    for group in groups:
+        for member in group.get("members") or []:
+            if member.get("serverId") == "plex-1" and member.get("libraryId"):
+                lid = str(member["libraryId"])
+                if (library_id is None or lid == str(library_id)) and lid not in plex_ids:
+                    plex_ids.append(lid)
+    out = []
+    for lid in plex_ids:
+        for media_type in ("movie", "tv"):
+            group = get_library_group_for("plex-1", lid, media_type)
+            members = (group or {}).get("members") or []
+            if len(members) <= 1:
+                continue
+            for m in members:
+                if m.get("serverId") == "plex-1" and str(m.get("libraryId")) == lid:
+                    continue
+                out.append((lid, media_type, m))
+            break
+    return out
+
+
+def linked_scan_budget(library_id: Optional[str] = None) -> int:
+    """Progress units for the linked libraries a Plex scan also scans: each
+    one's item count from the last scan (scan_progress, Quirk #244)."""
+    from .. import database as db
+    return sum(db.count_cached_items(m.get("serverId"), m.get("libraryId"), media_type)
+               for _lid, media_type, m in _linked_members(library_id))
 
 
 def scan_all_linked_plex_libraries(library_id: Optional[str] = None) -> dict:

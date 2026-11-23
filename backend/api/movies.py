@@ -12,7 +12,7 @@ from PIL import Image
 
 import requests
 from ..config import settings, plex_headers, logger, get_plex_movies, get_movie_tmdb_id, plex_session, POSTER_CACHE_DIR, LOGO_CACHE_DIR, ART_CACHE_DIR, SQUARE_ART_CACHE_DIR, THUMB_ART_CACHE_DIR, get_reuse_cached_poster_days, purge_stale_render_cache_by_tmdb, get_library_group_members, get_library_group_preferred_server, get_library_group_merge_enabled, extract_tmdb_id_from_metadata, extract_media_paths_from_metadata, extract_tvdb_id_from_metadata, normalize_collection_title
-from .. import cache, database as db, poster_drift
+from .. import cache, database as db, poster_drift, scan_progress
 from .art_cache import make_art_cache
 from ..schemas import Movie, MovieTMDbResponse, LabelsResponse, LabelsRemoveRequest
 from ..tmdb_client import get_images_for_movie, get_movie_details, get_movie_external_ids, search_collection, get_collection_images, TMDBError
@@ -1632,12 +1632,15 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
     explicitly (the "Force Refresh All Art" action, Settings -> Libraries) to
     get the old always-refetch behavior when actually wanted (e.g. after
     bulk-changing posters directly in Plex)."""
+    # Prevent multiple simultaneous scans (outside the try: the error handler
+    # below would otherwise mark the scan that IS running as failed).
+    if scan_status.get("state") == "running":
+        logger.warning("[SCAN] Scan already in progress, rejecting new scan request")
+        raise HTTPException(status_code=409, detail="Scan already in progress")
+    # Running from the start, so the popup's first poll doesn't see the
+    # previous scan's "done" while Plex is still listing (scan_progress, Quirk #244).
+    scan_progress.start(0, "Reading the library list from Plex")
     try:
-        # Prevent multiple simultaneous scans
-        if scan_status.get("state") == "running":
-            logger.warning("[SCAN] Scan already in progress, rejecting new scan request")
-            raise HTTPException(status_code=409, detail="Scan already in progress")
-        
         # Normalize library_id
         if library_id in ("default", ""):
             library_id = None
@@ -1663,15 +1666,19 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
         
         total_items = len(movies) + len(tv_shows) + len(collections_list)
         logger.info(f"[SCAN] Starting full library sync: {len(movies)} movies, {len(tv_shows)} TV shows, {len(collections_list)} collections")
-        scan_status.update({
-            "state": "running",
-            "total": total_items,
-            "processed": 0,
-            "current": "",
-            "started_at": datetime.now(timezone.utc).isoformat(),
-            "finished_at": None,
-            "error": None,
-        })
+        # One bar for the whole scan (Quirk #244): a movie is 5 units (labels +
+        # four images), a show or collection 1, plus the linked Jellyfin/Emby/Silo
+        # libraries scanned afterwards (their last scan's item counts).
+        try:
+            from .media_server import linked_scan_budget
+            linked_units = linked_scan_budget(library_id)
+        except Exception:
+            linked_units = 0
+        scan_progress.add_budget(5 * len(movies) + len(tv_shows) + len(collections_list) + linked_units)
+        label_phase = scan_progress.phase(len(movies))
+        art_phase = scan_progress.phase(4 * len(movies))
+        tv_phase = scan_progress.phase(len(tv_shows))
+        coll_phase = scan_progress.phase(len(collections_list))
 
         result = {
             "status": "ok",
@@ -1753,7 +1760,7 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                         label_done += 1
                         # Without this, scan_status stayed unchanged (looking stalled)
                         # for the entire label-fetch phase.
-                        scan_status.update({"current": f"Fetching labels ({label_done}/{len(movie_keys)})"})
+                        label_phase.advance(1, f"Fetching labels ({label_done}/{len(movie_keys)})")
                 logger.debug(f"[SCAN] Successfully fetched labels for {len(bulk_labels)} movies")
             except Exception as e:
                 logger.warning(f"[SCAN] Bulk label fetch failed, will skip labels: {e}")
@@ -1855,34 +1862,22 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                     movie_key, poster_url = future.result()
                     poster_results[movie_key] = poster_url
                     poster_logo_done += 1
-                    scan_status.update({
-                        "processed": min(len(movies), round(len(movies) * poster_logo_done / poster_logo_total)),
-                        "current": f"Fetching posters/logos/backdrops/square art ({poster_logo_done}/{poster_logo_total})",
-                    })
+                    art_phase.advance(1, f"Fetching posters/logos/backdrops/square art ({poster_logo_done}/{poster_logo_total})")
                 for future in as_completed(logo_futures):
                     movie_key, logo_url_result = future.result()
                     logo_results[movie_key] = logo_url_result
                     poster_logo_done += 1
-                    scan_status.update({
-                        "processed": min(len(movies), round(len(movies) * poster_logo_done / poster_logo_total)),
-                        "current": f"Fetching posters/logos/backdrops/square art ({poster_logo_done}/{poster_logo_total})",
-                    })
+                    art_phase.advance(1, f"Fetching posters/logos/backdrops/square art ({poster_logo_done}/{poster_logo_total})")
                 for future in as_completed(art_futures):
                     movie_key, art_url_result = future.result()
                     art_results[movie_key] = art_url_result
                     poster_logo_done += 1
-                    scan_status.update({
-                        "processed": min(len(movies), round(len(movies) * poster_logo_done / poster_logo_total)),
-                        "current": f"Fetching posters/logos/backdrops/square art ({poster_logo_done}/{poster_logo_total})",
-                    })
+                    art_phase.advance(1, f"Fetching posters/logos/backdrops/square art ({poster_logo_done}/{poster_logo_total})")
                 for future in as_completed(square_art_futures):
                     movie_key, square_art_url_result = future.result()
                     square_art_results[movie_key] = square_art_url_result
                     poster_logo_done += 1
-                    scan_status.update({
-                        "processed": min(len(movies), round(len(movies) * poster_logo_done / poster_logo_total)),
-                        "current": f"Fetching posters/logos/backdrops/square art ({poster_logo_done}/{poster_logo_total})",
-                    })
+                    art_phase.advance(1, f"Fetching posters/logos/backdrops/square art ({poster_logo_done}/{poster_logo_total})")
             logo_count = sum(1 for v in logo_results.values() if v)
             art_count = sum(1 for v in art_results.values() if v)
             square_art_count = sum(1 for v in square_art_results.values() if v)
@@ -1914,7 +1909,9 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
             processed += 1
 
         logger.debug("[SCAN] Movies progress %d/%d", processed, len(movies))
-        scan_status.update({"processed": processed, "current": ""})
+        label_phase.finish()
+        art_phase.finish()
+        scan_progress.set_current("")
 
         # Bulk refresh movie cache per library and detect new content
         from .. import auto_generate
@@ -2121,7 +2118,7 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                     processed += 1
                     if processed % 50 == 0 or processed == total_items:
                         logger.debug("[SCAN] Overall progress %d/%d", processed, total_items)
-                    scan_status.update({"processed": processed, "current": show_result.get("title") or ""})
+                    tv_phase.advance(1, show_result.get("title") or "")
         
         # Bulk refresh TV cache per library and detect new content
         for lib_id, cached_shows in tv_cache_by_lib.items():
@@ -2210,7 +2207,7 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
             processed += 1
             if processed % 50 == 0 or processed == total_items:
                 logger.debug("[SCAN] Overall progress %d/%d", processed, total_items)
-            scan_status.update({"processed": processed, "current": coll.get("title") or ""})
+            coll_phase.advance(1, coll.get("title") or "")
         
         # Bulk refresh collection cache per library. cache.refresh_collections_from_list()
         # expects the *raw* _get_plex_collections() shape (a "key" field, etc.) and
@@ -2259,6 +2256,7 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                                 entry.get("library_name") or entry.get("library_id"), entry.get("item_count") or 0,
                                 kind, f" ({', '.join(extra)})" if extra else "")
             if linked_result.get("errors"):
+                result["linked_errors"] = linked_result["errors"]
                 logger.warning(f"[SCAN] Linked library scan errors: {linked_result['errors']}")
         except Exception as e:
             logger.error(f"[SCAN] Failed to scan linked libraries: {e}")
@@ -2266,18 +2264,14 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
         _log_changed_in_plex(changed_in_plex)
         logger.info(f"[SCAN] Completed full library sync")
         poster_drift.flush_notifications()
-        scan_status.update({
-            "state": "done",
-            "finished_at": datetime.now(timezone.utc).isoformat(),
-        })
+        scan_progress.finish_scan("done")
         return result
+    except HTTPException as e:
+        scan_progress.finish_scan("error", str(e.detail))
+        raise
     except Exception as e:
         logger.error(f"[SCAN] Failed to scan library: {e}")
-        scan_status.update({
-            "state": "error",
-            "error": str(e),
-            "finished_at": datetime.now(timezone.utc).isoformat(),
-        })
+        scan_progress.finish_scan("error", str(e))
         raise HTTPException(status_code=500, detail=f"Failed to scan library: {e}")
 
 

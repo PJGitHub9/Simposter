@@ -582,6 +582,9 @@ def _deliver_cached_plex_render(server_id: str, library_id: str, media_type: str
                 data, ct = alt
             client.upload_image(item_id, ImageType.POSTER, data, ct)
             sent = True
+            from .overlay_refresh import track_synced_copy
+            track_synced_copy("plex-1", None, season_index, server_id, item_id, tmdb_id=tmdb_id,
+                              media_type=media_type, library_id=str(library_id))
             if season_index is None or notify_bytes is None:
                 notify_bytes = data
             if season_index is None:

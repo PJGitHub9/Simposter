@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.8.93 (2026-11-23) — `dev-silo` branch
+
+### Bug Fixes
+- **Scan progress** — every stage of a scan overwrote `scan_status.total/processed` with its own scale: the bar stayed at 0% during Plex label fetching, and each linked Jellyfin/Emby/Silo library reset it to 0% (`_fetch_art_and_media_info_for_scan()` set `total` to its item count); a Jellyfin/Silo-only scan went "1/2" → item counts → "1/2". New `backend/scan_progress.py` is the only writer of `total`/`processed`: a scan starts with a total in work units (Plex movie 5, show/collection/linked item 1, linked libraries sized from their last scan's counts via `db.count_cached_items()`/`media_server.linked_scan_budget()`), each stage takes a `phase()` that `resize()`s to its real size, and `processed` only moves forward.
+- **Linked libraries scanned twice from Settings** — `SettingsView.scanLibrary()` called `/scan-linked` after `/api/scan-library`, which already scans them (Quirk #146), so they were scanned again after the popup said done. Removed; `/api/scan-library` returns `linked_errors` for Settings to show.
+- **A second scan request failed the running scan** — the 409 was raised inside the scan's `try`, whose error handler set the shared status to "error". The check is now outside it.
+- **Popup froze at scan start** — the Plex scan only set "running" after listing every library, so the popup's first poll could see the previous scan's "done" and stop polling. It now reports running immediately.
+- **Reuse cached poster ignored overlays** — `batch.py`'s reuse-by-TMDb-id shortcut (Quirk #41) re-sent a render cached under an older item id, untouched. When the new id is a different file (UMTK placeholder replaced by the real file, a Radarr upgrade), overlays like "upcoming", quality and ratings can differ. New `resend_policy.reuse_check()` refuses the shortcut when the preset draws overlays (same rule as the resend shortcut, Quirk #199), in both the movie and TV paths.
+- **Reused cached posters skipped the retry queue** — the reuse shortcut always reported `needs_retry: False`. `save_render_cache_by_tmdb(..., info=)` now writes a `.json` next to the cached poster (template, preset, source, needs_retry, reason); batch sends and manual Plex sends (source `manual`, not seasons) write it. `reused_poster_retry()` (batch.py) marks a reuse as needing a retry when the cached poster was a fallback or another template/preset, unless it was manual; posters cached before this read the same from History (`db.get_last_render_info_for_tmdb()`, by item id or cached title). The reuse's History row records the preset the poster was really made with, and a reuse with only a rating key for a title now looks the title up.
+- **Synced copies not tracked by Overlay Refresh** — `_sync_poster_to_other_servers()`, its follow-up queue and `auto_generate._deliver_cached_plex_render()` uploaded the Plex poster to Jellyfin/Emby/Silo without an `overlay_state` row, so Overlay Refresh never updated those copies. New `overlay_refresh.track_synced_copy()` records each copy from the Plex copy's tracked render.
+
+### Improvements
+- Scan popup shows a percentage (the counts are work units now) and polls every second.
+
 ## v1.8.92 (2026-11-23) — `dev-silo` branch
 
 ### New Features
