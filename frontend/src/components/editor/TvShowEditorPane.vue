@@ -2690,7 +2690,7 @@ async function removeOverlaysFromPoster() {
     })
     const data = await res.json().catch(() => ({}))
     if (!res.ok) throw new Error(data.detail || 'Failed to remove the overlays')
-    success('Overlays removed from the poster')
+    success(data.removed_from?.length ? `Overlays removed on ${data.removed_from.join(', ')}${data.failed?.length ? ` (not on: ${data.failed.join('; ')})` : ''}` : 'Overlays removed from the poster')
     await new Promise(resolve => setTimeout(resolve, 600))
     await fetchExistingPoster(true)
     await doOverlayOnlyPreview(true)

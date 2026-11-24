@@ -125,6 +125,15 @@ def init_scheduler(restore_from_settings: bool = True):
             if restored_live:
                 logger.info("[SCHEDULER] Restored %d live Kometa file job(s)", restored_live)
 
+            # Poster import live files (Tools -> Poster Import).
+            from . import custom_posters as _cp
+            restored_imports = 0
+            for f in _cp.get_files():
+                if f.get("enabled") and schedule_poster_import(f["id"], f.get("interval_hours") or 6):
+                    restored_imports += 1
+            if restored_imports:
+                logger.info("[SCHEDULER] Restored %d poster import file job(s)", restored_imports)
+
         except Exception as e:
             logger.error("[SCHEDULER] Failed to restore schedule from settings: %s", e, exc_info=True)
 
@@ -982,6 +991,57 @@ def get_live_kometa_next_run(file_id: str) -> Optional[str]:
     if _scheduler is None:
         return None
     job = _scheduler.get_job(_live_kometa_job_id(file_id))
+    return job.next_run_time.isoformat() if job and job.next_run_time else None
+
+
+def _poster_import_job_id(file_id: str) -> str:
+    return f"poster_import_{file_id}"
+
+
+def _run_poster_import(file_id: str) -> None:
+    try:
+        from .custom_posters import sync_file
+        sync_file(file_id)
+    except Exception as e:
+        logger.error("[SCHEDULER] Poster import file %s failed: %s", file_id, e, exc_info=True)
+
+
+def schedule_poster_import(file_id: str, interval_hours: float) -> bool:
+    """Re-read a poster import file every interval_hours (at least 15 minutes)."""
+    if _scheduler is None:
+        logger.error("[SCHEDULER] Scheduler not initialized, call init_scheduler() first")
+        return False
+    try:
+        from apscheduler.triggers.interval import IntervalTrigger
+        minutes = max(15, int(round(float(interval_hours) * 60)))
+        _scheduler.add_job(
+            func=_run_poster_import,
+            trigger=IntervalTrigger(minutes=minutes),
+            id=_poster_import_job_id(file_id),
+            name=f"Poster import file ({file_id})",
+            args=[file_id],
+            replace_existing=True,
+        )
+        return True
+    except Exception as e:
+        logger.error("[SCHEDULER] Failed to schedule poster import file %s: %s", file_id, e)
+        return False
+
+
+def cancel_poster_import(file_id: str) -> bool:
+    if _scheduler is None:
+        return False
+    job_id = _poster_import_job_id(file_id)
+    if _scheduler.get_job(job_id):
+        _scheduler.remove_job(job_id)
+        return True
+    return False
+
+
+def get_poster_import_next_run(file_id: str) -> Optional[str]:
+    if _scheduler is None:
+        return None
+    job = _scheduler.get_job(_poster_import_job_id(file_id))
     return job.next_run_time.isoformat() if job and job.next_run_time else None
 
 

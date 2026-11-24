@@ -72,21 +72,62 @@ class RemoveOverlaysRequest(BaseModel):
     season_index: Optional[int] = None
 
 
+def _other_tracked_copies(state: dict) -> list:
+    """Overlay records for the same title (or season) on the other servers of
+    its library group, so removing overlays covers every copy, not only the
+    one shown in the editor."""
+    from .. import database as db
+    from ..custom_posters import group_members
+    if not state.get("tmdb_id") or state.get("is_collection"):
+        return []
+    media_type = state.get("media_type") or "movie"
+    try:
+        _gid, members = group_members(state["server_id"], str(state.get("library_id") or ""), media_type)
+    except Exception:
+        return []
+    allowed = {(str(s), str(l)) for s, l in members}
+    season = state.get("season_index")
+    with db.get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM overlay_state WHERE tmdb_id = ? AND media_type = ? AND season_index = ? AND is_collection = 0",
+            (int(state["tmdb_id"]), media_type, -1 if season is None else int(season)),
+        ).fetchall()
+    out = []
+    for r in rows:
+        row = db._overlay_state_row(r)
+        if (row["server_id"], str(row["rating_key"])) == (state["server_id"], str(state["rating_key"])):
+            continue
+        if (str(row["server_id"]), str(row.get("library_id") or "")) in allowed:
+            out.append(row)
+    return out
+
+
 @router.post("/overlay-only/remove-overlays")
 async def api_overlay_only_remove(req: RemoveOverlaysRequest):
     """Put the poster back without Simposter's overlays (Overlay Refresh's
     remove: the clean copy for an overlay-only poster, else a re-render from the
-    recorded source art) and stop tracking it."""
+    recorded source art) and stop tracking it, on this server and on every other
+    server in the library group that has the title with Simposter's overlays."""
     from .. import database as db
     from ..overlay_refresh import remove_state
     state = db.get_overlay_state(req.server_id, req.rating_key, req.season_index)
     if not state:
         raise HTTPException(status_code=404, detail="Simposter has no record of overlays on this poster.")
-    result = await run_in_threadpool(remove_state, state, "manual")
-    status = result.get("status")
-    if status not in ("removed", "ok"):
-        raise HTTPException(status_code=409, detail=result.get("detail") or f"Couldn't remove the overlays ({status}).")
-    return {"status": "ok"}
+    states = [state] + _other_tracked_copies(state)
+
+    def _remove_all() -> list:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(4, len(states)), thread_name_prefix="remove-overlays") as pool:
+            return list(pool.map(lambda st: remove_state(st, "manual"), states))
+    results = await run_in_threadpool(_remove_all)
+
+    from ..media_server.registry import get_server_label
+    done = [get_server_label(st["server_id"]) for st, r in zip(states, results) if r.get("status") in ("removed", "ok")]
+    failed = [f"{get_server_label(st['server_id'])}: {r.get('detail') or r.get('status')}"
+              for st, r in zip(states, results) if r.get("status") not in ("removed", "ok")]
+    if not done:
+        raise HTTPException(status_code=409, detail="Couldn't remove the overlays (" + "; ".join(failed) + ").")
+    return {"status": "ok", "removed_from": done, "failed": failed}
 
 
 @router.post("/overlay-only/send")
@@ -95,14 +136,20 @@ async def api_overlay_only_send(req: OverlayOnlyRequest):
     if req.overlay_config_ids is not None and not req.overlay_config_ids:
         raise HTTPException(status_code=400, detail="No overlays are ticked.")
     targets = req.targets or [OverlayOnlyTarget(server_id=req.server_id, rating_key=req.rating_key)]
-    results = []
-    for t in targets:
-        r = await run_in_threadpool(
-            overlay_only.apply_for_item, t.server_id, t.rating_key,
+    def _send(t) -> dict:
+        r = overlay_only.apply_for_item(
+            t.server_id, t.rating_key,
             req.library_id if t.rating_key == req.rating_key else None, req.is_tv,
             req.template_id, req.preset_id, "manual", req.season_index, _lists(req), True,
         )
-        results.append({"server_id": t.server_id, "rating_key": t.rating_key,
-                        "status": r.get("status"), "reason": r.get("reason") or ""})
+        return {"server_id": t.server_id, "rating_key": t.rating_key,
+                "status": r.get("status"), "reason": r.get("reason") or ""}
+
+    def _send_all() -> list:
+        # Each server is rendered, uploaded and checked on its own; run them side by side.
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(4, len(targets)), thread_name_prefix="overlay-only-send") as pool:
+            return list(pool.map(_send, targets))
+    results = await run_in_threadpool(_send_all)
     ok = sum(1 for r in results if r["status"] == "ok")
     return {"sent": ok, "total": len(results), "results": results}

@@ -9,7 +9,7 @@ A page-by-page tour of Simposter, followed by step-by-step guides for the things
 - [Batch Edit](#batch-edit)
 - [Collections](#collections)
 - [Artwork: logos, backdrops, square art, thumb art](#artwork-logos-backdrops-square-art-thumb-art)
-- [Tools: Overlay Refresh, Media Mirror, Local Assets, Backup](#tools-overlay-refresh-media-mirror-local-assets-backup)
+- [Tools: Overlay Refresh, Media Mirror, Poster Import, Local Assets, Backup](#tools-overlay-refresh-media-mirror-poster-import-local-assets-backup)
 - [Template Manager](#template-manager)
 - [Overlays](#overlays)
 - [History](#history)
@@ -138,9 +138,9 @@ Click a tile to choose a new one from TMDb/Fanart.tv (or make one from a preset,
 
 ---
 
-## Tools: Overlay Refresh, Media Mirror, Local Assets, Backup
+## Tools: Overlay Refresh, Media Mirror, Poster Import, Local Assets, Backup
 
-The **Tools** page of each library group has four tabs.
+The **Tools** page of each library group has these tabs.
 
 **Overlay Refresh** re-renders posters whose overlay would now look different, for example when a rating changed, a movie was upgraded to 4K or a title joined a list. **Check for changes** lists them without sending anything; **Refresh changed posters** sends them. Turn on **Refresh on a schedule** to do it automatically. See [Overlay Refresh](OVERLAYS.md#overlay-refresh).
 
@@ -149,6 +149,14 @@ The **Tools** page of each library group has four tabs.
 **Media Mirror** copies artwork from one server to the others in the group (for example Plex → Jellyfin), once or on a schedule. The table below confirms which title on each server matches. See [Media Mirror](MEDIA_SERVERS.md#media-mirror).
 
 ![Media Mirror](images/media-mirror.png)
+
+**Poster Import** applies posters you've picked elsewhere, from a Kometa-style file with `url_poster` links: a Kometa metadata file (titles keyed by TMDb id, shows by TVDB id) or TPDbCollectionMaker's output (titles, seasons and collections). Paste or load the file, press **Check** to see which titles were found in this library group, then **Import**. Choose what happens to each poster:
+
+- **Render with a preset**: the poster becomes the background of a normal Simposter render (logo, text, effects, overlays).
+- **Overlays only**: the title is set to Overlay only and the preset's overlays are drawn on the poster.
+- **Use as-is and leave alone**: the poster is uploaded unchanged and the title is set to Leave alone.
+
+Collections are always uploaded as-is. Each linked image is downloaded once and kept, and stays that title's poster: later renders and Overlay Refresh keep using it (the **Imported posters** tab lists them and can remove one). Under **Live files** you can point at a file on the Simposter server, such as one of your Kometa metadata files; it's read again on a schedule and titles that are new or whose link changed are imported.
 
 **Local Assets** lists the posters saved to your output folder, with resend, rename and delete.
 

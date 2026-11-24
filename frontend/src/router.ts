@@ -16,6 +16,7 @@ import BackdropsView from './views/BackdropsView.vue'
 import SquareArtView from './views/SquareArtView.vue'
 import ThumbArtView from './views/ThumbArtView.vue'
 import MediaMirrorView from './views/MediaMirrorView.vue'
+import PosterImportView from './views/PosterImportView.vue'
 import OverlayRefreshView from './views/OverlayRefreshView.vue'
 import PosterApiView from './views/PosterApiView.vue'
 import { useSettingsStore } from './stores/settings'
@@ -34,6 +35,7 @@ export const router = createRouter({
     { path: '/movies/square-art', name: 'square-art', component: SquareArtView },
     { path: '/movies/thumb-art', name: 'thumb-art', component: ThumbArtView },
     { path: '/movies/media-mirror', name: 'media-mirror', component: MediaMirrorView },
+    { path: '/movies/poster-import', name: 'poster-import', component: PosterImportView },
     { path: '/movies/overlay-refresh', name: 'overlay-refresh', component: OverlayRefreshView },
     { path: '/tv-shows', name: 'tv-shows', component: TvShowsView },
     { path: '/tv-shows/batch-edit', name: 'tv-batch-edit', component: TvBatchEditView },
@@ -43,6 +45,7 @@ export const router = createRouter({
     { path: '/tv-shows/square-art', name: 'tv-square-art', component: SquareArtView },
     { path: '/tv-shows/thumb-art', name: 'tv-thumb-art', component: ThumbArtView },
     { path: '/tv-shows/media-mirror', name: 'tv-media-mirror', component: MediaMirrorView },
+    { path: '/tv-shows/poster-import', name: 'tv-poster-import', component: PosterImportView },
     { path: '/tv-shows/overlay-refresh', name: 'tv-overlay-refresh', component: OverlayRefreshView },
     { path: '/backup', name: 'backup', component: BackupRestoreView },
     { path: '/templates', name: 'template-manager', component: TemplateManagerView },
@@ -60,9 +63,9 @@ export const router = createRouter({
 // server configured) they all redirect to /poster-api.
 export const LIBRARY_ROUTE_NAMES = new Set([
   'movies', 'batch-edit', 'collections', 'local-assets', 'logos', 'backdrops', 'square-art',
-  'thumb-art', 'media-mirror', 'overlay-refresh',
+  'thumb-art', 'media-mirror', 'overlay-refresh', 'poster-import',
   'tv-shows', 'tv-batch-edit', 'tv-local-assets', 'tv-logos', 'tv-backdrops', 'tv-square-art',
-  'tv-thumb-art', 'tv-media-mirror', 'tv-overlay-refresh',
+  'tv-thumb-art', 'tv-media-mirror', 'tv-overlay-refresh', 'tv-poster-import',
   'history', 'backup'  // backup = per-library server artwork, nothing to do without a server
 ])
 

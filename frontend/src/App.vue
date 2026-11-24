@@ -541,8 +541,8 @@ const resolveTabSuffix = (libQuery: string, serverQuery: string): string => {
 // /movies) used to load EVERY library of that type, unmerged, while the sidebar
 // highlighted the first tab. Fill in that first tab's library so the page matches
 // the sidebar and the library group's merge applies.
-const MOVIE_LIBRARY_ROUTES = new Set(['movies', 'batch-edit', 'collections', 'logos', 'backdrops', 'square-art', 'thumb-art', 'media-mirror', 'overlay-refresh', 'local-assets'])
-const TV_LIBRARY_ROUTES = new Set(['tv-shows', 'tv-batch-edit', 'tv-logos', 'tv-backdrops', 'tv-square-art', 'tv-thumb-art', 'tv-media-mirror', 'tv-overlay-refresh', 'tv-local-assets'])
+const MOVIE_LIBRARY_ROUTES = new Set(['movies', 'batch-edit', 'collections', 'logos', 'backdrops', 'square-art', 'thumb-art', 'media-mirror', 'overlay-refresh', 'poster-import', 'local-assets'])
+const TV_LIBRARY_ROUTES = new Set(['tv-shows', 'tv-batch-edit', 'tv-logos', 'tv-backdrops', 'tv-square-art', 'tv-thumb-art', 'tv-media-mirror', 'tv-overlay-refresh', 'tv-poster-import', 'tv-local-assets'])
 watch(
   [() => route.name, () => route.query.library, () => settings.loaded.value, tabs],
   () => {
@@ -567,8 +567,8 @@ const ARTWORK_ROUTES = {
   tv: ['tv-logos', 'tv-backdrops', 'tv-square-art', 'tv-thumb-art'],
 }
 const TOOLS_ROUTES = {
-  movie: ['overlay-refresh', 'media-mirror', 'local-assets'],
-  tv: ['tv-overlay-refresh', 'tv-media-mirror', 'tv-local-assets'],
+  movie: ['overlay-refresh', 'media-mirror', 'poster-import', 'local-assets'],
+  tv: ['tv-overlay-refresh', 'tv-media-mirror', 'tv-poster-import', 'tv-local-assets'],
 }
 
 const sectionTabs = computed<{ title: string; tabs: SectionTab[] } | null>(() => {
@@ -615,6 +615,7 @@ const sectionTabs = computed<{ title: string; tabs: SectionTab[] } | null>(() =>
     tabs: [
       tab(`${p}overlay-refresh`, 'Overlay Refresh'),
       ...(members.length > 1 ? [tab(`${p}media-mirror`, 'Media Mirror')] : []),
+      tab(`${p}poster-import`, 'Poster Import'),
       tab(`${p}local-assets`, 'Local Assets'),
       {
         key: 'backup', label: 'Backup / Restore',
@@ -633,13 +634,13 @@ const activeTab = computed<TabKey>(() => {
     const firstTvLib = settings.plex.value.tvShowLibraryMappings && settings.plex.value.tvShowLibraryMappings[0]
     return `tv-shows-${firstTvLib?.id || 'default'}`
   }
-  if (route.name === 'batch-edit' || route.name === 'local-assets' || route.name === 'movies' || route.name === 'collections' || route.name === 'backup' || route.name === 'logos' || route.name === 'backdrops' || route.name === 'square-art' || route.name === 'thumb-art' || route.name === 'media-mirror' || route.name === 'overlay-refresh') {
+  if (route.name === 'batch-edit' || route.name === 'local-assets' || route.name === 'movies' || route.name === 'collections' || route.name === 'backup' || route.name === 'logos' || route.name === 'backdrops' || route.name === 'square-art' || route.name === 'thumb-art' || route.name === 'media-mirror' || route.name === 'overlay-refresh' || route.name === 'poster-import') {
     if (libQuery) return `movies-${libQuery}`
     // fallback to first lib key
     const firstLib = settings.plex.value.libraryMappings && settings.plex.value.libraryMappings[0]
     return `movies-${firstLib?.id || 'default'}`
   }
-  if (route.name === 'tv-shows' || route.name === 'tv-batch-edit' || route.name === 'tv-local-assets' || route.name === 'tv-logos' || route.name === 'tv-backdrops' || route.name === 'tv-square-art' || route.name === 'tv-thumb-art' || route.name === 'tv-media-mirror' || route.name === 'tv-overlay-refresh') {
+  if (route.name === 'tv-shows' || route.name === 'tv-batch-edit' || route.name === 'tv-local-assets' || route.name === 'tv-logos' || route.name === 'tv-backdrops' || route.name === 'tv-square-art' || route.name === 'tv-thumb-art' || route.name === 'tv-media-mirror' || route.name === 'tv-overlay-refresh' || route.name === 'tv-poster-import') {
     if (libQuery) return `tv-shows-${libQuery}`
     // fallback to first TV lib key
     const firstTvLib = settings.plex.value.tvShowLibraryMappings && settings.plex.value.tvShowLibraryMappings[0]

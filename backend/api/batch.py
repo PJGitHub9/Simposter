@@ -2761,6 +2761,8 @@ def process_single_movie_poster(
     send_logos_to_plex: bool = False,
     send_only_if_ideal: bool = False,
     require_textless_poster: bool = False,
+    targets: list = None,
+    source_server_id: str = None,
 ) -> bool:
     """
     Process a single movie poster programmatically.
@@ -2799,6 +2801,10 @@ def process_single_movie_poster(
             require_textless_poster=require_textless_poster,
         )
         _route_to_item_servers(req, rating_key, library_id, "movie")
+        if targets is not None:
+            # The caller already knows every server that should get it (poster import).
+            req.targets = list(targets)
+            req.source_server_id = source_server_id or "plex-1"
 
         # Load presets for options
         from ..config import load_presets
@@ -2857,6 +2863,8 @@ def process_single_tv_show_poster(
     send_logos_to_plex: bool = False,
     send_only_if_ideal: bool = False,
     require_textless_poster: bool = False,
+    targets: list = None,
+    source_server_id: str = None,
 ) -> bool:
     """
     Process a single TV show poster programmatically.
@@ -2895,6 +2903,10 @@ def process_single_tv_show_poster(
             require_textless_poster=require_textless_poster,
         )
         _route_to_item_servers(req, rating_key, library_id, "tv")
+        if targets is not None:
+            # The caller already knows every server that should get it (poster import).
+            req.targets = list(targets)
+            req.source_server_id = source_server_id or "plex-1"
 
         # Load presets for options
         from ..config import load_presets

@@ -136,6 +136,23 @@ def load_preset_context(
     )
 
 
+def custom_poster_override(media_type: str, tmdb_id, tvdb_id=None, season_index=None) -> Optional[dict]:
+    """The poster imported for this title (Tools -> Poster Import), as a poster
+    entry the selection can use in place of TMDb's. It wins over the preset's
+    poster filter and fallbacks: the user picked this exact poster."""
+    try:
+        from . import custom_posters
+        url = custom_posters.lookup(media_type, tmdb_id, tvdb_id, season_index)
+    except Exception as e:
+        logger.debug("[CUSTOM_POSTER] Lookup failed for %s %s: %s", media_type, tmdb_id, e)
+        return None
+    if not url:
+        return None
+    logger.info("[CUSTOM_POSTER] Using the imported poster for %s %s%s", media_type, tmdb_id,
+                f" season {season_index}" if season_index is not None else "")
+    return {"url": url, "source": "imported", "has_text": True}
+
+
 def select_movie_assets(
     tmdb_id: int,
     details: dict,
@@ -170,6 +187,7 @@ def select_movie_assets(
     logo_mode = ctx.logo_mode
 
     posters = imgs.get("posters", [])
+    custom = custom_poster_override("movie", tmdb_id)
 
     # Get logos using merged sources based on preference
     logo_source_pref = render_options_base.get("logoSource") or render_options_base.get("logo_source")
@@ -206,7 +224,7 @@ def select_movie_assets(
     # ---------------------------
     # Auto-select assets
     # ---------------------------
-    poster = pick_poster(posters, poster_filter)
+    poster = custom or pick_poster(posters, poster_filter)
     logo = None if str(logo_mode).lower() == "none" else pick_logo(logos, logo_preference, white_logo_fallback, language_pref)
 
     poster_fallback_action_used = None
@@ -242,7 +260,7 @@ def select_movie_assets(
                 else:
                     logger.warning("%s Fallback preset '%s' not found for template '%s'", log_label, fallback_preset, fallback_template)
             # Re-pick poster with updated filter from fallback preset
-            poster = pick_poster(posters, poster_filter)
+            poster = custom or pick_poster(posters, poster_filter)
             # Re-evaluate logos with any updated preferences from the fallback preset
             logo_source_pref = render_options_base.get("logoSource") or render_options_base.get("logo_source")
             logos = get_logos_merged(tmdb_id, logo_source_pref, movie_details.get("original_language"), tmdb_imgs=imgs)
@@ -290,7 +308,7 @@ def select_movie_assets(
                     logo_source_pref = render_options_base.get("logoSource") or render_options_base.get("logo_source")
                     logos = get_logos_merged(tmdb_id, logo_source_pref, movie_details.get("original_language"), tmdb_imgs=imgs)
                     # Re-pick poster with the fallback template's poster_filter
-                    poster = pick_poster(posters, poster_filter)
+                    poster = custom or pick_poster(posters, poster_filter)
                     if poster:
                         poster_url = poster.get("url")
                         logger.info("%s Re-picked poster with fallback filter '%s': %s", log_label, poster_filter, poster_url)
@@ -378,7 +396,8 @@ def select_tv_series_assets(
         )
 
     # Select poster with template fallback logic (matching preview.py behavior)
-    poster = pick_poster(posters, ctx.poster_filter)
+    custom = custom_poster_override("tv", tmdb_id)
+    poster = custom or pick_poster(posters, ctx.poster_filter)
 
     if not poster:
         # Apply template fallback if no poster found with filter
@@ -406,14 +425,14 @@ def select_tv_series_assets(
                 template_id = fallback_template
                 preset_id = fallback_preset
                 # Now try to get ANY available poster
-                poster = pick_poster(posters, "all")
+                poster = custom or pick_poster(posters, "all")
                 logger.info("%s Using fallback poster from TMDB after template switch", log_label)
             else:
                 logger.warning("%s Fallback preset '%s' not found for template '%s'", log_label, fallback_preset, fallback_template)
         else:
             # continue action - try to get any available poster
             poster_fallback_action_used = "continue"
-            poster = pick_poster(posters, "all")
+            poster = custom or pick_poster(posters, "all")
 
     if not poster:
         raise NoPosterAvailableError("No poster found for series")
@@ -485,7 +504,8 @@ def select_tv_season_assets(
                 len(series_logos), season_poster_filter)
 
     # Select poster with template fallback logic (matching preview.py behavior)
-    poster = pick_poster(all_posters, season_poster_filter)
+    custom = custom_poster_override("tv", tmdb_id, tvdb_id, season_index)
+    poster = custom or pick_poster(all_posters, season_poster_filter)
 
     season_template_id = ctx.template_id
     season_preset_id = ctx.preset_id
@@ -523,14 +543,14 @@ def select_tv_season_assets(
                 season_template_id = fallback_template
                 season_preset_id = fallback_preset
                 # Now try to get ANY available poster
-                poster = pick_poster(all_posters, "all")
+                poster = custom or pick_poster(all_posters, "all")
                 logger.info("%s Using fallback poster from TMDB after template switch", log_label)
             else:
                 logger.warning("%s Fallback preset '%s' not found for template '%s'", log_label, fallback_preset, fallback_template)
         else:
             # continue action - try to get any available poster
             poster_fallback_action_used = "continue"
-            poster = pick_poster(all_posters, "all")
+            poster = custom or pick_poster(all_posters, "all")
 
     # Extract logo mode from season options (may differ from series logo mode)
     season_logo_mode = season_render_options.get("logo_mode", ctx.logo_mode)

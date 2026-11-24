@@ -93,6 +93,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             "/api/movie": 2000,
             "/api/tv-show": 2000,
             "/api/logo": 1500,
+            # Poster Import page: the imported-poster grid loads one image per title.
+            "/api/poster-import": 1500,
             # Backdrops/Square Art are the same trust class as Logo above (cheap
             # per-item disk-cache reads, not live external API calls in the common
             # case) but were never added here -- they fell through to the low

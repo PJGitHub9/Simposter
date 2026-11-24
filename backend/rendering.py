@@ -80,6 +80,10 @@ def _download_image(url: str) -> Image.Image:
     from . import kometa_assets
     is_kometa_asset = kometa_assets.is_kometa_asset_url(url)
     disk_raw = kometa_assets.read_image(url) if is_kometa_asset else None
+    if disk_raw is None:
+        # Posters imported through Tools -> Poster Import are kept on disk too.
+        from . import custom_posters
+        disk_raw = custom_posters.read_cached(url)
 
     # Retry with backoff on timeouts and connection errors. Connection errors
     # include "Temporary failure in name resolution", which a container's DNS

@@ -298,6 +298,13 @@ def resolve_base(server_id: str, rating_key: str, season_index: Optional[int], i
     be sent again)."""
     existing = clean_base_path(server_id, rating_key, season_index)
 
+    # A poster imported for this title (Tools -> Poster Import) is the base the
+    # user chose; it wins over whatever the server shows.
+    from . import custom_posters
+    imported = custom_posters.lookup_for_item(server_id, str(rating_key), season_index)
+    if imported:
+        return imported, "the imported poster"
+
     from . import media_server, poster_drift
     from .media_server import ImageType
     client = media_server.get_client(server_id)
@@ -622,14 +629,14 @@ def apply_for_title(server_id: str, rating_key: str, library_id: Optional[str], 
         hints["title_hint"] = title_hint
     if year_hint:
         hints["year_hint"] = year_hint
-    results: List[Dict[str, Any]] = []
-    for ci, (sid, rk, lib) in enumerate(copies):
+    def _one_copy(ci: int, sid: str, rk: str, lib: Optional[str]) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
         up = servers is None or sid in servers
         if not up and not (render_unsent_own and ci == 0):
-            continue
+            return out
         if not is_tv or include_series:
             r = apply_for_item(sid, rk, lib, is_tv, template_id, preset_id, source, upload=up, notify=False, **hints)
-            results.append({**r, "server_id": sid, "season_index": None})
+            out.append({**r, "server_id": sid, "season_index": None})
         if is_tv and include_seasons:
             try:
                 from .api.batch import _list_show_seasons
@@ -637,14 +644,31 @@ def apply_for_title(server_id: str, rating_key: str, library_id: Optional[str], 
             except Exception as e:
                 logger.warning("[OVERLAY_ONLY] Couldn't list the seasons of %s on %s: %s",
                                _title_for_log(rk, None), sid, e)
-                results.append({"status": "error", "reason": f"season list failed: {e}", "server_id": sid})
-                continue
+                out.append({"status": "error", "reason": f"season list failed: {e}", "server_id": sid})
+                return out
             for s in seasons:
                 if affected_seasons and s["index"] not in affected_seasons:
                     continue
                 r = apply_for_item(sid, s["key"], lib, True, template_id, preset_id, source,
                                    season_index=s["index"], upload=up, notify=False, **hints)
-                results.append({**r, "server_id": sid, "season_index": s["index"]})
+                out.append({**r, "server_id": sid, "season_index": s["index"]})
+        return out
+
+    # Each server copy is rendered, uploaded and checked on its own, so they run
+    # side by side (mostly network waits); results keep the copies' order.
+    results: List[Dict[str, Any]] = []
+    if len(copies) == 1:
+        results = _one_copy(0, *copies[0])
+    else:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(4, len(copies)), thread_name_prefix="overlay-only") as pool:
+            futures = [pool.submit(_one_copy, ci, sid, rk, lib) for ci, (sid, rk, lib) in enumerate(copies)]
+            for f in futures:
+                try:
+                    results.extend(f.result())
+                except Exception as e:
+                    logger.error("[OVERLAY_ONLY] A server copy failed: %s", e)
+                    results.append({"status": "error", "reason": str(e)})
     _notify_title(results, source, template_id, preset_id, library_id, title_hint, year_hint)
     statuses = [r.get("status") for r in results]
     status = "ok" if "ok" in statuses else ("error" if "error" in statuses else "skipped")

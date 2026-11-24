@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.8.94 (2026-11-24) — `dev-silo` branch
+
+### New Features
+- **Poster Import** — Tools → Poster Import per library (`PosterImportView.vue`, routes `poster-import`/`tv-poster-import`). Reads Kometa metadata files (`metadata:`/`collections:`, keyed by TMDb id, shows by TVDB id, or by title with `title:`/`year:`) and TPDbCollectionMaker output (keyed by title, `seasons:`); matches titles in the library group (id, else normalized title + year; ambiguous titles are reported) and collections by name. Each linked image is downloaded once (spaced 0.5 s apart, SSRF-checked, 25 MB cap) into `config/cache/custom_posters/`. Modes: render with a preset (Full), Overlay only, or upload as-is and set Leave alone; collections are always uploaded as-is. Backend `backend/custom_posters.py`, `backend/api/poster_import.py`.
+- **Imported posters stay the title's art** — table `custom_posters`; `tmdb_render.custom_poster_override()` makes every movie/series/season selection use the imported poster over TMDb's (filters and poster fallbacks don't apply to it), `rendering._download_image()` reads it from disk, and `overlay_only.resolve_base()` uses it as the base.
+- **Live poster files** — table `poster_import_files`, scheduler jobs `poster_import_<id>` (restored at startup). A changed file applies only entries that are new or whose links changed; failed entries are tried again next time; removed entries are left as they are.
+- `process_single_movie_poster()`/`process_single_tv_show_poster()` take explicit `targets`/`source_server_id`.
+- History shows these sends as source "Import".
+
+### Improvements
+- **Overlay only sends run per server in parallel** — `overlay_only.apply_for_title()` rendered, uploaded and verified each server copy one after another (~5 s each for a 5.5 MB poster, so ~15 s for Plex + Silo + Jellyfin). Copies now run in a thread pool (up to 4); results keep the copies' order. Rendering and encoding are unchanged.
+- **Remove overlays covers every server** — `/api/overlay-only/remove-overlays` only removed the overlays on the copy shown in the editor. It now also finds the other tracked copies of the same title/season in the library group (`overlay_state` by TMDb id + season, limited to the group's member libraries) and removes them in parallel; the response lists `removed_from`/`failed`.
+- **Editor Overlay only send in parallel** — `/api/overlay-only/send` had its own one-at-a-time loop over targets (not `apply_for_title()`); it now uses a thread pool too.
+- **Poster Import progress** — the status is set to running before the worker thread starts (`custom_posters.mark_starting()`), so the page's first poll no longer sees "idle" and stops polling; the Import button shows the count and a progress bar sits under it.
+
 ## v1.8.93 (2026-11-23) — `dev-silo` branch
 
 ### Bug Fixes

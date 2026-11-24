@@ -49,6 +49,5 @@ config/ui_settings.json
 .*/docker-compose.yml
 test_webhooks.py
 CLAUDE.md
-unraid/simposter.db
-unraid/simposter.db-shm
-unraid/simposter.db-wal
+# Local Unraid copies (databases, logs, personal Kometa files)
+unraid/

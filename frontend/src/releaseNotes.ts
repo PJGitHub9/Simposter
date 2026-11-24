@@ -10,6 +10,22 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.94',
+    date: '2026-11-24',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Poster Import (Tools, in each library): paste or load a Kometa-style file with url_poster links, such as a Kometa metadata file or TPDbCollectionMaker’s output, and Simposter matches each title in the library group (by TMDb/TVDB id or title), downloads each linked image once and applies it. Choose per file, or per title: render with a preset over the imported poster, overlays only, or use it as-is and leave the title alone. Season posters and collection posters are included.',
+          'Live poster files: point Poster Import at a file on the server and it’s read again on a schedule; titles that are new or whose link changed are imported.',
+          'Sending an Overlay only poster to several servers (editor, webhooks, Poster Import) now sends to all of them at the same time instead of one after another.',
+          'Remove overlays in the editor now removes them from every server in the library group that has the title with Simposter’s overlays, not only the one being previewed.',
+          'An imported poster stays the title’s art: later renders (webhooks, Batch Edit, retries, Overlay Refresh, the Poster API) use it instead of TMDb’s posters, and Overlay only draws on it. The Imported posters tab lists them and can remove one.',
+        ],
+      },
+    ],
+  },
+  {
     version: 'v1.8.93',
     date: '2026-11-23',
     sections: [

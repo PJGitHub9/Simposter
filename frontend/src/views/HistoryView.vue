@@ -599,6 +599,8 @@ const getSourceLabel = (source: string | null) => {
       return 'Webhook'
     case 'manual':
       return 'Manual'
+    case 'poster_import':
+      return 'Import'
     default:
       return 'Manual'
   }
@@ -615,6 +617,8 @@ const getSourceClass = (source: string | null) => {
       return 'source-webhook'
     case 'manual':
       return 'source-manual'
+    case 'poster_import':
+      return 'source-batch'
     default:
       return 'source-manual'
   }
