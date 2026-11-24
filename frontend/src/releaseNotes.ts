@@ -17,6 +17,7 @@ export const releaseNotes: ReleaseNote[] = [
         title: 'New Features',
         items: [
           'Live files can be a link instead of a path, for both Poster Import and live Kometa overlay files: a GitHub file (page links work) or Kometa’s git: shorthand. An unchanged file isn’t downloaded again.',
+          'History → Changed Outside Simposter has a List view: one row per title with its servers as tags. Tick several titles, or a whole heading, and put Simposter’s back or keep the server’s for all of them at once; open a row to act on one server.',
           'Ask before applying: a live file can hold its changes until you press Apply, so a file someone else edits can’t change your posters or overlays without you seeing it first.',
         ],
       },

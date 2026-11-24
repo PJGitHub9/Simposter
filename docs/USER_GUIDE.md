@@ -211,7 +211,7 @@ The **Retry Queue** tab lists titles waiting for better artwork, for example a t
 
 ![Retry Queue](images/history-retry.png)
 
-**Changed Outside Simposter** lists posters, logos and backdrops that were replaced on the server after Simposter sent them (by Kometa, another app or by hand). For each one you can put Simposter's back or keep the server's. You can also choose what happens automatically: list them, notify you, or put Simposter's back.
+**Changed Outside Simposter** lists posters, logos and backdrops that were replaced on the server after Simposter sent them (by Kometa, another app or by hand). For each one you can put Simposter's back or keep the server's. Switch to **List** to see one row per title with its servers as tags: tick several titles (or a whole heading) and put back or keep them all at once, or open a row to act on one server. You can also choose what happens automatically: list them, notify you, or put Simposter's back.
 
 ---
 

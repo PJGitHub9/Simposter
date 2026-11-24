@@ -5,6 +5,8 @@ import { getApiBase } from '@/services/apiBase'
 import { useSettingsStore } from '@/stores/settings'
 import { mediaServerLabel } from '@/services/mediaServerLabel'
 import { libraryInfo, libraryLabel } from '@/services/libraryLabel'
+import { buildDriftRows, runLimited, type DriftRow } from '@/services/driftRows'
+import DriftCopyCard from '@/components/history/DriftCopyCard.vue'
 
 interface HistoryRecord {
   id: number
@@ -126,6 +128,9 @@ const fetchDrift = async () => {
     driftItems.value = data.items || []
     driftAction.value = data.action || 'list'
     driftTracked.value = data.tracked || 0
+    // Drop selections whose title is no longer listed.
+    const keys = new Set(allDriftRows.value.map(r => r.key))
+    driftSelected.value = new Set([...driftSelected.value].filter(k => keys.has(k)))
   } catch (e: any) {
     console.error('[DRIFT] Error:', e)
   } finally {
@@ -148,18 +153,23 @@ const setDriftAction = async (action: string) => {
 const driftAsset = (item: DriftItem) => item.asset_type || 'poster'
 const driftKey = (item: DriftItem) => `${item.server_id}:${item.rating_key}:${driftAsset(item)}`
 
+/** One Put back / Keep request. Throws with the server's reason on failure. */
+const driftPost = async (item: DriftItem, what: 'resend' | 'dismiss') => {
+  const res = await fetch(
+    `${apiBase}/api/poster-drift/${encodeURIComponent(item.server_id)}/${encodeURIComponent(item.rating_key)}/${what}?asset=${driftAsset(item)}`,
+    { method: 'POST' },
+  )
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.detail || `Failed: ${res.status}`)
+  }
+}
+
 const driftDo = async (item: DriftItem, what: 'resend' | 'dismiss') => {
   driftBusy.value = `${what}:${driftKey(item)}`
   driftMessage.value = ''
   try {
-    const res = await fetch(
-      `${apiBase}/api/poster-drift/${encodeURIComponent(item.server_id)}/${encodeURIComponent(item.rating_key)}/${what}?asset=${driftAsset(item)}`,
-      { method: 'POST' },
-    )
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}))
-      throw new Error(data.detail || `Failed: ${res.status}`)
-    }
+    await driftPost(item, what)
     if (what === 'resend') driftMessage.value = `Re-sent Simposter's ${driftAsset(item)} for ${item.title}.`
     await fetchDrift()
   } catch (e: any) {
@@ -207,9 +217,80 @@ const driftGroups = computed(() => {
     .sort((a, b) => (a.key === 'none' ? 1 : b.key === 'none' ? -1 : a.name.localeCompare(b.name)))
     .map(g => ({
       ...g,
-      types: DRIFT_ASSET_ORDER.filter(t => g.types.has(t)).map(t => ({ type: t, items: g.types.get(t)! })),
+      types: DRIFT_ASSET_ORDER.filter(t => g.types.has(t)).map(t => ({
+        type: t,
+        items: g.types.get(t)!,
+        rows: buildDriftRows(g.types.get(t)!, g.key),
+      })),
     }))
 })
+
+// List view: one row per title, multi-select, bulk Put back / Keep.
+const DRIFT_VIEW_KEY = 'simposter-drift-view'
+const driftView = ref<'cards' | 'list'>((() => {
+  try { return localStorage.getItem(DRIFT_VIEW_KEY) === 'list' ? 'list' : 'cards' } catch { return 'cards' }
+})())
+const setDriftView = (v: 'cards' | 'list') => {
+  driftView.value = v
+  try { localStorage.setItem(DRIFT_VIEW_KEY, v) } catch { /* private window */ }
+}
+const driftSelected = ref<Set<string>>(new Set())
+const driftExpanded = ref<Set<string>>(new Set())
+const driftBulk = ref<{ what: 'resend' | 'dismiss'; done: number; total: number } | null>(null)
+const allDriftRows = computed(() => driftGroups.value.flatMap(g => g.types.flatMap(t => t.rows)))
+const selectedDriftRows = computed(() => allDriftRows.value.filter(r => driftSelected.value.has(r.key)))
+const selectedDriftCopies = computed(() => selectedDriftRows.value.reduce((n, r) => n + r.copies.length, 0))
+const driftLocked = computed(() => driftBusy.value !== null || driftBulk.value !== null)
+
+const toggleDriftKey = (which: 'selected' | 'expanded', key: string) => {
+  const set = which === 'selected' ? driftSelected : driftExpanded
+  const next = new Set(set.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  set.value = next
+}
+const allRowsSelected = (rows: DriftRow<DriftItem>[]) => rows.length > 0 && rows.every(r => driftSelected.value.has(r.key))
+const toggleDriftRows = (rows: DriftRow<DriftItem>[]) => {
+  const next = new Set(driftSelected.value)
+  if (allRowsSelected(rows)) rows.forEach(r => next.delete(r.key))
+  else rows.forEach(r => next.add(r.key))
+  driftSelected.value = next
+}
+const selectAllDrift = () => { driftSelected.value = new Set(allDriftRows.value.map(r => r.key)) }
+const clearDriftSelection = () => { driftSelected.value = new Set() }
+const driftServerName = (item: DriftItem) => mediaServerLabel(item.server_id, settings.mediaServers.value)
+const driftCopyBusy = (item: DriftItem) => {
+  const b = driftBusy.value
+  if (!b) return null
+  const [what, ...rest] = b.split(':')
+  return rest.join(':') === driftKey(item) ? what || null : null
+}
+
+const driftBulkRun = async (what: 'resend' | 'dismiss') => {
+  const rows = selectedDriftRows.value
+  const copies = rows.flatMap(r => r.copies)
+  if (!copies.length || driftLocked.value) return
+  const titles = `${rows.length} title${rows.length !== 1 ? 's' : ''}`
+  const servers = `${copies.length} server cop${copies.length !== 1 ? 'ies' : 'y'}`
+  if (what === 'resend' && !confirm(`Put Simposter's version back on ${servers} of ${titles}? This uploads to your servers.`)) return
+  driftMessage.value = ''
+  driftBulk.value = { what, done: 0, total: copies.length }
+  const results = await runLimited(copies, 3, item => driftPost(item, what), done => {
+    if (driftBulk.value) driftBulk.value.done = done
+  })
+  const failed = results.filter(r => r.error)
+  const ok = results.length - failed.length
+  let msg = `${ok} ${what === 'resend' ? 'put back' : 'kept'}`
+  if (failed.length) {
+    msg += `, ${failed.length} failed: ` + failed
+      .map(f => `${f.item.title} (${driftServerName(f.item)}): ${f.error}`)
+      .join('; ')
+  }
+  driftSelected.value = new Set()
+  await fetchDrift()
+  driftBulk.value = null
+  driftMessage.value = msg + '.'
+}
 
 // Retry queue state
 const retryItems = ref<RetryQueueItem[]>([])
@@ -1146,6 +1227,29 @@ onMounted(async () => {
         <small>{{ driftHint }} Saved right away.</small>
       </div>
 
+      <div v-if="driftItems.length > 0" class="drift-toolbar">
+        <div class="drift-view-toggle" role="group" aria-label="View">
+          <button :class="{ active: driftView === 'cards' }" @click="setDriftView('cards')">Cards</button>
+          <button :class="{ active: driftView === 'list' }" @click="setDriftView('list')">List</button>
+        </div>
+        <template v-if="driftView === 'list'">
+          <button class="drift-link-btn" :disabled="driftLocked" @click="selectAllDrift">Select all</button>
+          <button v-if="driftSelected.size" class="drift-link-btn" :disabled="driftLocked" @click="clearDriftSelection">Clear</button>
+        </template>
+      </div>
+
+      <div v-if="driftView === 'list' && (driftSelected.size > 0 || driftBulk)" class="drift-bulk-bar">
+        <span v-if="driftBulk" class="drift-bulk-count">
+          {{ driftBulk.what === 'resend' ? 'Putting back' : 'Keeping' }} {{ driftBulk.done }} / {{ driftBulk.total }}…
+        </span>
+        <span v-else class="drift-bulk-count">
+          {{ selectedDriftRows.length }} title{{ selectedDriftRows.length !== 1 ? 's' : '' }}
+          ({{ selectedDriftCopies }} cop{{ selectedDriftCopies !== 1 ? 'ies' : 'y' }})
+        </span>
+        <button class="btn-retry-now" :disabled="driftLocked" @click="driftBulkRun('resend')">Put Simposter's back</button>
+        <button class="btn-dismiss" :disabled="driftLocked" title="Keep the server's version and stop reporting these changes" @click="driftBulkRun('dismiss')">Keep server's</button>
+      </div>
+
       <p v-if="driftMessage" class="drift-message">{{ driftMessage }}</p>
 
       <div v-if="driftLoading && driftItems.length === 0" class="loading">Loading...</div>
@@ -1160,34 +1264,51 @@ onMounted(async () => {
           <span class="drift-group-count">{{ group.count }}</span>
         </summary>
         <div v-for="t in group.types" :key="t.type" class="drift-type">
-          <h4 class="drift-type-head">{{ DRIFT_ASSET_PLURAL[t.type] }} <span>{{ t.items.length }}</span></h4>
-      <div class="drift-grid">
-        <div v-for="item in t.items" :key="driftKey(item)" class="drift-card">
-          <div class="drift-title">{{ item.title }} <span class="drift-asset">{{ DRIFT_ASSET_LABELS[driftAsset(item)] }}</span></div>
-          <div class="drift-meta">
-            {{ mediaServerLabel(item.server_id, settings.mediaServers.value) }} · noticed {{ formatDate(item.drift_detected_at) }}
-            <template v-if="item.drift_action === 'resend'"> · re-send was tried</template>
+          <h4 class="drift-type-head">
+            <input v-if="driftView === 'list'" type="checkbox" class="drift-check" :checked="allRowsSelected(t.rows)"
+              :disabled="driftLocked" :title="`Select all ${DRIFT_ASSET_PLURAL[t.type]?.toLowerCase()} here`" @change="toggleDriftRows(t.rows)" />
+            {{ DRIFT_ASSET_PLURAL[t.type] }} <span>{{ driftView === 'list' ? t.rows.length : t.items.length }}</span>
+          </h4>
+          <div v-if="driftView === 'cards'" class="drift-grid">
+            <DriftCopyCard v-for="item in t.items" :key="driftKey(item)"
+              :title="item.title" :asset-label="DRIFT_ASSET_LABELS[driftAsset(item)] || ''"
+              :meta="`${driftServerName(item)} · noticed ${formatDate(item.drift_detected_at)}${item.drift_action === 'resend' ? ' · re-send was tried' : ''}`"
+              :sent-url="driftSentUrl(item)" :current-url="driftCurrentUrl(item)" :wide="driftAsset(item) !== 'poster'"
+              :busy="driftCopyBusy(item)" :disabled="driftLocked"
+              :keep-title="`Keep the server's ${driftAsset(item)} and stop reporting this change`"
+              @resend="driftDo(item, 'resend')" @dismiss="driftDo(item, 'dismiss')" />
           </div>
-          <div class="drift-images" :class="{ wide: driftAsset(item) !== 'poster' }">
-            <figure>
-              <img :src="driftSentUrl(item)" alt="" loading="lazy" @error="($event.target as HTMLImageElement).style.visibility = 'hidden'" />
-              <figcaption>Simposter sent</figcaption>
-            </figure>
-            <figure>
-              <img :src="driftCurrentUrl(item)" alt="" loading="lazy" />
-              <figcaption>On the server now</figcaption>
-            </figure>
+          <div v-else class="drift-list">
+            <div v-for="row in t.rows" :key="row.key" class="drift-row-wrap" :class="{ selected: driftSelected.has(row.key) }">
+              <div class="drift-row">
+                <input type="checkbox" class="drift-check" :checked="driftSelected.has(row.key)" :disabled="driftLocked"
+                  @change="toggleDriftKey('selected', row.key)" />
+                <div class="drift-row-thumbs" :class="{ wide: row.asset !== 'poster' }">
+                  <img :src="driftSentUrl(row.copies[0]!)" alt="" loading="lazy" title="Simposter sent"
+                    @error="($event.target as HTMLImageElement).style.visibility = 'hidden'" />
+                  <img :src="driftCurrentUrl(row.copies[0]!)" alt="" loading="lazy" title="On the server now" />
+                </div>
+                <button class="drift-row-main" @click="toggleDriftKey('expanded', row.key)">
+                  <span class="drift-row-title">{{ row.title }}</span>
+                  <span class="drift-row-meta">
+                    <span v-for="c in row.copies" :key="driftKey(c)" class="drift-server-tag">{{ driftServerName(c) }}</span>
+                    <span>noticed {{ formatDate(row.latest) }}</span>
+                  </span>
+                </button>
+                <button class="drift-expand" :aria-expanded="driftExpanded.has(row.key)" :title="driftExpanded.has(row.key) ? 'Hide servers' : 'Show each server'"
+                  @click="toggleDriftKey('expanded', row.key)">{{ driftExpanded.has(row.key) ? '\u25BE' : '\u25B8' }}</button>
+              </div>
+              <div v-if="driftExpanded.has(row.key)" class="drift-grid drift-row-copies">
+                <DriftCopyCard v-for="item in row.copies" :key="driftKey(item)" :show-title="false"
+                  :title="item.title" :asset-label="DRIFT_ASSET_LABELS[driftAsset(item)] || ''"
+                  :meta="`${driftServerName(item)} · noticed ${formatDate(item.drift_detected_at)}${item.drift_action === 'resend' ? ' · re-send was tried' : ''}`"
+                  :sent-url="driftSentUrl(item)" :current-url="driftCurrentUrl(item)" :wide="driftAsset(item) !== 'poster'"
+                  :busy="driftCopyBusy(item)" :disabled="driftLocked"
+                  :keep-title="`Keep the server's ${driftAsset(item)} and stop reporting this change`"
+                  @resend="driftDo(item, 'resend')" @dismiss="driftDo(item, 'dismiss')" />
+              </div>
+            </div>
           </div>
-          <div class="drift-actions">
-            <button class="btn-retry-now" :disabled="driftBusy !== null" @click="driftDo(item, 'resend')">
-              {{ driftBusy === `resend:${driftKey(item)}` ? '...' : "Put Simposter's back" }}
-            </button>
-            <button class="btn-dismiss" :disabled="driftBusy !== null" :title="`Keep the server's ${driftAsset(item)} and stop reporting this change`" @click="driftDo(item, 'dismiss')">
-              Keep server's
-            </button>
-          </div>
-        </div>
-      </div>
         </div>
       </details>
       </template>
@@ -1779,23 +1900,34 @@ onMounted(async () => {
 .drift-type { margin-top: 12px; }
 .drift-type-head { margin: 0 0 8px; font-size: 0.82rem; font-weight: 600; color: var(--text-secondary, #9aa4b2); display: flex; align-items: center; gap: 6px; }
 .drift-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
-.drift-card {
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 12px;
-  padding: 12px;
-  background: rgba(255, 255, 255, 0.02);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+.drift-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 12px; }
+.drift-view-toggle { display: inline-flex; border: 1px solid var(--border, #2a2f3e); border-radius: 8px; overflow: hidden; }
+.drift-view-toggle button { padding: 5px 14px; background: transparent; border: none; color: var(--text-secondary, #9aa4b2); font-size: 0.82rem; cursor: pointer; }
+.drift-view-toggle button.active { background: rgba(61, 214, 183, 0.15); color: var(--accent, #3dd6b7); font-weight: 600; }
+.drift-link-btn { background: none; border: none; color: var(--accent, #3dd6b7); font-size: 0.82rem; cursor: pointer; padding: 4px 2px; }
+.drift-link-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.drift-bulk-bar {
+  position: sticky; top: 0; z-index: 5;
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 14px; margin: 0 0 12px;
+  border: 1px solid rgba(61, 214, 183, 0.35); border-radius: 10px;
+  background: var(--surface, #151a26);
 }
-.drift-title { font-weight: 600; }
-.drift-images { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.drift-images figure { margin: 0; }
-.drift-images img { width: 100%; aspect-ratio: 2 / 3; object-fit: cover; border-radius: 6px; background: rgba(0, 0, 0, 0.3); }
-.drift-images figcaption { font-size: 0.75rem; text-align: center; color: var(--text-secondary, #9aa4b2); margin-top: 4px; }
-.drift-images.wide img { aspect-ratio: 16 / 9; object-fit: contain; background: repeating-conic-gradient(rgba(255, 255, 255, 0.06) 0% 25%, transparent 0% 50%) 50% / 16px 16px; }
-.drift-asset { margin-left: 6px; padding: 1px 7px; border-radius: 999px; font-size: 0.68rem; font-weight: 600; background: rgba(61, 214, 183, 0.15); color: var(--accent, #3dd6b7); vertical-align: middle; }
-.drift-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.drift-bulk-count { font-size: 0.85rem; font-weight: 600; margin-right: auto; }
+.drift-check { width: 16px; height: 16px; accent-color: var(--accent, #3dd6b7); cursor: pointer; flex-shrink: 0; }
+.drift-list { display: flex; flex-direction: column; gap: 6px; }
+.drift-row-wrap { border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 10px; background: rgba(255, 255, 255, 0.02); }
+.drift-row-wrap.selected { border-color: rgba(61, 214, 183, 0.45); background: rgba(61, 214, 183, 0.05); }
+.drift-row { display: flex; align-items: center; gap: 12px; padding: 8px 10px; }
+.drift-row-thumbs { display: flex; gap: 4px; flex-shrink: 0; }
+.drift-row-thumbs img { width: 36px; height: 54px; object-fit: cover; border-radius: 4px; background: rgba(0, 0, 0, 0.3); }
+.drift-row-thumbs.wide img { width: 64px; height: 36px; object-fit: contain; }
+.drift-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; background: none; border: none; padding: 0; color: inherit; text-align: left; cursor: pointer; }
+.drift-row-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.drift-row-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 0.78rem; color: var(--text-secondary, #9aa4b2); }
+.drift-server-tag { padding: 1px 7px; border-radius: 999px; background: rgba(255, 255, 255, 0.07); color: var(--text-primary, #e5e7eb); font-size: 0.72rem; }
+.drift-expand { background: none; border: none; color: var(--text-secondary, #9aa4b2); font-size: 1rem; cursor: pointer; padding: 4px 8px; }
+.drift-row-copies { padding: 0 10px 10px; }
 
 .retry-queue-header {
   display: flex;
