@@ -518,7 +518,6 @@ def _record_editor_render(req: "MediaServerSendRequest", server_id: str, item_id
         logger.debug("[MEDIA_SERVER_SEND] overlay refresh record failed for %s: %s", item_id, e)
 
 
-@router.post("/send-poster")
 def _editor_render_for_server(req: "MediaServerSendRequest", server_id: str):
     """The editor's poster rendered again for `server_id` when an overlay's
     "Media server" rule comes out differently there than for the server the
@@ -556,6 +555,7 @@ def _editor_render_for_server(req: "MediaServerSendRequest", server_id: str):
         return None
 
 
+@router.post("/send-poster")
 def api_send_poster(req: MediaServerSendRequest):
     server_id, client = _resolve_non_plex_client(req.rating_key, req.server_id)
     image_bytes, _content_type = _resolve_image_bytes(req)
