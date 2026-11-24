@@ -27,6 +27,10 @@ const applicable = computed(() => !props.movie.apiMode && props.movie.mediaType 
 const groupId = computed(() => groupIdFor(groupInfo.value, serverId.value, libraryId.value, mediaType.value))
 const modeItems = computed(() => [{ tmdb_id: props.movie.tmdb_id, tvdb_id: props.movie.tvdb_id }])
 const hasIds = computed(() => !!(props.movie.tmdb_id || props.movie.tvdb_id))
+// Where the mode came from: set by hand, the rule that matched, or the default
+// (no stored mode and no rule match is Full).
+const sourceText = computed(() =>
+  modeReasonText(reason.value) || (mode.value === 'full' ? 'default, no rule matches' : 'set by a rule'))
 
 async function loadGroup() {
   const seq = ++loadSeq
@@ -91,7 +95,7 @@ watch(() => props.movie.key, () => {
 
 <template>
   <div v-if="applicable && hasIds" class="poster-mode-line" :class="'pm-' + mode">
-    <span class="pm-label">Poster mode: <strong>{{ modeLabel(mode) }}</strong><template v-if="mode !== 'full' && reason"> ({{ modeReasonText(reason) }})</template></span>
+    <span class="pm-label">Poster mode: <strong>{{ modeLabel(mode) }}</strong> ({{ sourceText }})</span>
     <PosterModeMenu :group-id="groupId" :media-type="mediaType" :items="modeItems" :disabled="!groupLoaded" @changed="onChanged" />
     <p v-if="mode === 'overlay_only'" class="pm-note">Sending replaces the other app's poster on this server.</p>
     <p v-else-if="mode === 'leave_alone'" class="pm-note pm-warn">Simposter leaves this title alone; sending will still replace its poster.</p>
