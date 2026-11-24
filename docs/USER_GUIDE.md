@@ -156,7 +156,7 @@ The **Tools** page of each library group has these tabs.
 - **Overlays only**: the title is set to Overlay only and the preset's overlays are drawn on the poster.
 - **Use as-is and leave alone**: the poster is uploaded unchanged and the title is set to Leave alone.
 
-Collections are always uploaded as-is. Each linked image is downloaded once and kept, and stays that title's poster: later renders and Overlay Refresh keep using it (the **Imported posters** tab lists them and can remove one). Under **Live files** you can point at a file on the Simposter server, such as one of your Kometa metadata files; it's read again on a schedule and titles that are new or whose link changed are imported.
+Collections are always uploaded as-is. Each linked image is downloaded once and kept, and stays that title's poster: later renders and Overlay Refresh keep using it (the **Imported posters** tab lists them and can remove one). Under **Live files** you can point at a file on the Simposter server, such as one of your Kometa metadata files, or at a link to a file someone shares (a GitHub file or Kometa's `git:` shorthand). It's read again on a schedule and titles that are new or whose link changed are imported. Tick **Ask before applying** to see the new or changed titles first and import them with **Apply**; that's recommended for a file someone else edits.
 
 **Local Assets** lists the posters saved to your output folder, with resend, rename and delete.
 

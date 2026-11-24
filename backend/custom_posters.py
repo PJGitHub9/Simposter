@@ -99,6 +99,11 @@ def ensure_tables() -> None:
                     last_message TEXT,
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )""")
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(poster_import_files)").fetchall()}
+            if "require_approval" not in cols:
+                conn.execute("ALTER TABLE poster_import_files ADD COLUMN require_approval INTEGER DEFAULT 0")
+            if "pending_json" not in cols:
+                conn.execute("ALTER TABLE poster_import_files ADD COLUMN pending_json TEXT")
         _tables_ready = True
 
 
@@ -793,16 +798,21 @@ def start_import(**kwargs: Any) -> bool:
 
 _FILE_COLS = ("id", "path", "name", "server_id", "library_id", "media_type", "mode", "template_id", "preset_id",
               "interval_hours", "enabled", "last_hash", "entry_sigs", "last_checked_at", "last_changed_at",
-              "last_status", "last_message", "created_at")
+              "last_status", "last_message", "created_at", "require_approval", "pending_json")
 
 
 def _file_row(r) -> Dict[str, Any]:
     d = {k: r[k] for k in _FILE_COLS}
     d["enabled"] = bool(d["enabled"])
+    d["require_approval"] = bool(d["require_approval"])
     try:
         d["entry_sigs"] = json.loads(d["entry_sigs"] or "{}")
     except ValueError:
         d["entry_sigs"] = {}
+    try:
+        d["pending"] = json.loads(d.pop("pending_json") or "[]")
+    except ValueError:
+        d["pending"] = []
     return d
 
 
@@ -834,22 +844,27 @@ def save_file(data: Dict[str, Any]) -> Dict[str, Any]:
     with db.get_db() as conn:
         conn.execute(
             "INSERT INTO poster_import_files (id, path, name, server_id, library_id, media_type, mode, template_id, "
-            "preset_id, interval_hours, enabled) VALUES (?,?,?,?,?,?,?,?,?,?,?) "
+            "preset_id, interval_hours, enabled, require_approval) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(id) DO UPDATE SET path=excluded.path, name=excluded.name, mode=excluded.mode, "
             "template_id=excluded.template_id, preset_id=excluded.preset_id, interval_hours=excluded.interval_hours, "
-            "enabled=excluded.enabled",
+            "enabled=excluded.enabled, require_approval=excluded.require_approval",
             (fid, data["path"], data.get("name") or "", data["server_id"], str(data["library_id"]),
              data["media_type"], data["mode"], data.get("template_id") or "uniformlogo", data.get("preset_id"),
-             float(data.get("interval_hours") or 6), 1 if data.get("enabled", True) else 0))
+             float(data.get("interval_hours") or 6), 1 if data.get("enabled", True) else 0,
+             1 if data.get("require_approval") else 0))
         if reset:
             # A different file, mode or preset: apply every entry again on the next check.
-            conn.execute("UPDATE poster_import_files SET last_hash = NULL, entry_sigs = NULL WHERE id = ?", (fid,))
+            conn.execute("UPDATE poster_import_files SET last_hash = NULL, entry_sigs = NULL, pending_json = NULL "
+                         "WHERE id = ?", (fid,))
     return get_file(fid)
 
 
 def update_file_status(file_id: str, **fields: Any) -> None:
     if "entry_sigs" in fields and not isinstance(fields["entry_sigs"], str):
         fields["entry_sigs"] = json.dumps(fields["entry_sigs"])
+    if "pending" in fields:
+        p = fields.pop("pending")
+        fields["pending_json"] = json.dumps(p) if p else None
     sets = [k for k in fields if k in _FILE_COLS and k != "id"]
     if not sets:
         return
@@ -864,15 +879,16 @@ def delete_file(file_id: str) -> bool:
         return conn.execute("DELETE FROM poster_import_files WHERE id = ?", (file_id,)).rowcount > 0
 
 
-def sync_file(file_id: str, force: bool = False) -> Dict[str, Any]:
+def sync_file(file_id: str, force: bool = False, approve: bool = False) -> Dict[str, Any]:
     """Re-read a live file and apply entries that are new or changed since the
     last check (all of them with force). An entry removed from the file is left
-    as it is. Blocks; returns {"status", "message"}."""
+    as it is. With "ask before applying" on, changed titles are only listed
+    (status pending) until approve=True. Blocks; returns {"status", "message"}."""
     live = get_file(file_id)
     if not live:
         return {"status": "error", "message": "Not found"}
-    from .live_kometa import validate_path
-    label = f"Live file {live.get('name') or Path(live['path']).name}"
+    from .live_kometa import read_source, source_name
+    label = f"Live file {live.get('name') or source_name(live['path'])}"
     if not is_running():
         mark_starting(label)
 
@@ -887,11 +903,11 @@ def sync_file(file_id: str, force: bool = False) -> Dict[str, Any]:
         return {"status": status, "message": message}
 
     try:
-        raw = validate_path(live["path"]).read_bytes()
+        raw, _url = read_source(live["path"])
     except (ValueError, OSError) as e:
         return done("error", str(e))
     digest = hashlib.sha256(raw).hexdigest()
-    if not force and digest == live.get("last_hash"):
+    if not force and not approve and digest == live.get("last_hash") and not live.get("pending"):
         return done("unchanged", "No changes since the last check")
     try:
         entries, _msgs = parse(raw.decode("utf-8-sig", errors="replace"))
@@ -901,6 +917,12 @@ def sync_file(file_id: str, force: bool = False) -> Dict[str, Any]:
     old_sigs = {} if force else (live.get("entry_sigs") or {})
     sigs = {e["key"]: entry_signature(e) for e in matched}
     todo = [e for e in matched if old_sigs.get(e["key"]) != sigs[e["key"]]]
+    applicable = [e for e in todo if e["status"] in ("matched", "collection")]
+    if live.get("require_approval") and not approve and applicable:
+        pending = [{"key": e["key"], "title": e.get("matched_title") or e.get("title") or e["key"],
+                    "season_count": len(e.get("seasons") or {})} for e in applicable]
+        return done("pending", f"{len(pending)} title(s) new or changed; review them and press Apply",
+                    pending=pending, last_hash=digest)
     if not _job_lock.acquire(blocking=False):
         return done("busy", "Another import is running; trying again on the next check")
     try:
@@ -922,6 +944,6 @@ def sync_file(file_id: str, force: bool = False) -> Dict[str, Any]:
         parts.append(f"{c['error']} failed")
     if not_found:
         parts.append(f"{not_found} not in this library")
-    return done("updated" if applied else ("error" if c.get("error") else "unchanged"), ", ".join(parts),
+    return done("updated" if applied else ("error" if c.get("error") else "unchanged"), ", ".join(parts), pending=[],
                 last_hash=digest if not c.get("error") else live.get("last_hash"), entry_sigs=keep,
                 last_changed_at=datetime.now().isoformat(timespec="seconds") if applied else live.get("last_changed_at"))

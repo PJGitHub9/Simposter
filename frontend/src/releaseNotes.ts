@@ -10,6 +10,19 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.95',
+    date: '2026-11-24',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Live files can be a link instead of a path, for both Poster Import and live Kometa overlay files: a GitHub file (page links work) or Kometa’s git: shorthand. An unchanged file isn’t downloaded again.',
+          'Ask before applying: a live file can hold its changes until you press Apply, so a file someone else edits can’t change your posters or overlays without you seeing it first.',
+        ],
+      },
+    ],
+  },
+  {
     version: 'v1.8.94',
     date: '2026-11-24',
     sections: [

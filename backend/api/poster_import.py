@@ -41,6 +41,7 @@ class FileRequest(_Library):
     preset_id: Optional[str] = None
     interval_hours: float = 6
     enabled: bool = True
+    require_approval: bool = False
 
 
 class RemoveRequest(BaseModel):
@@ -131,10 +132,10 @@ def api_poster_import_files(server_id: str = "plex-1", library_id: str = "", med
 @router.post("/poster-import/files")
 def api_poster_import_save_file(req: FileRequest):
     _check(req.media_type, req.mode, req.preset_id)
-    from ..live_kometa import validate_path
+    from ..live_kometa import validate_source
     from ..scheduler import cancel_poster_import, schedule_poster_import
     try:
-        path = validate_path(req.path)
+        path = validate_source(req.path)
     except ValueError as e:
         raise HTTPException(400, str(e))
     hours = max(0.25, min(float(req.interval_hours or 6), 168))
@@ -150,14 +151,15 @@ def api_poster_import_save_file(req: FileRequest):
 
 
 @router.post("/poster-import/files/{file_id}/sync")
-def api_poster_import_sync_file(file_id: str, force: bool = False):
+def api_poster_import_sync_file(file_id: str, force: bool = False, approve: bool = False):
     if not cp.get_file(file_id):
         raise HTTPException(404, "Not found")
     if cp.is_running():
         raise HTTPException(409, "An import is already running")
+    from ..live_kometa import source_name
     f = cp.get_file(file_id)
-    cp.mark_starting(f"Live file {f.get('name') or f['path'].replace(chr(92), '/').split('/')[-1]}")
-    threading.Thread(target=cp.sync_file, args=(file_id, force), daemon=True, name="poster-import-file").start()
+    cp.mark_starting(f"Live file {f.get('name') or source_name(f['path'])}")
+    threading.Thread(target=cp.sync_file, args=(file_id, force, approve), daemon=True, name="poster-import-file").start()
     return {"started": True}
 
 

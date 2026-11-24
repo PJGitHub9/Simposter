@@ -20,6 +20,8 @@ interface LiveFile {
   last_status: string | null
   last_message: string | null
   next_run: string | null
+  require_approval: boolean
+  pending: boolean
 }
 
 const emit = defineEmits<{ changed: []; openOverlay: [configId: string] }>()
@@ -44,7 +46,7 @@ const onPicked = (path: string) => {
   showPicker.value = false
 }
 
-const blank = () => ({ id: '' as string, path: '', name: '', library_type: 'movie', interval_hours: 6, enabled: true, refresh_posters: true })
+const blank = () => ({ id: '' as string, path: '', name: '', library_type: 'movie', interval_hours: 6, enabled: true, refresh_posters: true, require_approval: false })
 const form = ref(blank())
 const showForm = ref(false)
 
@@ -60,7 +62,7 @@ const load = async () => {
 
 const startAdd = () => { form.value = blank(); error.value = ''; showForm.value = true }
 const startEdit = (f: LiveFile) => {
-  form.value = { id: f.id, path: f.path, name: f.name || '', library_type: f.library_type, interval_hours: f.interval_hours, enabled: f.enabled, refresh_posters: f.refresh_posters }
+  form.value = { id: f.id, path: f.path, name: f.name || '', library_type: f.library_type, interval_hours: f.interval_hours, enabled: f.enabled, refresh_posters: f.refresh_posters, require_approval: f.require_approval }
   error.value = ''
   showForm.value = true
 }
@@ -95,6 +97,19 @@ const syncNow = async (f: LiveFile) => {
   }
 }
 
+const applyPending = async (f: LiveFile) => {
+  busy.value = f.id
+  try {
+    await fetch(`${apiBase}/api/live-kometa-files/${f.id}/sync?force=false&approve=true`, { method: 'POST' })
+    await load()
+    emit('changed')
+  } finally {
+    busy.value = null
+  }
+}
+
+const isLink = (p: string) => /^(https?:|git:|repo:)/i.test((p || '').trim())
+
 const setEnabled = async (f: LiveFile, enabled: boolean) => {
   busy.value = f.id
   try {
@@ -126,7 +141,8 @@ onMounted(load)
     <p class="intro">
       For overlay files another tool keeps rewriting, like the ones UMTK updates daily for Kometa. Simposter re-reads the file on a
       schedule, re-imports it into the same overlay when it changed, and can re-render the posters whose overlay now looks different
-      (Overlay Refresh). The path is on the Simposter server: in Docker, mount the folder with the file into the container.
+      (Overlay Refresh). Use a path on the Simposter server (in Docker, mount the folder with the file into the container), or a link to
+      a file someone shares, such as a GitHub file or Kometa's <code>git: …</code> shorthand.
     </p>
 
     <div v-if="loading && !files.length" class="muted">Loading…</div>
@@ -137,9 +153,12 @@ onMounted(load)
         <div class="file-title">
           <strong>{{ f.name || fileName(f.path) }}</strong>
           <span class="tag">{{ f.library_type === 'show' ? 'TV' : f.library_type === 'both' ? 'Movies + TV' : 'Movies' }}</span>
+          <span v-if="isLink(f.path)" class="tag">Link</span>
           <span v-if="!f.enabled" class="tag paused-tag">Paused</span>
+          <span v-if="f.pending" class="tag paused-tag">Changes waiting</span>
         </div>
         <div class="file-actions">
+          <button v-if="f.pending" type="button" class="link" :disabled="busy === f.id" @click="applyPending(f)">Apply changes</button>
           <button type="button" class="link" :disabled="busy === f.id" @click="syncNow(f)">{{ busy === f.id ? 'Checking…' : 'Check now' }}</button>
           <button v-if="f.config_id" type="button" class="link" @click="emit('openOverlay', f.config_id)">Open overlay</button>
           <button type="button" class="link" @click="startEdit(f)">Edit</button>
@@ -159,9 +178,9 @@ onMounted(load)
 
     <div v-if="showForm" class="form">
       <label class="full">
-        <span>File path on the Simposter server</span>
+        <span>File path on the Simposter server, or a link</span>
         <div class="path-row">
-          <input v-model="form.path" type="text" placeholder="/kometa/config/overlays/UMTK_MOVIES_UPCOMING_OVERLAYS.yml" />
+          <input v-model="form.path" type="text" placeholder="/kometa/config/overlays/UMTK_MOVIES_UPCOMING_OVERLAYS.yml or https://github.com/…/overlays.yml" />
           <button type="button" class="btn browse" @click="showPicker = true">Browse…</button>
         </div>
       </label>
@@ -187,6 +206,10 @@ onMounted(load)
       <label class="check full">
         <input v-model="form.refresh_posters" type="checkbox" />
         <span>When it changes, re-render posters whose overlay now looks different (Overlay Refresh, in every {{ form.library_type === 'show' ? 'TV' : form.library_type === 'both' ? 'movie and TV' : 'movie' }} library)</span>
+      </label>
+      <label class="check full">
+        <input v-model="form.require_approval" type="checkbox" />
+        <span>Ask before applying changes (recommended for a link someone else edits): a change is shown here and only imported when you press Apply</span>
       </label>
       <p v-if="error" class="err full">{{ error }}</p>
       <div class="form-actions full">

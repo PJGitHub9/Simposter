@@ -51,6 +51,8 @@ type LiveFile = {
   last_status: string | null
   last_message: string | null
   next_run: string | null
+  require_approval: boolean
+  pending: { key: string; title: string; season_count: number }[]
 }
 type Stored = {
   item_key: string
@@ -235,7 +237,7 @@ const apply = async () => {
 const files = ref<LiveFile[]>([])
 const filesError = ref('')
 const showPicker = ref(false)
-const form = ref({ id: '' as string, path: '', name: '', mode: 'template' as Mode, preset_id: '', interval_hours: 6, enabled: true })
+const form = ref({ id: '' as string, path: '', name: '', mode: 'template' as Mode, preset_id: '', interval_hours: 6, enabled: true, require_approval: false })
 const savingFile = ref(false)
 const INTERVALS = [
   { v: 1, l: 'Every hour' }, { v: 3, l: 'Every 3 hours' }, { v: 6, l: 'Every 6 hours' },
@@ -251,10 +253,10 @@ const loadFiles = async () => {
   }
 }
 const resetForm = () => {
-  form.value = { id: '', path: '', name: '', mode: 'template', preset_id: defaultPreset.value, interval_hours: 6, enabled: true }
+  form.value = { id: '', path: '', name: '', mode: 'template', preset_id: defaultPreset.value, interval_hours: 6, enabled: true, require_approval: false }
 }
 const editFile = (f: LiveFile) => {
-  form.value = { id: f.id, path: f.path, name: f.name, mode: f.mode, preset_id: f.preset_id || '', interval_hours: f.interval_hours, enabled: f.enabled }
+  form.value = { id: f.id, path: f.path, name: f.name, mode: f.mode, preset_id: f.preset_id || '', interval_hours: f.interval_hours, enabled: f.enabled, require_approval: f.require_approval }
 }
 const saveFile = async (patch?: Partial<LiveFile>, base?: LiveFile) => {
   filesError.value = ''
@@ -281,9 +283,9 @@ const saveFile = async (patch?: Partial<LiveFile>, base?: LiveFile) => {
     savingFile.value = false
   }
 }
-const syncFile = async (f: LiveFile, force = false) => {
+const syncFile = async (f: LiveFile, force = false, approve = false) => {
   filesError.value = ''
-  const res = await fetch(`${apiBase}/api/poster-import/files/${f.id}/sync?force=${force}`, { method: 'POST' })
+  const res = await fetch(`${apiBase}/api/poster-import/files/${f.id}/sync?force=${force}&approve=${approve}`, { method: 'POST' })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) {
     filesError.value = data?.detail || `HTTP ${res.status}`
@@ -297,6 +299,7 @@ const removeFile = async (f: LiveFile) => {
   if (form.value.id === f.id) resetForm()
   loadFiles()
 }
+const isLink = (p: string) => /^(https?:|git:|repo:)/i.test((p || '').trim())
 const fileName = (f: LiveFile) => f.name || f.path.replace(/\\/g, '/').split('/').pop() || ''
 const checkingFile = (f: LiveFile) => running.value && job.value.label === `Live file ${fileName(f)}`
 const fmtTime = (s: string | null) => (s ? new Date(s).toLocaleString() : '—')
@@ -480,7 +483,8 @@ onUnmounted(stopPoll)
     <!-- Live files -->
     <div v-if="tab === 'live'" class="section">
       <p class="hint">
-        A file on the Simposter server (for example one of your Kometa metadata files) that's read again on a schedule.
+        A file on the Simposter server (for example one of your Kometa metadata files), or a link to a file someone shares
+        (a GitHub file, or Kometa's <code>git: …</code> shorthand), read again on a schedule.
         Titles that are new or whose link changed are imported; a title removed from the file keeps its poster.
       </p>
       <div v-if="files.length" class="files">
@@ -488,6 +492,7 @@ onUnmounted(stopPoll)
           <div class="file-head">
             <strong>{{ f.name || f.path.split(/[\\/]/).pop() }}</strong>
             <span class="muted">{{ MODE_LABELS[f.mode] }}<template v-if="f.preset_id"> · {{ f.preset_id }}</template></span>
+            <span v-if="isLink(f.path)" class="pill">Link</span>
             <span v-if="!f.enabled" class="pill paused">Paused</span>
           </div>
           <div class="muted small-text">{{ f.path }}</div>
@@ -495,6 +500,14 @@ onUnmounted(stopPoll)
             Last checked {{ fmtTime(f.last_checked_at) }}<template v-if="f.last_message">: {{ f.last_message }}</template>
           </div>
           <div v-if="f.next_run" class="muted small-text">Next check {{ fmtTime(f.next_run) }}</div>
+          <details v-if="f.pending && f.pending.length" class="pending" open>
+            <summary>{{ f.pending.length }} title{{ f.pending.length === 1 ? '' : 's' }} waiting for you to apply</summary>
+            <ul>
+              <li v-for="p in f.pending.slice(0, 50)" :key="p.key">{{ p.title }}<span v-if="p.season_count" class="muted"> (+{{ p.season_count }} season{{ p.season_count === 1 ? '' : 's' }})</span></li>
+              <li v-if="f.pending.length > 50" class="muted">…and {{ f.pending.length - 50 }} more</li>
+            </ul>
+            <button type="button" class="primary" :disabled="running" @click="syncFile(f, false, true)">Apply {{ f.pending.length }}</button>
+          </details>
           <div class="row">
             <button type="button" class="secondary-small" :disabled="running" @click="syncFile(f)">{{ checkingFile(f) ? 'Checking…' : 'Check now' }}</button>
             <button type="button" class="secondary-small" :disabled="running" title="Import every title again, changed or not" @click="syncFile(f, true)">Re-import all</button>
@@ -509,7 +522,7 @@ onUnmounted(stopPoll)
       <div class="file-form">
         <h3>{{ form.id ? 'Edit live file' : 'Add a live file' }}</h3>
         <div class="row">
-          <input v-model="form.path" type="text" placeholder="/config/metadata/movies_johnWick.yml" class="grow" />
+          <input v-model="form.path" type="text" placeholder="/config/metadata/movies_johnWick.yml or https://github.com/…/posters.yml" class="grow" />
           <button type="button" class="secondary" @click="showPicker = true">Browse…</button>
         </div>
         <div class="settings-grid">
@@ -534,6 +547,10 @@ onUnmounted(stopPoll)
           </label>
         </div>
         <p class="hint">{{ MODE_HELP[form.mode] }}</p>
+        <label class="check">
+          <input v-model="form.require_approval" type="checkbox" />
+          <span>Ask before applying (recommended for a link someone else edits): new or changed titles are listed here and only imported when you press Apply</span>
+        </label>
         <div class="row">
           <button type="button" class="primary" :disabled="!form.path.trim() || savingFile || (needsPreset(form.mode) && !form.preset_id)" @click="saveFile()">
             {{ form.id ? 'Save' : 'Add and import' }}
@@ -658,6 +675,10 @@ details summary { cursor: pointer; font-size: 12px; color: #a8b3cf; }
 .file-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 13px; }
 .file-form { display: flex; flex-direction: column; gap: 10px; border-top: 1px solid rgba(255, 255, 255, 0.06); padding-top: 12px; }
 .filter { max-width: 280px; }
+.check { display: flex; gap: 8px; align-items: flex-start; font-size: 12px; color: #a8b3cf; }
+.pending { font-size: 12px; color: #f5c26b; }
+.pending ul { margin: 6px 0; padding-left: 18px; color: #d6ddf0; max-height: 200px; overflow-y: auto; }
+.pending .primary { margin-top: 4px; }
 .stored-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 12px; }
 .stored-card { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
 .stored-card img { width: 100%; aspect-ratio: 2 / 3; object-fit: cover; border-radius: 6px; background: rgba(255, 255, 255, 0.04); }

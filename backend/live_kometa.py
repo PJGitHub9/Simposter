@@ -33,6 +33,30 @@ def is_network_path(path: str) -> bool:
     return p.startswith("//")
 
 
+def validate_source(source: str) -> str:
+    """A path on the server or a link (https://, git:). Returns the value to store."""
+    from . import remote_files
+    if remote_files.is_remote(source):
+        return remote_files.validate(source)
+    return str(validate_path(source))
+
+
+def read_source(source: str) -> Tuple[bytes, Optional[str]]:
+    """The file's bytes and, for a link, the URL it was read from (None for a
+    file on disk). Raises ValueError/OSError with a readable reason."""
+    from . import remote_files
+    if remote_files.is_remote(source):
+        body, url, _changed = remote_files.fetch(source)
+        return body, url
+    return validate_path(source).read_bytes(), None
+
+
+def source_name(source: str) -> str:
+    """Short display name: the file name of a path or link."""
+    s = str(source or "").strip().rstrip("/").replace("\\", "/")
+    return s.split("/")[-1].split(":")[-1].strip() or s
+
+
 def validate_path(path: str) -> Path:
     """The file must exist and be a .yml/.yaml file."""
     raw = str(path or "").strip()
@@ -80,16 +104,18 @@ def _matching_groups(library_type: str) -> List[dict]:
     return [g for g in groups if (g.get("mediaType") or "movie") == media]
 
 
-def sync_file(file_id: str, force: bool = False, scheduled: bool = False) -> Dict[str, Any]:
-    """Re-read one live file. Re-imports when its contents changed (or force)."""
+def sync_file(file_id: str, force: bool = False, scheduled: bool = False, approve: bool = False) -> Dict[str, Any]:
+    """Re-read one live file. Re-imports when its contents changed (or force).
+    With "ask before applying" on, a change is only recorded (status pending)
+    until approve=True."""
     live = db.get_live_kometa_file(file_id)
     if not live:
         return {"status": "error", "message": "Not found"}
     with _lock:
-        return _sync(live, force, scheduled)
+        return _sync(live, force, scheduled, approve)
 
 
-def _sync(live: Dict[str, Any], force: bool, scheduled: bool) -> Dict[str, Any]:
+def _sync(live: Dict[str, Any], force: bool, scheduled: bool, approve: bool = False) -> Dict[str, Any]:
     fid = live["id"]
 
     def done(status: str, message: str, **extra: Any) -> Dict[str, Any]:
@@ -98,14 +124,19 @@ def _sync(live: Dict[str, Any], force: bool, scheduled: bool) -> Dict[str, Any]:
         return {"status": status, "message": message}
 
     try:
-        path = validate_path(live["path"])
-        raw = path.read_bytes()
+        raw, file_url = read_source(live["path"])
     except (ValueError, OSError) as e:
         return done("error", str(e))
+    path = Path(source_name(live["path"])) if file_url else Path(live["path"])
 
     digest = hashlib.sha256(raw).hexdigest()
-    if not force and digest == live.get("last_hash") and live.get("config_id") and db.get_overlay_config(live["config_id"]):
-        return done("unchanged", "No changes since the last check")
+    has_config = bool(live.get("config_id") and db.get_overlay_config(live["config_id"]))
+    if not force and digest == live.get("last_hash") and has_config:
+        return done("unchanged", "No changes since the last check", pending_hash=None)
+    if live.get("require_approval") and has_config and not approve and digest != live.get("last_hash"):
+        if digest == live.get("pending_hash"):
+            return done("pending", "Changed since the last import; waiting for you to apply it")
+        return done("pending", "Changed since the last import; review it and press Apply", pending_hash=digest)
 
     try:
         text = raw.decode("utf-8-sig")
@@ -127,8 +158,16 @@ def _sync(live: Dict[str, Any], force: bool, scheduled: bool) -> Dict[str, Any]:
     saver = _AssetSaver(dry_run=False)
     available_fonts = {f.lower() for f in api_list_fonts().get("fonts", [])}
     missing: Dict[str, List[str]] = {}
+    if file_url:
+        from . import remote_files
+        from .api.kometa_import import chain_finders, library_image_finder
+        image_find = chain_finders(remote_files.image_finder(file_url), library_image_finder())
+        font_find = lambda _wanted: None  # fonts from a link: only Kometa's downloadable fonts
+    else:
+        image_find = _image_finder(path.parent)
+        font_find = _disk_finder(path.parent, _FONT_EXT)
     final_elements, _fonts = finalize_elements(
-        elements, report, _image_finder(path.parent), _disk_finder(path.parent, _FONT_EXT),
+        elements, report, image_find, font_find,
         saver, False, available_fonts, {}, missing,
     )
 
@@ -171,6 +210,6 @@ def _sync(live: Dict[str, Any], force: bool, scheduled: bool) -> Dict[str, Any]:
     elif not changed_layers:
         message += " (layers unchanged)"
 
-    result = done("updated", message, config_id=config_id, last_hash=digest, last_changed_at=_now())
+    result = done("updated", message, config_id=config_id, last_hash=digest, last_changed_at=_now(), pending_hash=None)
     result.update(config_id=config_id, refreshed_groups=refreshed, file_messages=file_messages)
     return result

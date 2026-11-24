@@ -21,12 +21,14 @@ class LiveKometaSaveRequest(BaseModel):
     interval_hours: float = 6
     enabled: bool = True
     refresh_posters: bool = True
+    require_approval: bool = False
 
 
 def _with_next_run(item: dict) -> dict:
     from ..scheduler import get_live_kometa_next_run
     item = dict(item)
     item.pop("last_hash", None)
+    item["pending"] = bool(item.pop("pending_hash", None))
     item["next_run"] = get_live_kometa_next_run(item["id"]) if item.get("enabled") else None
     return item
 
@@ -39,7 +41,7 @@ def api_list_live_files():
 @router.post("/live-kometa-files")
 def api_save_live_file(req: LiveKometaSaveRequest):
     try:
-        path = live_kometa.validate_path(req.path)
+        path = live_kometa.validate_source(req.path)
     except ValueError as e:
         raise HTTPException(400, str(e))
     hours = float(req.interval_hours or 0)
@@ -50,7 +52,7 @@ def api_save_live_file(req: LiveKometaSaveRequest):
     lt = str(req.library_type).lower()
     library_type = "both" if lt == "both" else ("show" if lt in ("show", "tv") else "movie")
     db.save_live_kometa_file(file_id, str(path), (req.name or "").strip(), library_type, hours,
-                             req.enabled, req.refresh_posters)
+                             req.enabled, req.refresh_posters, req.require_approval)
     from ..scheduler import schedule_live_kometa, cancel_live_kometa
     if req.enabled:
         schedule_live_kometa(file_id, hours)
@@ -64,10 +66,12 @@ def api_save_live_file(req: LiveKometaSaveRequest):
 
 
 @router.post("/live-kometa-files/{file_id}/sync")
-def api_sync_live_file(file_id: str, force: bool = True):
+def api_sync_live_file(file_id: str, force: bool = True, approve: bool = False):
+    """Check now (force: re-import even if unchanged). With "ask before
+    applying" on, a change waits until approve=true."""
     if not db.get_live_kometa_file(file_id):
         raise HTTPException(404, "Not found")
-    result = live_kometa.sync_file(file_id, force=force)
+    result = live_kometa.sync_file(file_id, force=force, approve=approve)
     return {"file": _with_next_run(db.get_live_kometa_file(file_id)), "sync": result}
 
 

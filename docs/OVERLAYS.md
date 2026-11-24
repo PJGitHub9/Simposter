@@ -387,6 +387,8 @@ Overlay Refresh keeps overlay-only posters up to date from the clean copy. If a 
 Some tools rewrite their Kometa overlay files every day (UMTK and TSSK update their item lists). **📐 Overlays → Advanced → Live Kometa files** (beta) keeps an overlay in step with such a file:
 
 - **File path on the Simposter server**: the `.yml` file. **Browse…** lists the folders on the Simposter server so you can pick it. In Docker, mount the folder with the file into the Simposter container (for example `- /mnt/user/appdata/kometa/config:/kometa/config:ro`) and use the path inside the container.
+- **Or a link**: a file someone shares, such as a GitHub file (`https://github.com/…/overlays.yml`; the page link is turned into the raw file) or Kometa's `git: Path/To/File` shorthand (Kometa's Community-Configs repo, as in a Kometa config). `repo:` needs your Kometa `custom_repo`, so paste the full link instead. Each check asks GitHub whether the file changed, so an unchanged file isn't downloaded again. Images the file names by path are looked for relative to the link.
+- **Ask before applying changes**: a change is shown as **Changes waiting** and only imported when you press **Apply changes**. Recommended for a link someone else edits, since their changes would otherwise reach your posters at the next check.
 - **Overlay name** (optional), **Library type** (Movies / TV shows / Movies and TV shows), and **Check the file** (every hour to once a day).
 - **When it changes, re-render posters whose overlay now looks different**: runs Overlay Refresh for every library of that type after the file changes.
 

@@ -1055,6 +1055,12 @@ def init_database():
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        lk_cols = {r[1] for r in cursor.execute("PRAGMA table_info(live_kometa_files)").fetchall()}
+        if "require_approval" not in lk_cols:
+            # Ask before applying a changed file (mainly for files from a link someone else edits).
+            cursor.execute("ALTER TABLE live_kometa_files ADD COLUMN require_approval INTEGER NOT NULL DEFAULT 0")
+        if "pending_hash" not in lk_cols:
+            cursor.execute("ALTER TABLE live_kometa_files ADD COLUMN pending_hash TEXT")
 
         # Streaming provider cache — stores TMDb watch/providers results per item
         cursor.execute("""
@@ -2276,6 +2282,7 @@ def _overlay_conditions(raw: Optional[str]) -> List[Dict[str, Any]]:
 _LIVE_KOMETA_COLUMNS = (
     "id", "path", "name", "library_type", "config_id", "interval_hours", "enabled", "refresh_posters",
     "last_hash", "last_checked_at", "last_changed_at", "last_status", "last_message", "created_at",
+    "require_approval", "pending_hash",
 )
 
 
@@ -2283,6 +2290,7 @@ def _live_kometa_row(row) -> Dict[str, Any]:
     d = {k: row[k] for k in _LIVE_KOMETA_COLUMNS}
     d["enabled"] = bool(d["enabled"])
     d["refresh_posters"] = bool(d["refresh_posters"])
+    d["require_approval"] = bool(d["require_approval"])
     return d
 
 
@@ -2299,25 +2307,28 @@ def get_live_kometa_file(file_id: str) -> Optional[Dict[str, Any]]:
 
 
 def save_live_kometa_file(file_id: str, path: str, name: str, library_type: str, interval_hours: float,
-                          enabled: bool, refresh_posters: bool) -> None:
+                          enabled: bool, refresh_posters: bool, require_approval: bool = False) -> None:
     """Create or update the user-editable part of a live Kometa file."""
     with get_db() as conn:
         conn.execute("""
-            INSERT INTO live_kometa_files (id, path, name, library_type, interval_hours, enabled, refresh_posters)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO live_kometa_files (id, path, name, library_type, interval_hours, enabled, refresh_posters,
+                                           require_approval)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 path = excluded.path, name = excluded.name, library_type = excluded.library_type,
                 interval_hours = excluded.interval_hours, enabled = excluded.enabled,
-                refresh_posters = excluded.refresh_posters,
+                refresh_posters = excluded.refresh_posters, require_approval = excluded.require_approval,
                 last_hash = CASE WHEN live_kometa_files.path = excluded.path
                                   AND live_kometa_files.library_type = excluded.library_type
                                  THEN live_kometa_files.last_hash ELSE NULL END
-        """, (file_id, path, name, library_type, interval_hours, int(enabled), int(refresh_posters)))
+        """, (file_id, path, name, library_type, interval_hours, int(enabled), int(refresh_posters),
+              int(require_approval)))
 
 
 def update_live_kometa_status(file_id: str, **fields: Any) -> None:
     """Set sync results (config_id, last_hash, last_checked_at, last_changed_at, last_status, last_message)."""
-    allowed = {"config_id", "last_hash", "last_checked_at", "last_changed_at", "last_status", "last_message"}
+    allowed = {"config_id", "last_hash", "last_checked_at", "last_changed_at", "last_status", "last_message",
+               "pending_hash"}
     sets = {k: v for k, v in fields.items() if k in allowed}
     if not sets:
         return
