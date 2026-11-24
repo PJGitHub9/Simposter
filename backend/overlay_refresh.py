@@ -224,6 +224,7 @@ def _fresh_options(state: Dict[str, Any]) -> Dict[str, Any]:
     base_meta = dict(opts.pop("_base_metadata", None) or {})
     opts.pop("_facts", None)
     opts.pop("_designs", None)
+    opts.pop("_adopted", None)
     opts["metadata"] = base_meta
     meta_key = state.get("meta_rating_key") or state.get("rating_key")
     tmdb_id = state.get("tmdb_id")
@@ -605,6 +606,7 @@ def refresh_state(state: Dict[str, Any], checked: Optional[Dict[str, Any]] = Non
             _apply_plex_label(rating_key, label, bool(checked["summary"]))
 
     stored_opts = dict(state.get("options") or {})
+    stored_opts.pop("_adopted", None)
     stored_opts["_facts"] = checked.get("facts") or {}
     stored_opts["_designs"] = checked.get("designs") or {}
     db.upsert_overlay_state({
@@ -880,6 +882,116 @@ def restore_parked(pairs: List[tuple]) -> Dict[str, str]:
     return restored
 
 
+ADOPTED_REASON = "wasn't kept up to date before; sending the same poster as the other servers"
+
+
+def _poster_fingerprint(server_id: str, rating_key: str) -> Optional[str]:
+    try:
+        with db.get_db() as conn:
+            row = conn.execute(
+                "SELECT fingerprint FROM poster_fingerprints WHERE server_id = ? AND rating_key = ? AND asset_type = 'poster'",
+                (server_id, str(rating_key)),
+            ).fetchone()
+        return row["fingerprint"] if row else None
+    except Exception:
+        return None
+
+
+def _same_poster(source: Dict[str, Any], target_server: str, target_key: str) -> bool:
+    """Does the copy on target_server show the poster the tracked copy was last
+    sent? Compared by the fingerprints recorded at send time (no download)."""
+    a = _poster_fingerprint(source["server_id"], source["rating_key"])
+    b = _poster_fingerprint(target_server, target_key)
+    if not a or not b:
+        return False
+    try:
+        from .poster_drift import compare
+        return not compare(a, b)["drift"]
+    except Exception:
+        return False
+
+
+def adopt_group_copies(group: dict) -> int:
+    """Track every copy of a tracked title on the group's other servers.
+
+    A poster sent to one server could reach the others without a tracking
+    record (sends before v1.8.93, Media Mirror, a server added later), so
+    Overlay Refresh only ever updated the tracked copy and the others kept an
+    old overlay. Each such copy gets a record copied from the tracked one:
+    when its recorded poster matches the tracked copy's, it's treated as up to
+    date; otherwise the next refresh sends it (reason ADOPTED_REASON). Movies
+    and whole shows only; collections and overlay-only titles aren't copied."""
+    pairs = group_pairs(group)
+    if len(pairs) < 2:
+        return 0
+    states = db.get_overlay_states(pairs)
+    tracked = {(s["server_id"], str(s["rating_key"]), s.get("season_index")) for s in states}
+    tables = {"movie": "movie_cache", "tv": "tv_cache"}
+    # tmdb id -> keys, per (table, server, library): one query per library.
+    copies: Dict[tuple, Dict[int, List[str]]] = {}
+    try:
+        with db.get_db() as conn:
+            for table in tables.values():
+                for sid, lid in pairs:
+                    by_tmdb: Dict[int, List[str]] = {}
+                    for r in conn.execute(
+                        f"SELECT rating_key, tmdb_id FROM {table} WHERE server_id = ? AND library_id = ? AND tmdb_id IS NOT NULL",
+                        (sid, str(lid)),
+                    ):
+                        by_tmdb.setdefault(int(r["tmdb_id"]), []).append(str(r["rating_key"]))
+                    copies[(table, sid, str(lid))] = by_tmdb
+    except Exception as e:
+        logger.debug("[OVERLAY_REFRESH] sibling lookup failed: %s", e)
+        return 0
+    adopted = 0
+    seen = set()
+    for src in states:
+        if src.get("is_collection") or is_clean_base(src) or not src.get("tmdb_id"):
+            continue
+        if src.get("season_index") not in (None, -1):
+            continue
+        mtype = src.get("media_type") or "movie"
+        table = tables.get(mtype)
+        if not table:
+            continue
+        for sid, lid in pairs:
+            if sid == src["server_id"]:
+                continue
+            try:
+                keys = copies.get((table, sid, str(lid)), {}).get(int(src["tmdb_id"]), [])
+            except (TypeError, ValueError):
+                continue
+            for key in keys:
+                ident = (sid, key, src.get("season_index"))
+                if ident in tracked or ident in seen:
+                    continue
+                if db.is_collection_key(key):
+                    continue
+                seen.add(ident)
+                same = _same_poster(src, sid, key)
+                opts = dict(src.get("options") or {})
+                if not same:
+                    opts["_adopted"] = True
+                try:
+                    db.upsert_overlay_state({
+                        **src,
+                        "server_id": sid,
+                        "rating_key": key,
+                        "library_id": str(lid),
+                        "meta_rating_key": key,
+                        "options": opts,
+                        "summary": src.get("summary") if same else [],
+                        "signature": src.get("signature") if same else "",
+                    })
+                    adopted += 1
+                except Exception as e:
+                    logger.debug("[OVERLAY_REFRESH] couldn't track %s copy %s: %s", sid, key, e)
+    if adopted:
+        logger.info("[OVERLAY_REFRESH] Now also keeping %d more copies up to date in group %s (copies on other servers that weren't tracked)",
+                    adopted, group.get("name") or group.get("id"))
+    return adopted
+
+
 def state_key(state: Dict[str, Any]) -> str:
     si = state.get("season_index")
     return f"{state['server_id']}:{state['rating_key']}:{-1 if si is None else si}"
@@ -1053,6 +1165,11 @@ def run_group(group_id: str, apply: bool, only_keys: Optional[List[str]] = None,
             raise ValueError("Library group not found")
         prune_without_overlays(group_pairs(group))
         restored = {} if remove else restore_parked(group_pairs(group))
+        if not remove:
+            try:
+                adopt_group_copies(group)
+            except Exception as e:
+                logger.warning("[OVERLAY_REFRESH] tracking other servers' copies failed: %s", e)
         states = db.get_overlay_states(group_pairs(group))
         if only_keys is not None:
             wanted = set(only_keys)
@@ -1111,6 +1228,9 @@ def run_group(group_id: str, apply: bool, only_keys: Optional[List[str]] = None,
                     # rendered by this record, so always send ours.
                     checked["changed"] = True
                     checked["reason"] = restored[state_key(state)]
+                elif (state.get("options") or {}).get("_adopted"):
+                    checked["changed"] = True
+                    checked["reason"] = ADOPTED_REASON
                 if not checked["changed"] and not force:
                     counts["unchanged"] += 1
                     # Posters tracked before the checked values were recorded:

@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.8.96 (2026-11-24) — `dev-silo` branch
+
+### Bug Fixes
+- **Overlay Refresh covers every copy in a library group** — it only refreshed copies with an `overlay_state` row, and copies sent before v1.8.93 (scan/webhook syncs) or by Media Mirror had none, so they kept an old overlay (e.g. The Debut on Jellyfin without its "upcoming" frame). New `overlay_refresh.adopt_group_copies()`, run at the start of every refresh/check run: for each tracked movie or show, every same-TMDb-id copy on the group's other members without a row gets one copied from the tracked copy. When both copies' recorded poster fingerprints match it's stored as up to date; otherwise it's marked `_adopted` and the run sends it once (reason "wasn't kept up to date before"). Seasons, collections and overlay-only titles are not copied. On the user's Unraid DB copy: 704 copies picked up, 71 to send.
+
 ## v1.8.95 (2026-11-24) — `dev-silo` branch
 
 ### New Features

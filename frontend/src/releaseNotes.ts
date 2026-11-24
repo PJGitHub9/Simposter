@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.96',
+    date: '2026-11-24',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Overlay Refresh now keeps every server in a library group up to date, not only the copy it was first sent to. A poster that reached Jellyfin, Emby or Silo another way (sent before v1.8.93, or copied by Media Mirror) used to keep its old overlay while the Plex copy was updated. On the next run, copies that already match are just tracked; copies that differ are sent the current poster once.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.95',
     date: '2026-11-24',
     sections: [
