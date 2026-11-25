@@ -217,6 +217,7 @@ class JellyfinClient(MediaServerClient):
                 "addedAt": _parse_jellyfin_datetime(item.get("DateCreated")),
                 "poster": None,
                 "library_id": library_id or "",
+                "image_version": (item.get("ImageTags") or {}).get("Primary"),
             })
         return out
 

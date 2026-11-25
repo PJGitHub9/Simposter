@@ -358,7 +358,7 @@ def _summary_fields(
     return fields
 
 
-def send_discord_notification(
+def _send_discord_single(
     title: str,
     year: Optional[int] = None,
     template_id: str = "",
@@ -557,7 +557,7 @@ def _build_notification_embed(
     return embed
 
 
-def send_apprise_notification(
+def _send_apprise_single(
     title: str,
     year: Optional[int] = None,
     template_id: str = "",
@@ -1540,3 +1540,229 @@ def test_discord_webhook(request: TestWebhookRequest):
     except Exception as e:
         logger.error(f"[DISCORD] Test webhook error: {e}")
         return {"success": False, "error": "An unexpected error occurred"}
+
+
+# ---------------------------------------------------------------------------
+# Auto-generate notifications are held for a short quiet window and merged.
+#
+# A scan that finds another app's new posters (overlay-only titles), or a scan
+# that finds several new items, used to send one notification per title per
+# server -- 20 shows on Plex, Jellyfin and Silo meant up to 60 messages. They
+# are now queued per channel (Discord / Apprise): once nothing new has arrived
+# for _AUTO_QUIET_SECONDS (or the oldest has waited _AUTO_MAX_WAIT_SECONDS),
+# one title sends the normal notification (all its servers in one), several
+# titles send one summary. Other sources (manual, webhook, batch...) are sent
+# straight away as before.
+# ---------------------------------------------------------------------------
+import threading as _threading
+import time as _time
+import atexit as _atexit
+
+_AUTO_QUIET_SECONDS = 90
+_AUTO_MAX_WAIT_SECONDS = 600
+_AUTO_SUMMARY_LINES = 40
+
+_auto_lock = _threading.Lock()
+# channel -> {"entries": {title_key: entry}, "first": monotonic, "poster": bytes|None}
+_auto_queue: Dict[str, Dict[str, Any]] = {}
+_auto_timer: Optional[_threading.Timer] = None
+
+
+def _auto_enqueue(channel: str, kwargs: Dict[str, Any]) -> None:
+    global _auto_timer
+    title = kwargs.get("title") or ""
+    year = kwargs.get("year")
+    key = f"{title}|{year or ''}"
+    servers: List[str] = []
+    action = kwargs.get("action") or "sent_to_plex"
+    for sid in ([("plex-1" if action in ("sent_to_plex", "resent_to_plex") else kwargs.get("server_id"))]
+                + list(kwargs.get("synced_server_ids") or [])):
+        if sid and sid not in servers:
+            servers.append(sid)
+    with _auto_lock:
+        bucket = _auto_queue.setdefault(channel, {"entries": {}, "first": _time.monotonic(), "poster": None})
+        entry = bucket["entries"].get(key)
+        if entry is None:
+            entry = dict(kwargs)
+            entry.pop("poster_data", None)
+            entry["_servers"] = []
+            entry["_actions"] = []
+            bucket["entries"][key] = entry
+        for sid in servers:
+            if sid not in entry["_servers"]:
+                entry["_servers"].append(sid)
+        if action not in entry["_actions"]:
+            entry["_actions"].append(action)
+        # Keep one image per channel (the first title's), not one per title:
+        # a busy scan would otherwise hold dozens of multi-MB posters.
+        if bucket["poster"] is None and kwargs.get("poster_data") and len(bucket["entries"]) == 1:
+            bucket["poster"] = kwargs.get("poster_data")
+        oldest = min(b["first"] for b in _auto_queue.values())
+        delay = max(1.0, min(_AUTO_QUIET_SECONDS, _AUTO_MAX_WAIT_SECONDS - (_time.monotonic() - oldest)))
+        if _auto_timer is not None:
+            _auto_timer.cancel()
+        _auto_timer = _threading.Timer(delay, flush_auto_notifications)
+        _auto_timer.daemon = True
+        _auto_timer.start()
+
+
+def _single_kwargs(entry: Dict[str, Any], poster: Optional[bytes]) -> Dict[str, Any]:
+    kw = {k: v for k, v in entry.items() if not k.startswith("_")}
+    servers = entry.get("_servers") or []
+    action = entry.get("_actions", [kw.get("action")])[0] or kw.get("action")
+    if action in ("sent_to_plex", "resent_to_plex"):
+        primary = "plex-1"
+    else:
+        primary = kw.get("server_id") or (servers[0] if servers else None)
+    kw["action"] = action
+    kw["server_id"] = primary
+    kw["synced_server_ids"] = [s for s in servers if s != primary] or None
+    kw["poster_data"] = poster
+    return kw
+
+
+def _auto_summary(entries: List[Dict[str, Any]]) -> tuple:
+    """(embed, plain-text body, title) for several auto-generated titles."""
+    from ..media_server import get_server_label
+    libraries: List[str] = []
+    presets: List[str] = []
+    actions: List[str] = []
+    lines: List[str] = []
+    for e in entries:
+        lib = _get_library_name(e.get("library_id"))
+        if lib not in libraries:
+            libraries.append(lib)
+        if e.get("preset_id") or e.get("template_id"):
+            p = _get_preset_label(e.get("template_id"), e.get("preset_id"))
+            if p not in presets:
+                presets.append(p)
+        for a in e.get("_actions") or []:
+            s = _get_short_action(a)
+            if s not in actions:
+                actions.append(s)
+    for e in entries[:_AUTO_SUMMARY_LINES]:
+        year = f" ({e['year']})" if e.get("year") else ""
+        servers = ", ".join(get_server_label(s) for s in e.get("_servers") or [])
+        lines.append(f"**{e.get('title')}**{year}" + (f" — {servers}" if servers else ""))
+    if len(entries) > _AUTO_SUMMARY_LINES:
+        lines.append(f"...and {len(entries) - _AUTO_SUMMARY_LINES} more")
+    items_text = ""
+    for i, line in enumerate(lines):
+        if len(items_text) + len(line) + 1 > 3800:
+            items_text += f"...and {len(lines) - i} more"
+            break
+        items_text += line + "\n"
+    title = f"{_get_source_emoji('auto_generate')} Auto-Generate Complete"
+    description = f"**{len(entries)}** titles updated\n\n{items_text.strip()}"
+    fields = [("Library", ", ".join(libraries)[:1024])]
+    if presets:
+        fields.append(("Preset", ", ".join(presets)[:1024]))
+    fields.append(("Action", ", ".join(actions) or "Sent"))
+    embed = {
+        "title": title,
+        "description": description,
+        "color": 0x3DD6B7,
+        "fields": [{"name": n, "value": v, "inline": True} for n, v in fields],
+        "footer": {"text": "Simposter"},
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    body = description.replace("**", "") + "".join(f"\n{n}: {v}" for n, v in fields)
+    return embed, body, title
+
+
+def _post_embed(url: str, embed: Dict[str, Any], poster: Optional[bytes]) -> bool:
+    import json as _json
+    if poster:
+        embed = dict(embed, thumbnail={"url": "attachment://poster.jpg"})
+        resp = requests.post(url, data={"payload_json": _json.dumps({"embeds": [embed]})},
+                             files={"file": ("poster.jpg", poster, "image/jpeg")}, timeout=15)
+    else:
+        resp = requests.post(url, json={"embeds": [embed]}, timeout=10)
+    return resp.status_code in (200, 204)
+
+
+def _send_auto_summary(channel: str, entries: List[Dict[str, Any]], poster: Optional[bytes]) -> None:
+    embed, body, title = _auto_summary(entries)
+    settings = _get_notification_settings()
+    try:
+        if channel == "discord":
+            if not settings.get("discordEnabled") or not settings.get("discordWebhookUrl"):
+                return
+            if _post_embed(settings["discordWebhookUrl"], embed, poster):
+                logger.info("[DISCORD] Auto-generate summary sent (%d titles)", len(entries))
+            else:
+                logger.warning("[DISCORD] Auto-generate summary failed")
+            return
+        if not settings.get("appriseEnabled"):
+            return
+        other_urls: List[str] = []
+        for url in settings.get("appriseUrls", []) or []:
+            if not url.strip():
+                continue
+            hook = _resolve_discord_webhook_url(url)
+            if hook:
+                if not _post_embed(hook, embed, poster):
+                    logger.warning("[APPRISE] Auto-generate summary Discord embed failed")
+            else:
+                other_urls.append(url.strip())
+        if other_urls:
+            import apprise
+            ap = apprise.Apprise()
+            for url in other_urls:
+                ap.add(url)
+            if len(ap) > 0 and not ap.notify(title=f"{title} — Simposter", body=body):
+                logger.warning("[APPRISE] One or more Apprise services failed (auto-generate summary)")
+        logger.info("[APPRISE] Auto-generate summary sent (%d titles)", len(entries))
+    except Exception as e:
+        logger.error("[%s] Auto-generate summary error: %s", channel.upper(), e)
+
+
+def flush_auto_notifications() -> None:
+    """Send everything queued by auto-generate: the normal notification for a
+    single title, one summary for several. Never raises."""
+    global _auto_timer
+    with _auto_lock:
+        queued = dict(_auto_queue)
+        _auto_queue.clear()
+        if _auto_timer is not None:
+            _auto_timer.cancel()
+            _auto_timer = None
+    for channel, bucket in queued.items():
+        entries = list(bucket["entries"].values())
+        if not entries:
+            continue
+        try:
+            if len(entries) == 1:
+                kw = _single_kwargs(entries[0], bucket.get("poster"))
+                if channel == "discord":
+                    _send_discord_single(**kw)
+                else:
+                    _send_apprise_single(**kw)
+            else:
+                _send_auto_summary(channel, entries, bucket.get("poster"))
+        except Exception as e:
+            logger.error("[NOTIFY] Auto-generate flush failed (%s): %s", channel, e)
+
+
+_atexit.register(flush_auto_notifications)
+
+
+def send_discord_notification(**kwargs) -> bool:
+    """Per-send Discord notification. Auto-generate sends are held and merged
+    (see above); everything else goes out immediately."""
+    if kwargs.get("source") == "auto_generate":
+        if not _should_notify("auto_generate", kwargs.get("library_id")):
+            return False
+        _auto_enqueue("discord", kwargs)
+        return True
+    return _send_discord_single(**kwargs)
+
+
+def send_apprise_notification(**kwargs) -> bool:
+    """Per-send Apprise notification, same holding rule as Discord."""
+    if kwargs.get("source") == "auto_generate":
+        if not _should_notify_apprise("auto_generate", kwargs.get("library_id")):
+            return False
+        _auto_enqueue("apprise", kwargs)
+        return True
+    return _send_apprise_single(**kwargs)

@@ -10,6 +10,26 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.98',
+    date: '2026-11-25',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          "Fewer Auto-Generate notifications: when several titles are auto-generated close together (for example a scan that finds new posters from another app on overlay-only titles), you now get one summary listing them and the servers each reached, instead of one notification per title per server. A single title still gets its normal notification, with every server it reached in one message. Auto-generate notifications now arrive about a minute and a half after the last poster is sent.",
+          "Scans now download Jellyfin, Emby and Silo collection posters, like Plex's, so the Collections page loads them straight away.",
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          "Silo collection posters now show on the Collections page. Silo only provides them at 300 pixels wide, so they look softer than Plex or Jellyfin posters.",
+          "Collection posters changed on Plex, Jellyfin, Emby or Silo now update in Simposter after the next scan. Before, a collection kept the first poster it was shown with until you pressed Refresh Cache.",
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.97',
     date: '2026-11-24',
     sections: [

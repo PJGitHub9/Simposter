@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.8.98 (2026-11-25) — `dev-silo` branch
+
+### Improvements
+- **Auto-generate notifications merged** — from the user's Unraid log: Aura regenerates its "next episode" posters on ~20 overlay-only shows twice a day, and each scan put the overlays back on Plex, Jellyfin and Silo with one notification per title per server (37 at 00:55). `send_discord_notification()`/`send_apprise_notification()` (`backend/api/notifications.py`) now queue `source="auto_generate"` sends per channel, merged by title+year (servers combined); after 90 s with nothing new (at most 10 min after the first) one title sends the normal notification and several send one summary (`_auto_summary()`: titles with their servers, Library/Preset/Action, first poster attached). The old functions are `_send_discord_single()`/`_send_apprise_single()`; other sources are unchanged. Queued notifications are flushed at shutdown (`atexit`).
+
+### Bug Fixes
+- **Silo collection posters never loaded** (v1.8.97 only fixed the filter) — checked live against the user's Silo: `GET /admin/collections/{id}` returns an empty `poster_url`/`backdrop_url`, so `SiloClient.download_image()` never had a link and all 55 collections kept the fetch-on-demand URL. Only the list (`GET /admin/collections?library_id=`) carries the signed links (poster `w300` webp, backdrop `w1280`; other sizes 404 and `image_size` is refused with 422). `download_image()` now falls back to the list entry (`_collection_from_list()`, cached 60 s per server+library, so a page of posters makes one list call). Verified: 55/55 downloaded with one list call.
+- **Collection posters cached and kept up to date by scans** — the Plex scan downloaded a collection poster once and never re-checked it; Jellyfin/Emby/Silo scans didn't download them at all (fetched on first view, then never re-checked). New `movies.cache_collection_poster()` keeps the cached copy while the server's poster version is unchanged, else downloads it. Versions come from the collection listings: Plex `thumb` path, Jellyfin `ImageTags.Primary`, Silo artwork path hash (`image_version` on each listing entry). Used by the Plex scan's collection loop and by `_cache_collection_posters()` in `_scan_one_collection_library()` (6 at a time, one log line per library). Verified on a DB copy against the user's Jellyfin and Silo: 147/147 cached, second scan 0.3 s with no downloads, a changed version re-downloaded once.
+
 ## v1.8.97 (2026-11-24) — `dev-silo` branch
 
 ### Bug Fixes

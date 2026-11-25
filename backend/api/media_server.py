@@ -366,6 +366,37 @@ def _scan_one_library(client, server_id: str, library_id: str, media_type: str, 
     }
 
 
+def _cache_collection_posters(server_id: str, items: list, label: str) -> None:
+    """Download (or re-check) each collection's poster during the scan, so the
+    Collections page loads from disk and a poster changed on the server is
+    picked up (Quirk #235). Sets item["poster"] to the cached URL; items the
+    server says have no poster are skipped. Never raises."""
+    from concurrent.futures import ThreadPoolExecutor
+    from ..config import logger
+    from ..media_server import get_server_label
+    from .movies import cache_collection_poster
+    todo = [i for i in items if i.get("key") and i.get("has_poster") is not False]
+    if not todo:
+        return
+    stats = {"downloaded": 0}
+    try:
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            urls = list(pool.map(
+                lambda i: cache_collection_poster(i["key"], server_id, i.get("image_version"), stats), todo))
+    except Exception as e:
+        logger.warning("[SCAN] %s: collection posters not cached: %s", label, e)
+        return
+    failed = 0
+    for item, url in zip(todo, urls):
+        if url:
+            item["poster"] = url
+        else:
+            failed += 1
+    if stats["downloaded"] or failed:
+        logger.info("[SCAN] %s %s: %d collection poster(s) downloaded%s", get_server_label(server_id), label,
+                    stats["downloaded"], f", {failed} couldn't be fetched" if failed else "")
+
+
 def _scan_one_collection_library(client, server_id: str, library_id: str, library_name: str = "",
                                  progress=None) -> dict:
     """Collections mirror of _scan_one_library() above -- a genuinely separate
@@ -382,14 +413,14 @@ def _scan_one_collection_library(client, server_id: str, library_id: str, librar
     collection_cache the same way it already populates movie_cache/tv_cache,
     instead of only ever getting collections on first page visit.
     User-reported directly: "it did not scan jellyfins collections when i
-    scanned a group." No art-fetching here (Collections' own poster/logo come
-    from TMDb/Fanart via the Simposter/Kometa Creator editors, not from the
-    source server itself, unlike movies/TV -- see Quirk #128)."""
+    scanned a group." Each collection's poster is cached here too, and
+    re-downloaded when the server reports a new version (Quirk #235)."""
     if not hasattr(client, "list_collections"):
         return {"library_id": library_id, "library_name": library_name, "media_type": "collection", "item_count": 0}
     from .. import database as db
 
     items = client.list_collections(library_id)
+    _cache_collection_posters(server_id, items, library_name or library_id)
     rows = [
         {
             "rating_key": i["key"], "title": i.get("title") or "", "year": i.get("year"),

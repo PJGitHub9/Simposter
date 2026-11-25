@@ -34,6 +34,10 @@ from .base import ImageType, Library, MediaItem, MediaItemMetadata, MediaServerC
 LIB_PREFIX = "silo-"
 _KEY_SEP = "@"
 _TIMEOUT = (10, 30)
+# GET /admin/collections per (server url, library), for collection images.
+_COLLECTION_LIST_TTL = 60
+_collection_lists: Dict[Tuple[str, str], Tuple[float, Dict[str, dict]]] = {}
+_collection_list_lock = threading.Lock()
 _PAGE_LIMIT = 200  # Silo answers 422 above this
 _MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 COLLECTION_PREFIX = "collection-"
@@ -694,7 +698,13 @@ class SiloClient(MediaServerClient):
             if content_id.startswith(COLLECTION_PREFIX):
                 if image_type not in (ImageType.POSTER, ImageType.BACKDROP):
                     return None
-                detail = self._get(f"/admin/collections/{content_id[len(COLLECTION_PREFIX):]}") or {}
+                coll_id = content_id[len(COLLECTION_PREFIX):]
+                detail = self._get(f"/admin/collections/{coll_id}") or {}
+                if not detail.get(field):
+                    # Silo's single-collection endpoint returns an empty
+                    # poster_url/backdrop_url; only the list carries the
+                    # signed link (300px poster, 1280px backdrop).
+                    detail = self._collection_from_list(coll_id, _lib) or detail
             else:
                 detail = self._get(f"/catalog/items/{content_id}", {"image_size": "original"}, profile=True) or {}
             url = detail.get(field)
@@ -708,6 +718,24 @@ class SiloClient(MediaServerClient):
         except Exception as e:
             logger.debug("[SILO_CLIENT:%s] download_image %s %s failed: %s", self.server_id, item_id, field, e)
             return None
+
+    def _collection_from_list(self, coll_id: str, library_id: Optional[str]) -> Optional[dict]:
+        """One collection's entry from GET /admin/collections (the only Silo
+        response with its image links). The list is kept for a minute per
+        server and library, so loading a page of collection posters asks once;
+        its links are signed and stay valid well past that."""
+        native = native_library_id(library_id) if library_id else None
+        key = (self.url, native or "")
+        with _collection_list_lock:
+            hit = _collection_lists.get(key)
+        if hit is None or time.monotonic() - hit[0] > _COLLECTION_LIST_TTL:
+            data = self._get("/admin/collections", {"library_id": native} if native else None) or {}
+            items = {str(c.get("id")): c for c in data.get("items") or [] if c.get("id")}
+            with _collection_list_lock:
+                _collection_lists[key] = (time.monotonic(), items)
+        else:
+            items = hit[1]
+        return items.get(str(coll_id))
 
     # ---- seasons / episodes ------------------------------------------
     def _seasons(self, series_key: str) -> List[dict]:
@@ -795,7 +823,8 @@ class SiloClient(MediaServerClient):
                         "title": c.get("title") or "", "year": None, "addedAt": None, "poster": None,
                         "library_id": lib,
                         # No poster_url (e.g. a collage Silo draws itself): nothing to download.
-                        "has_poster": bool(c.get("poster_url"))})
+                        "has_poster": bool(c.get("poster_url")),
+                        "image_version": _url_version(c.get("poster_url"))})
         return out
 
     def list_collection_members(self, collection_item_id: str) -> List[dict]:

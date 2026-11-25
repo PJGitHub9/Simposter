@@ -3,6 +3,7 @@ from typing import Dict, List, Optional
 from pathlib import Path
 import os
 import sqlite3
+import threading
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request, Body, Query
@@ -371,6 +372,32 @@ def record_poster_version(rating_key: str, version: Optional[str]) -> None:
     record_asset_version("poster", rating_key, version)
 
 
+_collection_stats_lock = threading.Lock()
+
+
+def cache_collection_poster(rating_key: str, server_id: str, version: Optional[str],
+                            stats: Optional[dict] = None) -> Optional[str]:
+    """Scan-time poster cache for one collection (Quirk #235): keeps the cached
+    copy while the server reports the same poster version, otherwise downloads
+    it. Returns the cached poster's URL, or None when nothing could be fetched
+    (the caller keeps its fetch-on-view URL). Never raises."""
+    try:
+        cached = _poster_cache_path(rating_key)
+        if cached and not poster_changed_on_server(rating_key, version):
+            return _poster_cache_url(rating_key, cached)
+        path = fetch_and_cache_poster(rating_key, force_refresh=bool(cached), server_id_hint=server_id)
+        if not path:
+            return None
+        record_poster_version(rating_key, version)
+        if stats is not None:
+            with _collection_stats_lock:
+                stats["downloaded"] = stats.get("downloaded", 0) + 1
+        return _poster_cache_url(rating_key, path)
+    except Exception as e:
+        logger.debug("[SCAN] Collection poster %s (%s) failed: %s", rating_key, server_id, e)
+        return None
+
+
 def fetch_and_cache_poster(rating_key: str, force_refresh: bool = False, server_id_hint: Optional[str] = None) -> Optional[Path]:
     """
     Fetch poster from cache or Plex and store it. Returns cached file path or None.
@@ -632,6 +659,9 @@ def _get_plex_collections(lib_ids: Optional[List[str]] = None) -> List[dict]:
                         "addedAt": int(added_at) if added_at else None,
                         "poster": poster_url,
                         "library_id": lib_id,
+                        # Ends in the collection's update timestamp, so it
+                        # changes when its poster does (Quirk #235).
+                        "image_version": thumb,
                     }
                 )
         except Exception as e:
@@ -2186,14 +2216,8 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
             if lib_id not in coll_cache_by_lib:
                 coll_cache_by_lib[lib_id] = []
             
-            # Fetch poster
-            poster_url = None
-            try:
-                poster_path = fetch_and_cache_poster(coll.get("key"), force_refresh=False)
-                if poster_path:
-                    poster_url = _poster_cache_url(coll.get("key"), poster_path)
-            except Exception as e:
-                logger.debug(f"[SCAN] Failed to fetch poster for collection {coll.get('key')}: {e}")
+            # Fetch poster; re-downloaded when Plex reports a new version.
+            poster_url = cache_collection_poster(coll.get("key"), "plex-1", coll.get("image_version"))
             
             coll_cache_by_lib[lib_id].append({
                 "rating_key": coll.get("key"),
