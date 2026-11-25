@@ -369,7 +369,7 @@ def _scan_one_library(client, server_id: str, library_id: str, media_type: str, 
 def _cache_collection_posters(server_id: str, items: list, label: str) -> None:
     """Download (or re-check) each collection's poster during the scan, so the
     Collections page loads from disk and a poster changed on the server is
-    picked up (Quirk #235). Sets item["poster"] to the cached URL; items the
+    picked up (Quirk #248). Sets item["poster"] to the cached URL; items the
     server says have no poster are skipped. Never raises."""
     from concurrent.futures import ThreadPoolExecutor
     from ..config import logger
@@ -414,7 +414,7 @@ def _scan_one_collection_library(client, server_id: str, library_id: str, librar
     instead of only ever getting collections on first page visit.
     User-reported directly: "it did not scan jellyfins collections when i
     scanned a group." Each collection's poster is cached here too, and
-    re-downloaded when the server reports a new version (Quirk #235)."""
+    re-downloaded when the server reports a new version (Quirk #248)."""
     if not hasattr(client, "list_collections"):
         return {"library_id": library_id, "library_name": library_name, "media_type": "collection", "item_count": 0}
     from .. import database as db

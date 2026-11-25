@@ -377,7 +377,7 @@ _collection_stats_lock = threading.Lock()
 
 def cache_collection_poster(rating_key: str, server_id: str, version: Optional[str],
                             stats: Optional[dict] = None) -> Optional[str]:
-    """Scan-time poster cache for one collection (Quirk #235): keeps the cached
+    """Scan-time poster cache for one collection (Quirk #248): keeps the cached
     copy while the server reports the same poster version, otherwise downloads
     it. Returns the cached poster's URL, or None when nothing could be fetched
     (the caller keeps its fetch-on-view URL). Never raises."""
@@ -660,7 +660,7 @@ def _get_plex_collections(lib_ids: Optional[List[str]] = None) -> List[dict]:
                         "poster": poster_url,
                         "library_id": lib_id,
                         # Ends in the collection's update timestamp, so it
-                        # changes when its poster does (Quirk #235).
+                        # changes when its poster does (Quirk #248).
                         "image_version": thumb,
                     }
                 )
