@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.8.97 (2026-11-24) — `dev-silo` branch
+
+### Bug Fixes
+- **Silo collections missing from the Collections page** — on the user's Unraid DB all 55 Silo collections are stored, but each has the same title as a Plex collection, so with the group's Merge items on `_dedupe_collections_by_title()` folds them into the Plex cards (Silo only in `also_on`). The page's server filter (`CollectionsView.vue`) only offered servers that won a card, so Silo never appeared. It now offers every server in a card's `server_id` + `also_on`, and filtering to one shows each matching card as that server's copy (`asServerCopy()`: its key from `other_servers`, its poster, the shown copy moved into `also_on`/`other_servers`). Frontend only.
+
 ## v1.8.96 (2026-11-24) — `dev-silo` branch
 
 ### Bug Fixes

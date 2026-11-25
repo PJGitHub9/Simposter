@@ -42,29 +42,54 @@ const error = ref<string | null>(null)
 // controls the BACKEND merge-winner/filter behavior (Quirk #121) and needs a
 // round trip to change -- this is a plain display filter over whatever the
 // backend already returned, so it works regardless of the group's own
-// mergeItems setting (filtering "only Jellyfin" while merge is ON just shows
-// whichever merged cards happen to currently be displaying as Jellyfin).
+// mergeItems setting (filtering "only Jellyfin" while merge is ON shows every
+// collection Jellyfin has, as Jellyfin's own copy, asServerCopy()).
 const search = ref('')
 const serverFilter = ref('')
 const sortBy = ref<'title_asc' | 'title_desc'>('title_asc')
+
+// Every server a card is on: the one it shows plus the copies merged into it
+// (also_on). A server whose copies all lost the merge (e.g. Silo collections
+// named like Plex's) would otherwise never be offered.
+const cardServers = (c: Collection): string[] => [c.server_id || 'plex-1', ...(c.also_on || [])]
 
 const serverFilterOptions = computed(() => {
   const seen = new Set<string>()
   const opts: { id: string; label: string }[] = []
   for (const c of collections.value) {
-    const sid = c.server_id || 'plex-1'
-    if (seen.has(sid)) continue
-    seen.add(sid)
-    opts.push({ id: sid, label: mediaServerLabel(sid, settings.mediaServers.value) })
+    for (const sid of cardServers(c)) {
+      if (seen.has(sid)) continue
+      seen.add(sid)
+      opts.push({ id: sid, label: mediaServerLabel(sid, settings.mediaServers.value) })
+    }
   }
   return opts
 })
+
+// The card as that server's own copy: its key (so the poster and editor are
+// that server's), with the shown copy moved into also_on/other_servers.
+const asServerCopy = (c: Collection, sid: string): Collection => {
+  const own = c.server_id || 'plex-1'
+  if (own === sid) return c
+  const copy = (c.other_servers || []).find((o) => o.server_id === sid)
+  if (!copy) return c
+  const rest = (c.other_servers || []).filter((o) => o.server_id !== sid)
+  return {
+    ...c,
+    key: copy.rating_key,
+    server_id: sid,
+    poster: `${apiBase}/api/movie/${copy.rating_key}/poster`,
+    also_on: [own, ...(c.also_on || []).filter((s) => s !== sid)],
+    other_servers: [{ server_id: own, rating_key: c.key }, ...rest],
+  }
+}
 
 const displayCollections = computed(() => {
   let list = collections.value
 
   if (serverFilter.value) {
-    list = list.filter((c) => (c.server_id || 'plex-1') === serverFilter.value)
+    const sid = serverFilter.value
+    list = list.filter((c) => cardServers(c).includes(sid)).map((c) => asServerCopy(c, sid))
   }
 
   const q = search.value.trim().toLowerCase()

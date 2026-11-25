@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.97',
+    date: '2026-11-24',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          "Collections: the server filter now lists every server a collection is on. Collections with the same name on several servers are shown as one card (the preferred server's copy), so a server whose collections all matched another's, like Silo's, never appeared in the filter. Picking a server now shows each of its collections as that server's own copy.",
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.96',
     date: '2026-11-24',
     sections: [
