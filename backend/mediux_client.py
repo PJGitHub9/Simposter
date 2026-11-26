@@ -29,7 +29,7 @@ _RETRY_WAITS = (2, 5)
 _RETRY_AFTER_CAP = 15
 _TIMEOUT = 20
 
-_FIELDS = "id modified_on language{iso639_1}"
+_FIELDS = "id modified_on language{iso_639_1}"
 _SET_FIELDS = "id set_title user_created{username} date_updated popularity"
 
 _MOVIE_QUERY = (
@@ -96,7 +96,7 @@ def _entry(raw: Any, set_id: str, creator: str) -> Optional[Dict[str, Any]]:
     if not isinstance(raw, dict) or not raw.get("id"):
         return None
     url = asset_url(raw["id"], raw.get("modified_on"))
-    lang = (raw.get("language") or {}).get("iso639_1") if isinstance(raw.get("language"), dict) else None
+    lang = (raw.get("language") or {}).get("iso_639_1") if isinstance(raw.get("language"), dict) else None
     return {"url": url, "thumb": url + "&key=thumb", "source": "mediux", "has_text": True,
             "language": lang or None, "mediux_set_id": set_id, "mediux_creator": creator}
 
