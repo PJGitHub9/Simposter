@@ -154,12 +154,14 @@ def assert_external_fetch_safe(url: str) -> None:
 _REDIRECT_CODES = (301, 302, 303, 307, 308)
 
 
-def safe_get(url: str, strict: bool = False, max_redirects: int = 5, **kwargs):
+def safe_get(url: str, strict: bool = False, max_redirects: int = 5, headers_for=None, **kwargs):
     """requests.get() that applies the SSRF check to the first URL and to every
     redirect it follows. A plain requests.get() only checks what we hand it, so a
     public URL that redirects to a LAN or metadata address would get through.
     strict matches assert_external_fetch_safe() (no private hosts at all), else
-    assert_fetch_url_safe(). Raises ValueError for a blocked URL or too many redirects."""
+    assert_fetch_url_safe(). headers_for(url) may return extra headers for that hop only
+    (so a credential is dropped when a redirect leaves its host).
+    Raises ValueError for a blocked URL or too many redirects."""
     import requests
     from urllib.parse import urljoin
 
@@ -167,7 +169,10 @@ def safe_get(url: str, strict: bool = False, max_redirects: int = 5, **kwargs):
     check = assert_external_fetch_safe if strict else assert_fetch_url_safe
     for _ in range(max_redirects + 1):
         check(url)
-        resp = requests.get(url, **kwargs)
+        hop = dict(kwargs)
+        if headers_for is not None:
+            hop["headers"] = {**(kwargs.get("headers") or {}), **(headers_for(url) or {})}
+        resp = requests.get(url, **hop)
         location = resp.headers.get("Location")
         if resp.status_code not in _REDIRECT_CODES or not location:
             return resp

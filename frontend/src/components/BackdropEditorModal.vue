@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { candidateThumb } from '@/services/mediuxImage'
 import { getApiBase } from '@/services/apiBase'
 import SendToServerModal from '@/components/editor/SendToServerModal.vue'
 import { useAssetServerSend } from '@/composables/useAssetServerSend'
@@ -36,7 +37,7 @@ const availableBackdrops = ref<BackdropSource[]>([])
 // Same fallback pattern used by the logo picker (LogoEditorModal.vue) -- TMDb's
 // resized w300 thumbnail variant can 404 even when the original loads fine.
 const failedThumbs = ref(new Set<string>())
-const thumbSrc = (b: BackdropSource) => (failedThumbs.value.has(b.url) ? b.url : (b.thumb || b.url))
+const thumbSrc = (b: BackdropSource) => ((failedThumbs.value.has(b.url) && b.source !== 'mediux') ? b.url : candidateThumb(b))
 const onThumbError = (b: BackdropSource) => {
   if (b.thumb && b.thumb !== b.url && !failedThumbs.value.has(b.url)) {
     failedThumbs.value = new Set(failedThumbs.value).add(b.url)

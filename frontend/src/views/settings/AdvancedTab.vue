@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import { launchOnboarding } from '@/composables/useOnboardingLauncher'
 import OtherPagesSettings from '@/components/settings/OtherPagesSettings.vue'
+import { useSettingsStore } from '@/stores/settings'
 
 interface APISource {
   id: string
@@ -115,8 +116,13 @@ const draggedApi = ref<string | null>(null)
 const availableAPIs: APISource[] = [
   { id: 'tmdb', name: 'TMDb' },
   { id: 'tvdb', name: 'TVDB' },
-  { id: 'fanart', name: 'Fanart.tv' }
+  { id: 'fanart', name: 'Fanart.tv' },
+  { id: 'mediux', name: 'MediUX' }
 ]
+
+const settingsStore = useSettingsStore()
+// MediUX is skipped until a key is saved (Settings → General).
+const mediuxNeedsKey = computed(() => !settingsStore.mediux.value.apiKey)
 
 const startDrag = (api: string) => {
   draggedApi.value = api
@@ -194,7 +200,7 @@ const moveApiDown = (api: string) => {
     <div :class="['section', { 'section-unsaved': changed?.apiKeys }]">
       <h3>API Source Priority</h3>
       <p class="section-description">
-        Reorder which API to use first when fetching artwork (drag to reorder)
+        The order Simposter tries sources in for every poster it picks: the editor, Batch Edit, webhooks and automation (drag to reorder). Logos keep their own order.
       </p>
 
       <div class="api-order-header">
@@ -214,7 +220,7 @@ const moveApiDown = (api: string) => {
           v-for="(apiId, index) in localApiOrder"
           :key="apiId"
           class="api-order-item"
-          :class="{ disabled: apiOrderLocked, dragging: draggedApi === apiId }"
+          :class="{ disabled: apiOrderLocked, dragging: draggedApi === apiId, 'no-key': apiId === 'mediux' && mediuxNeedsKey }"
           draggable="true"
           @dragstart="startDrag(apiId)"
           @dragover.prevent
@@ -222,6 +228,7 @@ const moveApiDown = (api: string) => {
         >
           <span class="api-index">{{ index + 1 }}</span>
           <span class="api-name">{{ availableAPIs.find(a => a.id === apiId)?.name || apiId }}</span>
+          <span v-if="apiId === 'mediux' && mediuxNeedsKey" class="api-needs-key">needs a key</span>
           <div class="api-controls" v-if="!apiOrderLocked">
             <button
               @click="moveApiUp(apiId)"
@@ -694,6 +701,16 @@ button:disabled {
   color: var(--accent);
   min-width: 24px;
   text-align: center;
+}
+
+.api-order-item.no-key .api-name {
+  opacity: 0.55;
+}
+
+.api-needs-key {
+  font-size: 12px;
+  color: var(--text-secondary, #888);
+  margin-right: 8px;
 }
 
 .api-name {

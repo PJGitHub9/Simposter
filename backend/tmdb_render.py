@@ -27,6 +27,8 @@ from .tmdb_client import (
     get_tv_show_details,
 )
 from . import tvdb_client
+from . import poster_sources
+from .poster_sources import mediux_set_id_of
 from .fanart_client import get_images_for_tv_show as get_fanart_tv_images
 from .rendering import render_with_overlay_cache
 
@@ -70,6 +72,9 @@ class AssetChoice:
     logo_fallback_template: Optional[str]
     logo_fallback_preset: Optional[str]
     skip_status: Optional[str]  # "skipped_no_poster" | "skipped_no_logo" | None
+    # The MediUX set the chosen poster came from (None for any other source). A
+    # series render passes it to its seasons so they use the same creator's set.
+    mediux_set_id: Optional[str] = None
 
 
 def load_preset_context(
@@ -186,8 +191,17 @@ def select_movie_assets(
     logo_preference = map_logo_mode_to_preference(logo_preference)
     logo_mode = ctx.logo_mode
 
-    posters = imgs.get("posters", [])
     custom = custom_poster_override("movie", tmdb_id)
+
+    def _candidates(flt):
+        # Every source in the user's order (TMDb reuses ``imgs``); later sources are
+        # only fetched when the earlier ones have nothing matching ``flt``.
+        if custom:
+            return []
+        return poster_sources.movie_posters(tmdb_id, movie_details, imgs,
+                                            language_pref=language_pref, stop_when=flt)
+
+    posters = _candidates(poster_filter)
 
     # Get logos using merged sources based on preference
     logo_source_pref = render_options_base.get("logoSource") or render_options_base.get("logo_source")
@@ -219,6 +233,7 @@ def select_movie_assets(
             logo_fallback_template=logo_fallback_template_used,
             logo_fallback_preset=logo_fallback_preset_used,
             skip_status=skip_status,
+            mediux_set_id=mediux_set_id_of(poster),
         )
 
     # ---------------------------
@@ -307,7 +322,9 @@ def select_movie_assets(
                     # Re-fetch logos if logo source changed, or check for static logo override
                     logo_source_pref = render_options_base.get("logoSource") or render_options_base.get("logo_source")
                     logos = get_logos_merged(tmdb_id, logo_source_pref, movie_details.get("original_language"), tmdb_imgs=imgs)
-                    # Re-pick poster with the fallback template's poster_filter
+                    # Re-pick poster with the fallback template's poster_filter (the
+                    # list may have stopped early for the first filter, so rebuild it)
+                    posters = _candidates(poster_filter)
                     poster = custom or pick_poster(posters, poster_filter)
                     if poster:
                         poster_url = poster.get("url")
@@ -393,6 +410,7 @@ def select_tv_series_assets(
             logo_fallback_template=None,
             logo_fallback_preset=None,
             skip_status=skip_status,
+            mediux_set_id=mediux_set_id_of(poster),
         )
 
     # Select poster with template fallback logic (matching preview.py behavior)
@@ -456,6 +474,7 @@ def select_tv_season_assets(
     *,
     tvdb_id: Optional[int] = None,
     season_title: Optional[str] = None,
+    series_set_id: Optional[str] = None,
 ) -> AssetChoice:
     """Pick the poster + logo for one TV season, exactly as the batch season loop
     does: fetch the TMDb season posters (+ the TVDB season posters when
@@ -480,31 +499,25 @@ def select_tv_season_assets(
     season_poster_filter = ctx.season_poster_filter
     final_season_options = db.resolve_season_options(ctx.options, ctx.season_options)
 
-    # Get season-specific images
-    try:
-        season_imgs = get_tv_season_images(tmdb_id, season_index, show_details.get("original_language"))
-        season_posters = season_imgs.get("posters", [])
-    except Exception as e:
-        logger.warning("%s Failed to get TMDB season images for season %d: %s", log_label, season_index, e)
-        season_posters = []
-
-    if tvdb_id:
-        try:
-            if settings.TVDB_API_KEY:
-                tvdb_season_imgs = tvdb_client.get_season_images(int(tvdb_id), season_index)
-                season_posters.extend(tvdb_season_imgs.get("posters", []))
-        except Exception:
-            pass
-
-    # Combine season + series posters for selection
-    all_posters = season_posters + series_posters
-
-    logger.debug("%s Season %d: posters=%d (season=%d series=%d) logos=%d filter=%s",
-                log_label, season_index, len(all_posters), len(season_posters), len(series_posters),
-                len(series_logos), season_poster_filter)
-
     # Select poster with template fallback logic (matching preview.py behavior)
     custom = custom_poster_override("tv", tmdb_id, tvdb_id, season_index)
+
+    # Candidates: the series' own MediUX set's season poster (``series_set_id``),
+    # then every source's season posters in the user's order, then the series
+    # posters. Not needed when an imported poster wins anyway.
+    if custom:
+        all_posters = []
+    else:
+        all_posters = poster_sources.season_posters(
+            tmdb_id, tvdb_id, season_index, show_details, series_posters,
+            series_set_id=series_set_id, language_pref=ctx.language_pref,
+            stop_when=season_poster_filter,
+        )
+
+    logger.debug("%s Season %d: posters=%d (series=%d) logos=%d filter=%s set=%s",
+                log_label, season_index, len(all_posters), len(series_posters),
+                len(series_logos), season_poster_filter, series_set_id)
+
     poster = custom or pick_poster(all_posters, season_poster_filter)
 
     season_template_id = ctx.template_id
@@ -571,6 +584,7 @@ def select_tv_season_assets(
             logo_fallback_template=None,
             logo_fallback_preset=None,
             skip_status=skip_status,
+            mediux_set_id=mediux_set_id_of(poster),
         )
 
     if not poster:
@@ -596,6 +610,8 @@ def fetch_tv_series_images(
     show_details: dict,
     *,
     log_label: Optional[str] = None,
+    language_pref: str = "en",
+    stop_when: Optional[str] = None,
 ) -> dict:
     """Series-level images for a TV show: TMDb's ``get_images_for_tv_show`` result
     with TVDB posters+logos and Fanart.tv logos appended in place (only when
@@ -609,29 +625,54 @@ def fetch_tv_series_images(
     caller's behaviour), with ``None`` it is swallowed silently (the seasons
     caller's behaviour)."""
     show_imgs = get_images_for_tv_show(tmdb_id, show_details.get("original_language"))
-    posters = show_imgs.setdefault("posters", [])
+    tmdb_only = {"posters": list(show_imgs.get("posters") or [])}
     logos = show_imgs.setdefault("logos", [])
+    # Images already fetched here (for logos) are handed to the poster list so
+    # TVDB/Fanart aren't asked twice; a failed fetch is passed as empty.
+    prefetched: dict = {}
 
     # Merge with TVDB/Fanart if available
     if tvdb_id:
-        try:
-            if settings.TVDB_API_KEY:
+        if settings.TVDB_API_KEY:
+            try:
                 tvdb_imgs = tvdb_client.get_series_images(int(tvdb_id))
-                posters.extend(tvdb_imgs.get("posters", []))
                 logos.extend(tvdb_imgs.get("logos", []))
-        except Exception as e:
-            if log_label is not None:
-                logger.warning("%s TVDB series fetch failed: %s", log_label, e)
+                prefetched["tvdb"] = tvdb_imgs
+            except Exception as e:
+                prefetched["tvdb"] = {}
+                if log_label is not None:
+                    logger.warning("%s TVDB series fetch failed: %s", log_label, e)
 
-        try:
-            if settings.FANART_API_KEY:
+        if settings.FANART_API_KEY:
+            try:
                 fanart_imgs = get_fanart_tv_images(int(tvdb_id))
                 logos.extend(fanart_imgs.get("logos", []))
-        except Exception as e:
-            if log_label is not None:
-                logger.warning("%s Fanart series fetch failed: %s", log_label, e)
+                prefetched["fanart"] = fanart_imgs
+            except Exception as e:
+                prefetched["fanart"] = {}
+                if log_label is not None:
+                    logger.warning("%s Fanart series fetch failed: %s", log_label, e)
 
+    # Posters from every source in the user's order (TMDb, TVDB, Fanart, MediUX).
+    show_imgs["posters"] = poster_sources.series_posters(
+        tmdb_id, tvdb_id, show_details, tmdb_only,
+        language_pref=language_pref, stop_when=stop_when, prefetched=prefetched,
+    )
     return show_imgs
+
+
+def series_set_id_for_seasons(tmdb_id: int, series_posters: list, poster_filter: str) -> Optional[str]:
+    """The MediUX set a season render should follow when the series poster isn't
+    rendered in the same run: the set of the poster the series pick would choose
+    (the original preset's series filter, no fallback). None when the series has an
+    imported poster (Poster Import), since that isn't from any set."""
+    try:
+        from . import custom_posters
+        if custom_posters.lookup("tv", tmdb_id, None, None):
+            return None
+    except Exception as e:
+        logger.debug("[CUSTOM_POSTER] Lookup failed for tv %s: %s", tmdb_id, e)
+    return mediux_set_id_of(pick_poster(series_posters or [], poster_filter))
 
 
 # --------------------------------------------------------------------------
@@ -799,7 +840,11 @@ def _render_tv(tmdb_id: int, season: Optional[int], ctx: PresetContext, raw: dic
         season_poster_filter=ctx.season_poster_filter or ctx.poster_filter,
     )
 
-    show_imgs = fetch_tv_series_images(tmdb_id, tvdb_id, show_details, log_label=_API_LOG)
+    show_imgs = fetch_tv_series_images(
+        tmdb_id, tvdb_id, show_details, log_label=_API_LOG, language_pref=tv_ctx.language_pref,
+        # A season render also falls back to the series posters, so it needs them all.
+        stop_when=tv_ctx.poster_filter if season is None else None,
+    )
 
     season_title = None
     if season is None:
@@ -815,6 +860,8 @@ def _render_tv(tmdb_id: int, season: Optional[int], ctx: PresetContext, raw: dic
             show_imgs.get("posters", []), show_imgs.get("logos", []),
             tv_ctx, {}, _API_LOG,
             tvdb_id=tvdb_id, season_title=season_title,
+            series_set_id=series_set_id_for_seasons(
+                tmdb_id, show_imgs.get("posters", []), tv_ctx.poster_filter),
         )
     if choice.skip_status or not choice.poster:
         logger.info("%s tv tmdb_id=%s season=%s %s", _API_LOG, tmdb_id, season, choice.skip_status or "no poster")

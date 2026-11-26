@@ -42,6 +42,11 @@ from ..config import logger
 from ..media_server import get_client, get_server_label, ImageType
 from ..save_paths import save_or_cache_render
 
+def _mx_headers(url):
+    from .. import mediux_client
+    return mediux_client.auth_headers_for(url)
+
+
 router = APIRouter(prefix="/media-server", tags=["media-server"])
 
 
@@ -91,7 +96,7 @@ def _resolve_image_bytes(req: MediaServerSendRequest) -> tuple:
         try:
             from ..config import EXTERNAL_IMAGE_FETCH_HEADERS
             from ..middleware.validation import safe_get
-            r = safe_get(url, timeout=15, headers=EXTERNAL_IMAGE_FETCH_HEADERS)
+            r = safe_get(url, timeout=15, headers=EXTERNAL_IMAGE_FETCH_HEADERS, headers_for=_mx_headers)
             r.raise_for_status()
             content_type = r.headers.get("content-type", "image/jpeg").split(";")[0].strip()
             return r.content, content_type
@@ -188,7 +193,7 @@ def api_notify_send_summary(req: SendSummaryNotifyRequest):
             try:
                 from ..config import EXTERNAL_IMAGE_FETCH_HEADERS
                 from ..middleware.validation import validate_url, safe_get
-                r = safe_get(validate_url(req.image_url), timeout=10, headers=EXTERNAL_IMAGE_FETCH_HEADERS)
+                r = safe_get(validate_url(req.image_url), timeout=10, headers=EXTERNAL_IMAGE_FETCH_HEADERS, headers_for=_mx_headers)
                 if r.ok and len(r.content) <= 8_000_000:
                     poster_data = r.content
             except Exception as e:

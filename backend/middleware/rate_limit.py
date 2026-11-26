@@ -92,6 +92,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             # so it isn't fully exempted like /api/batch-progress.
             "/api/movie": 2000,
             "/api/tv-show": 2000,
+            "/api/mediux": 1500,
             "/api/logo": 1500,
             # Poster Import page: the imported-poster grid loads one image per title.
             "/api/poster-import": 1500,

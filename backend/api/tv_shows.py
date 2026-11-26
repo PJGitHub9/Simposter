@@ -330,7 +330,8 @@ def api_tv_show_poster(rating_key: str, request: Request, meta: bool = False, ra
 def api_tv_show_select_poster(
     rating_key: str,
     poster_filter: str = "all",
-    season_index: Optional[int] = None
+    season_index: Optional[int] = None,
+    series_poster_filter: Optional[str] = None,
 ):
     """
     Select a poster for a TV show or season based on poster_filter (textless, text, all).
@@ -374,74 +375,30 @@ def api_tv_show_select_poster(
     show_details = get_tv_show_details(tmdb_id)
     original_lang = show_details.get("original_language")
 
-    # Fetch images based on whether we're selecting for a season or the series
-    if season_index is not None:
-        # Get season-specific images
-        try:
-            season_imgs = get_tv_season_images(tmdb_id, season_index, original_lang)
-            season_posters = season_imgs.get("posters", [])
-        except Exception as e:
-            # Season 0 (specials) often don't have images on TMDB
-            logger.warning("[TMDB] Failed to fetch season %d images: %s", season_index, e)
-            season_posters = []
-
-        # Also get series-level images as fallback
-        series_imgs = get_images_for_tv_show(tmdb_id, original_lang)
-        series_posters = series_imgs.get("posters", [])
-
-        # Add TVDB season images if available
-        if tvdb_id and settings.TVDB_API_KEY:
-            try:
-                tvdb_season_imgs = tvdb_client.get_season_images(int(tvdb_id), season_index)
-                season_posters.extend(tvdb_season_imgs.get("posters", []))
-            except Exception as e:
-                logger.warning("[TVDB] Failed to fetch season images: %s", e)
-
-        # Add TVDB series images to fallback
-        if tvdb_id and settings.TVDB_API_KEY:
-            try:
-                tvdb_series_imgs = tvdb_client.get_series_images(int(tvdb_id))
-                series_posters.extend(tvdb_series_imgs.get("posters", []))
-            except Exception:
-                pass
-
-        # Combine for selection with textless fallback logic
-        poster = None
-        if poster_filter == "textless":
-            # Try season textless first
-            poster = next((p for p in season_posters if p.get("has_text") == False), None)
-            # Fall back to series textless
-            if not poster:
-                poster = next((p for p in series_posters if p.get("has_text") == False), None)
-                logger.debug("[SELECT-POSTER] Season %d: No textless season poster, using series textless", season_index)
-        else:
-            # Use combined list for other filters
-            all_posters = season_posters + series_posters
-            poster = pick_poster(all_posters, poster_filter)
-
-        # When no poster matches the filter, return 404 to trigger template fallback
-        # (Don't silently fallback to first available poster)
+    # Same candidate lists and picks as a batch render (backend/tmdb_render.py):
+    # every source in the user's order, later sources only when earlier ones have
+    # no match. No match returns 404 so the frontend can apply the preset's fallback.
+    from .. import poster_sources
+    from ..tmdb_render import series_set_id_for_seasons, custom_poster_override
+    language_pref = db.get_setting("pref.language") or "en"
+    custom = custom_poster_override("tv", tmdb_id, tvdb_id if season_index is not None else None, season_index)
+    if custom:
+        poster = custom  # Poster Import wins, as in a batch render
+    elif season_index is not None:
+        # The season follows the MediUX set the series pick would choose (the
+        # preset's series filter), then falls back to the series posters.
+        set_filter = series_poster_filter or poster_filter
+        series_list = poster_sources.series_posters(
+            tmdb_id, tvdb_id, show_details, language_pref=language_pref)
+        all_posters = poster_sources.season_posters(
+            tmdb_id, tvdb_id, season_index, show_details, series_list,
+            series_set_id=series_set_id_for_seasons(tmdb_id, series_list, set_filter),
+            language_pref=language_pref, stop_when=poster_filter)
+        poster = pick_poster(all_posters, poster_filter)
     else:
-        # Get series-level images only
-        series_imgs = get_images_for_tv_show(tmdb_id, original_lang)
-        posters = series_imgs.get("posters", [])
-
-        # Add TVDB series images
-        if tvdb_id and settings.TVDB_API_KEY:
-            try:
-                tvdb_imgs = tvdb_client.get_series_images(int(tvdb_id))
-                posters.extend(tvdb_imgs.get("posters", []))
-            except Exception:
-                pass
-
-        # Select poster with textless preference
-        if poster_filter == "textless":
-            poster = next((p for p in posters if p.get("has_text") == False), None)
-        else:
-            poster = pick_poster(posters, poster_filter)
-
-        # When no poster matches the filter, return 404 to trigger template fallback
-        # (Don't silently fallback to first available poster)
+        posters = poster_sources.series_posters(
+            tmdb_id, tvdb_id, show_details, language_pref=language_pref, stop_when=poster_filter)
+        poster = pick_poster(posters, poster_filter)
 
     if not poster:
         raise HTTPException(status_code=404, detail="No poster found")
@@ -705,13 +662,29 @@ def api_tmdb_tv_images(tmdb_id: int, season: Optional[int] = None, tvdb_id: Opti
             }
 
             merged_logos: List[dict] = []
-            merged_posters: List[dict] = []
             merged_backdrops: List[dict] = []
+            from .. import poster_sources
+            language_pref = db.get_setting("pref.language") or "en"
+            mediux_backdrops = poster_sources.mediux_backdrops(
+                "tv", tmdb_id, details, language_pref=language_pref)
             for source in api_order:
                 if source in image_sources:
-                    merged_logos.extend(image_sources[source]["logos"])
-                    merged_posters.extend(image_sources[source]["posters"])
-                    merged_backdrops.extend(image_sources[source]["backdrops"])
+                    merged_logos.extend(image_sources[source].get("logos") or [])
+                    merged_backdrops.extend(image_sources[source].get("backdrops") or [])
+                elif source == "mediux":
+                    merged_backdrops.extend(mediux_backdrops)
+            if "mediux" not in api_order:
+                merged_backdrops.extend(mediux_backdrops)
+
+            # Posters: the same ordered season list batch/webhook renders pick from
+            # (season posters from every source). Fanart has no season posters; its
+            # show posters stay at the end as before.
+            fanart_show = (fanart_imgs.get("posters") or []) if "fanart" in poster_sources.source_order() else []
+            merged_posters = poster_sources.season_posters(
+                tmdb_id, tvdb_id, season, details, fanart_show,
+                language_pref=language_pref,
+                prefetched={"tmdb": season_imgs, "tvdb": tvdb_imgs},
+            )
 
             return {
                 "posters": merged_posters,
@@ -783,14 +756,26 @@ def api_tmdb_tv_images(tmdb_id: int, season: Optional[int] = None, tvdb_id: Opti
 
             # Merge images based on API order
             merged_logos = []
-            merged_posters = []
             merged_backdrops = []
+            from .. import poster_sources
+            language_pref = db.get_setting("pref.language") or "en"
+            mediux_backdrops = poster_sources.mediux_backdrops(
+                "tv", tmdb_id, details, language_pref=language_pref)
 
             for source in api_order:
                 if source in image_sources:
-                    merged_logos.extend(image_sources[source]["logos"])
-                    merged_posters.extend(image_sources[source]["posters"])
-                    merged_backdrops.extend(image_sources[source]["backdrops"])
+                    merged_logos.extend(image_sources[source].get("logos") or [])
+                    merged_backdrops.extend(image_sources[source].get("backdrops") or [])
+                elif source == "mediux":
+                    merged_backdrops.extend(mediux_backdrops)
+            if "mediux" not in api_order:
+                merged_backdrops.extend(mediux_backdrops)
+
+            # Posters: the same ordered list batch/webhook renders pick from (all sources).
+            merged_posters = poster_sources.series_posters(
+                tmdb_id, tvdb_id, details, tv_imgs, language_pref=language_pref,
+                prefetched={"tvdb": tvdb_imgs, "fanart": fanart_imgs},
+            )
 
             logger.info(
                 "[IMAGES] TV show tmdb_id=%s posters=%d backdrops=%d logos=%d",

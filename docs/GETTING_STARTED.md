@@ -241,7 +241,7 @@ The [User Guide](USER_GUIDE.md) explains every part of the editor and the other 
 
 | Tab | What's in it |
 |-----|--------------|
-| **General** | Theme, poster display density, deduplication, default sort, TMDb/TVDB/Fanart API keys |
+| **General** | Theme, poster display density, deduplication, default sort, TMDb/TVDB/Fanart.tv/MediUX API keys |
 | **Ratings & Lists** | Where overlay audience/critic ratings come from (your media server, TMDb or MDBList), the MDBList key, WeTrakr, SIMKL and Floppy lists, and Maintainerr (see [OVERLAYS.md](OVERLAYS.md#ratings)) |
 | **Libraries** | **Library groups** (link the same library across Plex/Jellyfin/Emby — see [MEDIA_SERVERS.md](MEDIA_SERVERS.md)), each shown as a one-line summary; **Edit** opens its auto-generate preset, Merge items, poster mode rules (Leave alone / Overlay only from Plex labels or Radarr/Sonarr tags) and the Plex labels to remove when sending; **Kometa compatibility** (always removes the "Overlay" label for every Plex library), add/remove libraries (removing purges that library's cache/DB rows, keeping History) |
 | **Media Servers** | Add, name, test and remove Plex, Jellyfin, Emby and Silo servers (removing one purges its cached data on save); Radarr and Sonarr (tags for poster mode rules); turn the [Poster API](POSTER_API.md) on or off |
@@ -249,7 +249,7 @@ The [User Guide](USER_GUIDE.md) explains every part of the editor and the other 
 | **Automation** | **Logos** (send logos with posters by default), **Webhooks** (auto-send to your media servers, season posters, webhook secret) and the webhook URL generator; **Items that already have a poster** (regenerate or resend, and **Reuse Cached Poster For (days)**, which protects a hand-tuned poster when Radarr/Sonarr or a similar tool makes the server re-match an item under a new ID); the **Retry queue**; **Plex labels** (an optional label added after a poster is sent) |
 | **Performance** | Concurrent renders (up to 10 — see the tip below), overlay cache, API rate limits, cache management |
 | **Notifications** | Discord webhook and Apprise URLs, per-event toggles (batch / manual / webhook / auto-generate / Media Mirror / Overlay Refresh / app updates), which library groups to notify for |
-| **Advanced** | **Run Startup Wizard** button, API source priority order, database backup/restore |
+| **Advanced** | **Run Startup Wizard** button, API source priority order (used for every poster Simposter picks), database backup/restore |
 | **Cleanup** | Find and clear Simposter's own stale cache (reversible), compact Simposter's database, scheduled cleanup, and **Media Server Maintenance** for each of your servers |
 
 | Output | Notifications |

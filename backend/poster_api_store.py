@@ -200,7 +200,11 @@ def preset_hash(template_id: str, preset_id: str) -> str:
     for oid in sorted(set(ids)):
         cfg = db.get_overlay_config(oid)
         stamps[oid] = (cfg or {}).get("updated_at")
-    payload = json.dumps({"o": options, "s": preset.get("season_options") or {}, "ov": stamps},
+    # The poster source order changes which poster a render picks, so a changed
+    # order makes cached renders stale too.
+    from . import poster_sources
+    payload = json.dumps({"o": options, "s": preset.get("season_options") or {}, "ov": stamps,
+                          "src": poster_sources.source_order()},
                          sort_keys=True, default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 

@@ -10,6 +10,26 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.99',
+    date: '2026-11-26',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          "MediUX poster sets as a poster source. Add a MediUX API key in Settings → General (create one in your MediUX account, or use the shared key pinned in MediUX's Discord); the field stays empty until you add one. MediUX then appears in the editor's poster picker with the creator's name on each poster, and in Settings → Advanced → API Priority Order, where you choose where it comes. For TV, once a show's poster comes from a MediUX set, its seasons use that same set's season posters when it has them. MediUX posters count as posters with text, so textless presets skip them.",
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          "API Priority Order now applies to every poster Simposter picks: Batch Edit, webhooks, auto-generate, the retry queue, the live preview and the Poster API, not only the editor's list. If you never changed it, it becomes TMDb, TVDB, Fanart.tv, MediUX, so your posters stay the same. If you did change it, your order is kept with MediUX added at the end, and automated posters now follow it.",
+          "When TMDb (and for TV, TVDB) has no poster that matches a preset's text filter, Simposter now tries the next sources in your order (for example a textless Fanart.tv poster) before using the preset's fallback.",
+          "Poster API posters render again after you add a MediUX key or change the source order. The \"Reuse cached poster\" setting is unchanged.",
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.98',
     date: '2026-11-25',
     sections: [

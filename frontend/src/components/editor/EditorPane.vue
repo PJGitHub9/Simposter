@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import PresetRefreshPrompt from '@/components/presets/PresetRefreshPrompt.vue'
+import { candidateThumb, mediuxDisplayUrl } from '@/services/mediuxImage'
 import { usePresetRefreshPrompt } from '@/composables/usePresetRefreshPrompt'
 import { presetOverlayLists, type PresetOverlayLists } from '@/services/presetOverlayLists'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -246,10 +247,10 @@ function refreshCurrentPoster() {
 }
 
 const tmdbId = ref<number | null>(null)
-const posters = ref<{ url: string; thumb?: string; has_text?: boolean; language?: string; source?: string }[]>([])
+const posters = ref<{ url: string; thumb?: string; has_text?: boolean; language?: string; source?: string; mediux_creator?: string }[]>([])
 // Backdrops offered as poster backgrounds. Editor-only: which list is shown, and the
 // per-background zoom/pan below, are never saved into a preset.
-const backdrops = ref<{ url: string; thumb?: string; has_text?: boolean; language?: string; source?: string }[]>([])
+const backdrops = ref<{ url: string; thumb?: string; has_text?: boolean; language?: string; source?: string; mediux_creator?: string }[]>([])
 const candidateKind = ref<'posters' | 'backdrops'>('posters')
 const showImagePicker = ref(false)
 // Separate from posterFilter on purpose: posterFilter is a preset field that Batch Edit
@@ -268,6 +269,7 @@ const posterFilter = ref<'all' | 'textless' | 'text'>('all')
 const posterLanguageFilter = ref<'all' | 'en' | 'with_lang'>('all')
 const showTmdbPosters = ref(true)
 const showFanartPosters = ref(true)
+const showMediuxPosters = ref(true)
 const logoPreference = ref<'first' | 'white' | 'color'>('first')
 const logoLanguageFilter = ref<'all' | 'en' | 'with_lang'>('all')
 const showTmdbLogos = ref(true)
@@ -612,6 +614,7 @@ const saveEditorStateImmediate = () => {
       posterLanguageFilter: posterLanguageFilter.value,
       showTmdbPosters: showTmdbPosters.value,
       showFanartPosters: showFanartPosters.value,
+      showMediuxPosters: showMediuxPosters.value,
       logoPreference: logoPreference.value,
       logoLanguageFilter: logoLanguageFilter.value,
       showTmdbLogos: showTmdbLogos.value,
@@ -692,6 +695,8 @@ const loadEditorState = () => {
     if (state.posterLanguageFilter && state.posterLanguageFilter !== 'all') posterLanguageFilter.value = state.posterLanguageFilter
     if (typeof state.showTmdbPosters === 'boolean') showTmdbPosters.value = state.showTmdbPosters
     if (typeof state.showFanartPosters === 'boolean') showFanartPosters.value = state.showFanartPosters
+  if (typeof state.showMediuxPosters === 'boolean') showMediuxPosters.value = state.showMediuxPosters
+    if (typeof state.showMediuxPosters === 'boolean') showMediuxPosters.value = state.showMediuxPosters
     if (state.logoPreference) logoPreference.value = state.logoPreference
     // Only restore language filters if they're not set to default 'all' (prefer global settings)
     if (state.logoLanguageFilter && state.logoLanguageFilter !== 'all') logoLanguageFilter.value = state.logoLanguageFilter
@@ -749,9 +754,9 @@ const setTextBox = (b: { maxW: number; maxH: number; offsetX: number; offsetY: n
 
 // Per-source counts shown on the TMDb/Fanart/TVDB checkboxes
 const countBySource = (items: { source?: string }[]) => {
-  const c = { tmdb: 0, fanart: 0, tvdb: 0 } as Record<'tmdb' | 'fanart' | 'tvdb', number>
+  const c = { tmdb: 0, fanart: 0, tvdb: 0, mediux: 0 } as Record<'tmdb' | 'fanart' | 'tvdb' | 'mediux', number>
   for (const i of items) {
-    const s = (i.source || 'tmdb').toLowerCase() as 'tmdb' | 'fanart' | 'tvdb'
+    const s = (i.source || 'tmdb').toLowerCase() as 'tmdb' | 'fanart' | 'tvdb' | 'mediux'
     if (s in c) c[s]++
   }
   return c
@@ -764,13 +769,14 @@ const filteredPosters = computed(() => {
     return backdrops.value.filter((p) => {
       if (!matchesTextFilter(p, backdropFilter.value)) return false
       const src = (p.source || 'tmdb').toLowerCase()
+      if (src === 'mediux') return showMediuxPosters.value
       if (src === 'fanart') return showFanartPosters.value
       return showTmdbPosters.value
     })
   }
   let items = posters.value
   if (posterFilter.value === 'textless') {
-    items = items.filter((p) => p.has_text === false || !p.language)
+    items = items.filter((p) => p.source !== 'mediux' && (p.has_text === false || !p.language))
   } else if (posterFilter.value === 'text') {
     items = items.filter((p) => p.has_text === true)
   }
@@ -786,6 +792,7 @@ const filteredPosters = computed(() => {
 
   items = items.filter((p) => {
     const src = (p.source || 'tmdb').toLowerCase()
+    if (src === 'mediux') return showMediuxPosters.value
     if (src === 'fanart') return showFanartPosters.value
     return showTmdbPosters.value
   })
@@ -2048,6 +2055,10 @@ watch(
               <input type="checkbox" v-model="showFanartPosters" />
               <span>Fanart <span class="src-count">{{ imageSourceCounts.fanart }}</span></span>
             </label>
+            <label class="inline-field checkbox" v-if="imageSourceCounts.mediux">
+              <input type="checkbox" v-model="showMediuxPosters" />
+              <span>MediUX <span class="src-count">{{ imageSourceCounts.mediux }}</span></span>
+            </label>
           </div>
           <div
             class="thumb-strip"
@@ -2074,8 +2085,9 @@ watch(
               :class="{ active: selectedPoster === p.url, 'backdrop-thumb': candidateKind === 'backdrops' }"
               @click="selectedPoster = p.url"
             >
-              <img :src="p.thumb || p.url" alt="" />
+              <img :src="candidateThumb(p)" alt="" />
               <div class="source-badge">{{ (p.source || 'tmdb').toUpperCase() }}</div>
+              <div v-if="p.mediux_creator" class="creator-badge">{{ p.mediux_creator }}</div>
             </div>
           </div>
           <div class="asset-actions">
@@ -2654,7 +2666,7 @@ watch(
           <div class="preview-container">
             <img v-if="lastPreview" ref="previewImgRef" :src="lastPreview" alt="Preview" class="preview-img" />
             <div v-else-if="selectedPoster && !overlayOnly" class="placeholder-state">
-              <img :src="selectedPoster" alt="Selected poster" class="placeholder-img" referrerpolicy="no-referrer" />
+              <img :src="mediuxDisplayUrl(selectedPoster)" alt="Selected poster" class="placeholder-img" referrerpolicy="no-referrer" />
               <div class="placeholder-overlay">
                 <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                   <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
@@ -2924,6 +2936,21 @@ watch(
 .thumb.active {
   border-color: var(--accent);
   box-shadow: 0 0 0 1px var(--accent);
+}
+
+.creator-badge {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  right: 2px;
+  font-size: 9px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .source-badge {

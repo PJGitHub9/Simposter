@@ -47,6 +47,11 @@ class _BytesResponse:
         self.headers: dict = {}
 
 
+def _mediux_auth_headers(url: str) -> dict:
+    from . import mediux_client
+    return mediux_client.auth_headers_for(url)
+
+
 def _download_image(url: str) -> Image.Image:
     """
     Fetch an image from a URL and return a PIL Image (RGBA).
@@ -93,7 +98,8 @@ def _download_image(url: str) -> Image.Image:
     for attempt in range(max_retries):
         try:
             # Increase timeout from 20s to 60s for slow connections
-            resp = safe_get(url, timeout=60, headers=EXTERNAL_IMAGE_FETCH_HEADERS)
+            resp = safe_get(url, timeout=60, headers=EXTERNAL_IMAGE_FETCH_HEADERS,
+                            headers_for=_mediux_auth_headers)
             resp.raise_for_status()
             break
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:

@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.8.99 (2026-11-26) — `dev-mediux` branch
+
+### New Features
+- **MediUX as a poster source** — `UISettings.mediux.apiKey` (masked, string-only, redacted in logs; blank by default, no key shipped), `POST /api/test-mediux` (`GET images.mediux.io/users/me`). New `backend/mediux_client.py`: GraphQL `POST https://images.mediux.io/graphql` with a Bearer key (query shapes from mediux-team/AURA), sets sorted by popularity then `date_updated`, 24 h cache in table `mediux_sets` (empty results cached, errors not), one request per title under concurrency, 429 retry (2 s, 5 s, `Retry-After` ≤ 15 s). MediUX entries have `has_text: true`, `source: "mediux"`, `mediux_creator`, `mediux_set_id`. Images: `rendering._download_image()` adds the key only on `images.mediux.io` hops (`safe_get(headers_for=...)`, so a redirect elsewhere never gets it; also wired into overlay-only source art and media-server/Plex sends from a URL); the browser loads them through `GET /api/mediux/image` (disk cache `config/cache/mediux/`, 15 MB cap, rate limit 1500/min). Frontend: key + Test in Settings → General, MediUX in the API Priority Order (greyed until a key is saved), a MediUX source checkbox and creator badge in the editors and image pickers.
+
+### Improvements
+- **Source order drives every poster pick** — new `backend/poster_sources.py` (`source_order()`, `movie_posters()`, `series_posters()`, `season_posters()`) builds candidates in `apiOrder`; used by `tmdb_render` (batch, webhooks, auto-generate, retries, Poster API), `preview.py`, the editor image endpoints and `GET /tv-show/{key}/select-poster` (Batch Edit TV preview). Automated paths pass `stop_when=<filter>` so later sources are only fetched when needed. TMDb errors still fail the render as before. Logos unchanged.
+- **Order migration** (`applied_migrations` `api_order_mediux`): the untouched default `["tmdb","fanart","tvdb"]` (or none) becomes `["tmdb","tvdb","fanart","mediux"]`, matching what automation used before; any other order keeps its order with `mediux` appended.
+- **TV seasons follow the show's MediUX set** — the series pick's set id is passed to season renders; a season rendered alone re-derives it from the series pick with the preset's series filter (none when the show has a Poster Import poster).
+- **Poster API** `preset_hash()` includes the source order, so cached renders refresh after a key or order change.
+
 ## v1.8.98 (2026-11-25) — `dev-silo` branch
 
 ### Improvements

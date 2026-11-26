@@ -11,6 +11,8 @@ from ..preset_fallback import merge_fallback_options
 from ..tmdb_client import get_images_for_movie, get_movie_details
 from ..assets.selection import pick_poster, pick_logo, map_logo_mode_to_preference
 from ..logo_sources import get_logos_merged
+from .. import poster_sources as _ps
+from ..tmdb_render import series_set_id_for_seasons
 from ..middleware.validation import (
     validate_template_id,
     validate_preset_id,
@@ -95,6 +97,7 @@ def api_preview(req: PreviewRequest):
             if value is not None and key not in render_options:
                 render_options[key] = value
         poster_filter = "all"
+        series_poster_filter = None  # the preset's own series filter (season previews use it to pick the MediUX set)
         logo_preference = render_options.get("logo_preference") or render_options.get("logo_mode") or "first"
         # Map logo_mode values (like "original") to valid pick_logo preferences (like "white")
         logo_preference = map_logo_mode_to_preference(logo_preference)
@@ -144,6 +147,7 @@ def api_preview(req: PreviewRequest):
                     # Merge preset options (request options take precedence so sliders work)
                     render_options = {**preset_options, **render_options}
                     poster_filter = render_options.get("poster_filter", preset_options.get("poster_filter", "all"))
+                    series_poster_filter = (preset.get("options") or {}).get("poster_filter", "all")
                     logo_preference = render_options.get("logo_preference") or render_options.get("logo_mode") or preset_options.get("logo_preference") or preset_options.get("logo_mode") or "first"
                     logo_preference = map_logo_mode_to_preference(logo_preference)
                     logger.debug("[PREVIEW] Applied preset '%s' options (is_season=%s): %s", req.preset_id, is_season, preset_options)
@@ -287,7 +291,7 @@ def api_preview(req: PreviewRequest):
                     # Fetch TMDB images (respect language preference with original language fallback)
                     movie_details = get_movie_details(tmdb_id)
                     imgs = get_images_for_movie(tmdb_id, movie_details.get("original_language"))
-                    posters = imgs.get("posters", [])
+                    posters = []
 
                     # Get logos using merged sources based on preference
                     logo_source_pref = render_options.get("logoSource") or render_options.get("logo_source")
@@ -304,6 +308,10 @@ def api_preview(req: PreviewRequest):
                     poster_fallback_action_used = None
 
                     if should_fetch_poster:
+                        # Candidates from every source in the user's order (same list as
+                        # batch); later sources only when earlier ones have no match.
+                        posters = _ps.movie_posters(tmdb_id, movie_details, imgs,
+                                                    language_pref=language_pref, stop_when=poster_filter)
                         # Pick poster based on filter
                         poster = pick_poster(posters, poster_filter)
 
@@ -509,20 +517,26 @@ def api_preview(req: PreviewRequest):
 
                     if should_fetch_poster:
                         # Fetch series or season posters based on season_index
+                        # Candidates from every source in the user's order (same lists as batch).
                         posters = []
+                        ordered_series_posters = []
                         if req.season_index is not None:
-                            # Fetch season posters
+                            # Fetch season posters. The series list picks the MediUX set
+                            # the season follows (the series poster isn't rendered here)
+                            # and is the last-resort fallback below.
                             logger.info("[PREVIEW] Fetching season %d poster for tmdb_id=%s", req.season_index, tmdb_id)
-                            try:
-                                season_imgs = get_tv_season_images(tmdb_id, req.season_index, original_language)
-                                posters = season_imgs.get("posters", [])
-                            except Exception as e:
-                                logger.warning("[PREVIEW] Failed to fetch season %d images: %s", req.season_index, e)
-                                posters = []  # Empty list will trigger series fallback logic below
+                            set_filter = series_poster_filter or poster_filter
+                            ordered_series_posters = _ps.series_posters(
+                                tmdb_id, tvdb_id, show_details,
+                                language_pref=language_pref, stop_when=set_filter)
+                            posters = _ps.season_posters(
+                                tmdb_id, tvdb_id, req.season_index, show_details, [],
+                                series_set_id=series_set_id_for_seasons(tmdb_id, ordered_series_posters, set_filter),
+                                language_pref=language_pref, stop_when=poster_filter)
                         else:
                             # Fetch series posters
-                            show_imgs = get_images_for_tv_show(tmdb_id, original_language)
-                            posters = show_imgs.get("posters", [])
+                            posters = _ps.series_posters(tmdb_id, tvdb_id, show_details,
+                                                         language_pref=language_pref, stop_when=poster_filter)
 
                         # Pick poster based on filter
                         poster = pick_poster(posters, poster_filter)
@@ -581,9 +595,7 @@ def api_preview(req: PreviewRequest):
                             # If no season poster found, fall back to series poster as last resort
                             if req.season_index is not None:
                                 logger.warning("[PREVIEW] No season %d poster found, falling back to series poster", req.season_index)
-                                show_imgs = get_images_for_tv_show(tmdb_id, original_language)
-                                series_posters = show_imgs.get("posters", [])
-                                series_poster = pick_poster(series_posters, "all")  # Use "all" to get any poster
+                                series_poster = pick_poster(ordered_series_posters, "all")  # Use "all" to get any poster
                                 if series_poster:
                                     background_url = series_poster.get("url")
                                     logger.info("[PREVIEW] Using series poster as fallback: %s", background_url)

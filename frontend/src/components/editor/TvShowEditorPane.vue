@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import PresetRefreshPrompt from '@/components/presets/PresetRefreshPrompt.vue'
+import { candidateThumb, mediuxDisplayUrl } from '@/services/mediuxImage'
 import { usePresetRefreshPrompt } from '@/composables/usePresetRefreshPrompt'
 import { presetOverlayLists, type PresetOverlayLists } from '@/services/presetOverlayLists'
 import { computed, onBeforeUnmount, onMounted, ref, watch, nextTick } from 'vue'
@@ -68,7 +69,7 @@ const currentLogoLabel = computed(() => {
 
 const tmdbId = ref<number | null>(null)
 const tvdbId = ref<number | null>(null)
-const posters = ref<{ url: string; thumb?: string; has_text?: boolean; language?: string; source?: string }[]>([])
+const posters = ref<{ url: string; thumb?: string; has_text?: boolean; language?: string; source?: string; mediux_creator?: string }[]>([])
 const logos = ref<{ url: string; thumb?: string; color?: string; language?: string; source?: string; type?: string }[]>([])
 const labels = ref<string[]>([])
 const selectedLabels = ref<Set<string>>(new Set())
@@ -89,6 +90,7 @@ const matchesTextFilter = (p: { has_text?: boolean; language?: string }, f: 'all
 const posterLanguageFilter = ref<'all' | 'en' | 'with_lang'>('all')
 const showTmdbPosters = ref(true)
 const showFanartPosters = ref(true)
+const showMediuxPosters = ref(true)
 const showTvdbPosters = ref(true)
 const logoPreference = ref<'first' | 'white' | 'color'>('first')
 const logoLanguageFilter = ref<'all' | 'en' | 'with_lang'>('all')
@@ -646,6 +648,7 @@ const getCurrentSettings = () => ({
   logoLanguageFilter: logoLanguageFilter.value,
   showTmdbPosters: showTmdbPosters.value,
   showFanartPosters: showFanartPosters.value,
+  showMediuxPosters: showMediuxPosters.value,
   showTvdbPosters: showTvdbPosters.value,
   showTmdbLogos: showTmdbLogos.value,
   showFanartLogos: showFanartLogos.value,
@@ -688,6 +691,7 @@ const applySettings = (s: any) => {
   if (s.logoLanguageFilter !== undefined) logoLanguageFilter.value = s.logoLanguageFilter
   if (s.showTmdbPosters !== undefined) showTmdbPosters.value = s.showTmdbPosters
   if (s.showFanartPosters !== undefined) showFanartPosters.value = s.showFanartPosters
+  if (s.showMediuxPosters !== undefined) showMediuxPosters.value = s.showMediuxPosters
   if (s.showTvdbPosters !== undefined) showTvdbPosters.value = s.showTvdbPosters
   if (s.showTmdbLogos !== undefined) showTmdbLogos.value = s.showTmdbLogos
   if (s.showFanartLogos !== undefined) showFanartLogos.value = s.showFanartLogos
@@ -984,6 +988,7 @@ const saveEditorStateImmediate = () => {
       posterLanguageFilter: posterLanguageFilter.value,
       showTmdbPosters: showTmdbPosters.value,
       showFanartPosters: showFanartPosters.value,
+      showMediuxPosters: showMediuxPosters.value,
       showTvdbPosters: showTvdbPosters.value,
       logoPreference: logoPreference.value,
       logoLanguageFilter: logoLanguageFilter.value,
@@ -1066,6 +1071,7 @@ const loadEditorState = () => {
   if (state.posterLanguageFilter && state.posterLanguageFilter !== 'all') posterLanguageFilter.value = state.posterLanguageFilter
   if (typeof state.showTmdbPosters === 'boolean') showTmdbPosters.value = state.showTmdbPosters
   if (typeof state.showFanartPosters === 'boolean') showFanartPosters.value = state.showFanartPosters
+  if (typeof state.showMediuxPosters === 'boolean') showMediuxPosters.value = state.showMediuxPosters
   if (typeof state.showTvdbPosters === 'boolean') showTvdbPosters.value = state.showTvdbPosters
   if (state.logoPreference) logoPreference.value = state.logoPreference
   // Only restore language filters if they're not set to default 'all' (prefer global settings)
@@ -1125,9 +1131,9 @@ const setTextBox = (b: { maxW: number; maxH: number; offsetX: number; offsetY: n
 
 // Per-source counts shown on the TMDb/Fanart/TVDB checkboxes
 const countBySource = (items: { source?: string }[]) => {
-  const c = { tmdb: 0, fanart: 0, tvdb: 0 } as Record<'tmdb' | 'fanart' | 'tvdb', number>
+  const c = { tmdb: 0, fanart: 0, tvdb: 0, mediux: 0 } as Record<'tmdb' | 'fanart' | 'tvdb' | 'mediux', number>
   for (const i of items) {
-    const s = (i.source || 'tmdb').toLowerCase() as 'tmdb' | 'fanart' | 'tvdb'
+    const s = (i.source || 'tmdb').toLowerCase() as 'tmdb' | 'fanart' | 'tvdb' | 'mediux'
     if (s in c) c[s]++
   }
   return c
@@ -1140,6 +1146,7 @@ const filteredPosters = computed(() => {
     return (showLevelAssets.value.backdrops || []).filter((p: any) => {
       if (!matchesTextFilter(p, backdropFilter.value)) return false
       const src = (p.source || 'tmdb').toLowerCase()
+      if (src === 'mediux') return showMediuxPosters.value
       if (src === 'fanart') return showFanartPosters.value
       if (src === 'tvdb') return showTvdbPosters.value
       return showTmdbPosters.value
@@ -1148,7 +1155,7 @@ const filteredPosters = computed(() => {
   let items = posters.value
   if (posterFilter.value === 'textless') {
     // Treat posters with no language or has_text=false as textless
-    items = items.filter((p) => p.has_text === false || !p.language)
+    items = items.filter((p) => p.source !== 'mediux' && (p.has_text === false || !p.language))
   } else if (posterFilter.value === 'text') {
     items = items.filter((p) => p.has_text === true)
   }
@@ -1163,6 +1170,7 @@ const filteredPosters = computed(() => {
 
   items = items.filter((p) => {
     const src = (p.source || 'tmdb').toLowerCase()
+    if (src === 'mediux') return showMediuxPosters.value
     if (src === 'fanart') return showFanartPosters.value
     if (src === 'tvdb') return showTvdbPosters.value
     return showTmdbPosters.value
@@ -3385,6 +3393,7 @@ watch([
   logoHex,
   showTmdbPosters,
   showFanartPosters,
+  showMediuxPosters,
   showTmdbLogos,
   showFanartLogos,
   showTvdbLogos,
@@ -3847,6 +3856,10 @@ watch(tmdbId, () => {
               <input type="checkbox" v-model="showFanartPosters" />
               <span>Fanart <span class="src-count">{{ imageSourceCounts.fanart }}</span></span>
             </label>
+            <label class="inline-field checkbox" v-if="imageSourceCounts.mediux">
+              <input type="checkbox" v-model="showMediuxPosters" />
+              <span>MediUX <span class="src-count">{{ imageSourceCounts.mediux }}</span></span>
+            </label>
             <label class="inline-field checkbox" title="TV-specific metadata source (TheTVDB)">
               <input type="checkbox" v-model="showTvdbPosters" />
               <span>TVDB <span class="src-count">{{ imageSourceCounts.tvdb }}</span></span>
@@ -3878,8 +3891,9 @@ watch(tmdbId, () => {
               :class="{ active: selectedPoster === p.url, 'backdrop-thumb': candidateKind === 'backdrops' }"
               @click="selectedPoster = p.url"
             >
-              <img :src="p.thumb || p.url" alt="" />
+              <img :src="candidateThumb(p)" alt="" />
               <div class="source-badge">{{ (p.source || 'tmdb').toUpperCase() }}</div>
+              <div v-if="p.mediux_creator" class="creator-badge">{{ p.mediux_creator }}</div>
             </div>
           </div>
           <div class="asset-actions">
@@ -4531,7 +4545,7 @@ watch(tmdbId, () => {
           <div class="preview-container">
             <img v-if="lastPreview" ref="previewImgRef" :src="lastPreview" alt="Preview" class="preview-img" />
             <div v-else-if="selectedPoster && !overlayOnly" class="placeholder-state">
-              <img :src="selectedPoster" alt="Selected poster" class="placeholder-img" referrerpolicy="no-referrer" />
+              <img :src="mediuxDisplayUrl(selectedPoster)" alt="Selected poster" class="placeholder-img" referrerpolicy="no-referrer" />
               <div class="placeholder-overlay">
                 <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                   <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
@@ -4828,6 +4842,21 @@ watch(tmdbId, () => {
 .thumb.active {
   border-color: var(--accent);
   box-shadow: 0 0 0 1px var(--accent);
+}
+
+.creator-badge {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  right: 2px;
+  font-size: 9px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .source-badge {

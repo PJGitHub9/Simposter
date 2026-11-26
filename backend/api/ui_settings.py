@@ -405,7 +405,7 @@ def _read_settings(include_env: bool = True) -> UISettings:
         # Merge with defaults so newly added fields are included
         defaults = _default_ui_settings().model_dump(exclude_none=False, exclude_defaults=False)
         merged = {**defaults, **data}
-        for nested_key in ("plex", "tmdb", "tvdb", "fanart", "mdblist", "posterApi", "wetrakr", "simkl", "floppy", "maintainerr", "imageQuality", "performance", "automation", "scheduler", "notifications"):
+        for nested_key in ("plex", "tmdb", "tvdb", "fanart", "mdblist", "posterApi", "wetrakr", "simkl", "floppy", "maintainerr", "mediux", "imageQuality", "performance", "automation", "scheduler", "notifications"):
             merged[nested_key] = {**defaults.get(nested_key, {}), **data.get(nested_key, {})}
 
         # ENV variables are now copied to DB on container startup instead of runtime overrides
@@ -498,7 +498,7 @@ def save_ui_settings_endpoint(payload: UISettings, allow_empty_media_servers: bo
         # older client, or a page loaded before one was added) keeps the stored one.
         if "arrInstances" not in payload.model_fields_set:
             merged["arrInstances"] = current.get("arrInstances") or []
-        for nested_key in ("plex", "tmdb", "tvdb", "fanart", "mdblist", "posterApi", "wetrakr", "simkl", "floppy", "maintainerr", "imageQuality", "performance", "automation", "scheduler", "notifications"):
+        for nested_key in ("plex", "tmdb", "tvdb", "fanart", "mdblist", "posterApi", "wetrakr", "simkl", "floppy", "maintainerr", "mediux", "imageQuality", "performance", "automation", "scheduler", "notifications"):
             merged[nested_key] = {
                 **defaults.get(nested_key, {}),
                 **current.get(nested_key, {}),
@@ -511,6 +511,8 @@ def save_ui_settings_endpoint(payload: UISettings, allow_empty_media_servers: bo
             merged["posterApi"] = current.get("posterApi") or defaults.get("posterApi")
         if "maintainerr" not in payload.model_fields_set:
             merged["maintainerr"] = current.get("maintainerr") or defaults.get("maintainerr")
+        if "mediux" not in payload.model_fields_set:
+            merged["mediux"] = current.get("mediux") or defaults.get("mediux")
 
         # mediaServers/libraryGroups are top-level LIST fields, unlike the dict-shaped
         # keys above -- {**current, **incoming} means `incoming`'s value wins outright

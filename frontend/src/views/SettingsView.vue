@@ -158,7 +158,7 @@ const localTmdbApiKey = ref('')
 const localTvdbApiKey = ref('')
 const localFanartApiKey = ref('')
 const apiOrderLocked = ref(true)
-const apiOrder = ref<string[]>(['tmdb', 'fanart', 'tvdb'])
+const apiOrder = ref<string[]>(['tmdb', 'tvdb', 'fanart', 'mediux'])
 const draggingSource = ref<string | null>(null)
 // Image Quality
 const localOutputFormat = ref('jpg')
@@ -476,6 +476,7 @@ const captureSettingsSnapshot = () => {
     simkl: JSON.parse(JSON.stringify(settings.simkl.value)),
     floppy: JSON.parse(JSON.stringify(settings.floppy.value)),
     maintainerr: JSON.parse(JSON.stringify(settings.maintainerr.value)),
+    mediux: JSON.parse(JSON.stringify(settings.mediux.value)),
     // Poster API on/off (MediaServersTab), bound to the store.
     posterApiEnabled: !!settings.posterApi.value.enabled
   })
@@ -589,6 +590,7 @@ const checkForChanges = () => {
     simkl: settings.simkl.value,
     floppy: settings.floppy.value,
     maintainerr: settings.maintainerr.value,
+    mediux: settings.mediux.value,
     posterApiEnabled: !!settings.posterApi.value.enabled
   })
   hasUnsavedChanges.value = currentSnapshot !== initialSettingsSnapshot.value
@@ -670,7 +672,7 @@ const checkForChanges = () => {
   }
   sectionsWithChanges.value.appearance = differs(['theme', 'posterDensity', 'timezone'])
   sectionsWithChanges.value.libraryDisplay = differs(['deduplicateMovies', 'defaultSort'])
-  sectionsWithChanges.value.apiKeys = differs(['tmdbApiKey', 'tvdbApiKey', 'fanartApiKey', 'apiOrder'])
+  sectionsWithChanges.value.apiKeys = differs(['tmdbApiKey', 'tvdbApiKey', 'fanartApiKey', 'apiOrder', 'mediux'])
   sectionsWithChanges.value.ratings = differs(['mdblist', 'wetrakr', 'simkl', 'floppy', 'maintainerr'])
   sectionsWithChanges.value.posterApi = differs(['posterApiEnabled'])
   sectionsWithChanges.value.imageQuality = differs(['outputFormat', 'jpgQuality', 'pngCompression', 'webpQuality'])
@@ -1495,6 +1497,7 @@ watch([
   () => settings.simkl.value,
   () => settings.floppy.value,
   () => settings.maintainerr.value,
+  () => settings.mediux.value,
   () => settings.posterApi.value.enabled
 ], () => {
   if (watchersEnabled.value) {

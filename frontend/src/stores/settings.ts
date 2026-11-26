@@ -150,6 +150,7 @@ export type WeTrakrSettings = { clientId: string }
 export type SimklSettings = { clientId: string }
 export type FloppySettings = { url: string; token: string }
 export type MaintainerrSettings = { url: string; apiKey: string }
+export type MediuxSettings = { apiKey: string }
 
 export type FanartSettings = {
   apiKey: string
@@ -245,6 +246,7 @@ export type UISettings = {
   simkl?: Partial<SimklSettings>
   floppy?: Partial<FloppySettings>
   maintainerr?: Partial<MaintainerrSettings>
+  mediux?: Partial<MediuxSettings>
   imageQuality?: ImageQualitySettings
   performance?: PerformanceSettings
   apiOrder?: string[]
@@ -336,12 +338,13 @@ const wetrakr = ref<WeTrakrSettings>({ clientId: '' })
 const simkl = ref<SimklSettings>({ clientId: '' })
 const floppy = ref<FloppySettings>({ url: '', token: '' })
 const maintainerr = ref<MaintainerrSettings>({ url: '', apiKey: '' })
+const mediux = ref<MediuxSettings>({ apiKey: '' })
 const imageQuality = ref<ImageQualitySettings>({ outputFormat: 'jpg', jpgQuality: 95, pngCompression: 6, webpQuality: 90 })
 // trustedProxies default mirrors backend/database.py's init_database() seed (every
 // private/local IP range) -- the real persisted default for every install comes from
 // that one-time DB seed, this is only the in-memory value before settings.load() resolves.
 const performance = ref<PerformanceSettings>({ concurrentRenders: 2, tmdbRateLimit: 40, tvdbRateLimit: 20, memoryLimit: 2048, useOverlayCache: true, trustedProxies: '10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8,::1/128' })
-const apiOrder = ref<string[]>(['tmdb', 'fanart', 'tvdb'])
+const apiOrder = ref<string[]>(['tmdb', 'tvdb', 'fanart', 'mediux'])
 export const DEFAULT_CLEANUP_CATEGORIES = [
   'poster_cache', 'logo_cache', 'backdrop_cache', 'square_art_cache',
   'overlay_effect_cache', 'uploaded_files', 'overlay_assets', 'poster_history',
@@ -475,6 +478,7 @@ async function doLoadSettings() {
     simkl.value = { clientId: data.simkl?.clientId ?? '' }
     floppy.value = { url: data.floppy?.url ?? '', token: data.floppy?.token ?? '' }
     maintainerr.value = { url: data.maintainerr?.url ?? '', apiKey: data.maintainerr?.apiKey ?? '' }
+    mediux.value = { apiKey: data.mediux?.apiKey ?? '' }
     imageQuality.value = {
       outputFormat: data.imageQuality?.outputFormat ?? 'jpg',
       jpgQuality: data.imageQuality?.jpgQuality ?? 95,
@@ -489,7 +493,7 @@ async function doLoadSettings() {
       useOverlayCache: data.performance?.useOverlayCache ?? true,
       trustedProxies: data.performance?.trustedProxies ?? '10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8,::1/128'
     }
-    apiOrder.value = data.apiOrder ?? ['tmdb', 'fanart', 'tvdb']
+    apiOrder.value = data.apiOrder ?? ['tmdb', 'tvdb', 'fanart', 'mediux']
     scheduler.value = {
       enabled: data.scheduler?.enabled ?? false,
       cronExpression: data.scheduler?.cronExpression ?? '0 1 * * *',
@@ -588,6 +592,7 @@ async function saveSettings(opts: { allowEmptyMediaServers?: boolean } = {}) {
       simkl: { ...simkl.value },
       floppy: { ...floppy.value },
       maintainerr: { ...maintainerr.value },
+      mediux: { ...mediux.value },
       imageQuality: { ...imageQuality.value },
       performance: { ...performance.value },
       apiOrder: apiOrder.value,
@@ -645,6 +650,7 @@ export function useSettingsStore() {
     simkl,
     floppy,
     maintainerr,
+    mediux,
     imageQuality,
     performance,
     apiOrder,

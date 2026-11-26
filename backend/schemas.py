@@ -186,6 +186,10 @@ class MaintainerrSettings(BaseModel):
     apiKey: str = ""  # optional; Maintainerr's API doesn't check it, a proxy might
 
 
+class MediuxSettings(BaseModel):
+    apiKey: str = ""  # MediUX API key (Settings -> Ratings & Lists); only sent to images.mediux.io
+
+
 class ImageQualitySettings(BaseModel):
     outputFormat: str = "jpg"  # jpg, png, webp
     jpgQuality: int = 95
@@ -503,12 +507,13 @@ class UISettings(BaseModel):
     simkl: SimklSettings = Field(default_factory=SimklSettings)
     floppy: FloppySettings = Field(default_factory=FloppySettings)
     maintainerr: MaintainerrSettings = Field(default_factory=MaintainerrSettings)
+    mediux: MediuxSettings = Field(default_factory=MediuxSettings)
     imageQuality: ImageQualitySettings = Field(default_factory=ImageQualitySettings)
     performance: PerformanceSettings = Field(default_factory=PerformanceSettings)
     scheduler: SchedulerSettings = Field(default_factory=SchedulerSettings)
     automation: AutomationSettings = Field(default_factory=AutomationSettings)
     notifications: NotificationSettings = Field(default_factory=NotificationSettings)
-    apiOrder: List[str] = Field(default_factory=lambda: ["tmdb", "fanart", "tvdb"])
+    apiOrder: List[str] = Field(default_factory=lambda: ["tmdb", "tvdb", "fanart", "mediux"])
     onboarding_completed: bool = False
     mediaServers: List[MediaServerEntry] = Field(default_factory=list)
     libraryGroups: List[LibraryGroup] = Field(default_factory=list)

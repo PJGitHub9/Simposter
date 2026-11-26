@@ -45,6 +45,11 @@ _waiting_lock = threading.Lock()
 # Clean copies
 # --------------------------------------------------------------------------
 
+def _mx_headers(url):
+    from . import mediux_client
+    return mediux_client.auth_headers_for(url)
+
+
 def _clean_dir() -> Path:
     # Always from settings at call time (tests and installs override CONFIG_DIR).
     from .config import settings
@@ -204,7 +209,7 @@ def _fetch_url(url: str) -> Optional[bytes]:
         from .middleware.validation import assert_fetch_url_safe, safe_get
         from .config import EXTERNAL_IMAGE_FETCH_HEADERS
         assert_fetch_url_safe(url)
-        resp = safe_get(url, timeout=60, headers=EXTERNAL_IMAGE_FETCH_HEADERS)
+        resp = safe_get(url, timeout=60, headers=EXTERNAL_IMAGE_FETCH_HEADERS, headers_for=_mx_headers)
         resp.raise_for_status()
         return resp.content or None
     except Exception as e:

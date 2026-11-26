@@ -54,7 +54,7 @@ The editor has three columns.
 
 | Tab | What's in it |
 |-----|--------------|
-| **Image** | Posters or backdrops as the background, a text filter (textless only, with text, any), which sources to use (TMDb, Fanart.tv, TVDB), the thumbnails to choose from, **View all**, and **Upload** (a file or a link). Cards below set position and zoom, top fade, bottom fade, vignette and grain. |
+| **Image** | Posters or backdrops as the background, a text filter (textless only, with text, any), which sources to use (TMDb, Fanart.tv, TVDB, and MediUX once a key is set, with the creator's name on each poster), the thumbnails to choose from, **View all**, and **Upload** (a file or a link). Cards below set position and zoom, top fade, bottom fade, vignette and grain. |
 | **Logo** | Logo mode (none, first available, white, color...), style, source, the logo to use, the logo box (size and position), and a drop shadow. |
 | **Text** | Custom text, such as `{title}` or `{season}`, with font, size, color, alignment, shadow and outline. The text sits in its own box. |
 | **Extras** | Border and the overlays to draw on this poster. |
@@ -219,7 +219,7 @@ The **Retry Queue** tab lists titles waiting for better artwork, for example a t
 
 | Tab | Use it to |
 |-----|-----------|
-| **General** | Theme, posters per page, timezone, TMDb/TVDB/Fanart.tv keys |
+| **General** | Theme, posters per page, timezone, TMDb/TVDB/Fanart.tv/MediUX keys. A MediUX key adds MediUX poster sets as a source; its place in the order is set in **Advanced → API Priority Order**, which every poster pick follows (editor, Batch Edit, webhooks, automation). |
 | **Ratings & Lists** | Where audience/critic ratings come from, and MDBList, WeTrakr, SIMKL, Floppy and Maintainerr |
 | **Libraries** | Library groups: which libraries belong together, auto-generate preset, merge items, poster mode rules, labels to remove |
 | **Media Servers** | Add and test Plex, Jellyfin, Emby, Radarr and Sonarr, and turn on the Poster API |

@@ -12,7 +12,7 @@
 - **Live-preview poster editor** for movies, TV shows (per-season, independent artwork/logo/text), and **Collections** (two dedicated creators, including a Kometa-style one)
 - **Plex, Jellyfin, Emby and Silo** — use any combination (Plex not required), link the same library across servers, and send artwork to several servers at once
 - **Media Mirror** — keep posters, logos and backdrops in sync from one server to the others, on demand or on a schedule
-- **Multi-source artwork** — TMDb, TVDB, Fanart.tv, with configurable priority and fallback rules
+- **Multi-source artwork** — TMDb, TVDB, Fanart.tv and MediUX poster sets, with one configurable priority order and fallback rules
 - **Overlays** — resolution, codec, audio, edition, studio and streaming badges, images and text with per-layer rules (file name, ratings, lists, show status, days since added…)
 - **Kometa overlay import** (beta) — bring in your Kometa overlay files (including UMTK/TSSK ones, kept in sync as they change), with MDBList ratings and lists
 - **Overlay Refresh** — re-render posters whose overlay would now look different (new rating, 4K upgrade, list change), on a schedule

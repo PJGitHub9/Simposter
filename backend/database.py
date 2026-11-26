@@ -534,6 +534,26 @@ def init_database():
                     cursor.execute("UPDATE settings SET value = 'server' WHERE key = ? AND value = ?", (skey, old))
             cursor.execute("INSERT INTO applied_migrations (name) VALUES ('rating_source_server')")
 
+        # MediUX joins the image source order. Untouched/absent order -> the new
+        # default; any other stored order keeps its order with "mediux" appended.
+        if not cursor.execute("SELECT 1 FROM applied_migrations WHERE name = 'api_order_mediux'").fetchone():
+            row = cursor.execute("SELECT value FROM settings WHERE key = 'apiOrder'").fetchone()
+            order = None
+            if row and row[0]:
+                try:
+                    order = json.loads(row[0])
+                except (ValueError, TypeError):
+                    order = None
+            if not isinstance(order, list) or order == ["tmdb", "fanart", "tvdb"]:
+                result = ["tmdb", "tvdb", "fanart", "mediux"]
+            else:
+                result = order + ([] if "mediux" in order else ["mediux"])
+            cursor.execute(
+                "INSERT OR REPLACE INTO settings (key, value, category) VALUES ('apiOrder', ?, NULL)",
+                (json.dumps(result),),
+            )
+            cursor.execute("INSERT INTO applied_migrations (name) VALUES ('api_order_mediux')")
+
         # Create indexes for better query performance
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_presets_template
@@ -1877,6 +1897,7 @@ _STRING_ONLY_SETTINGS_KEYS = {
     "floppy.token",
     "maintainerr.url",
     "maintainerr.apiKey",
+    "mediux.apiKey",
     "automation.webhookSecret",
     "posterApi.key",
     "posterApi.defaultMoviePreset",

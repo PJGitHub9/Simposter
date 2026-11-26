@@ -10,7 +10,7 @@ from io import BytesIO
 import requests
 from backend.assets.selection import map_logo_mode_to_preference
 from ..tmdb_render import (
-    fetch_tv_series_images,
+    fetch_tv_series_images, series_set_id_for_seasons,
     NoPosterAvailableError, PresetContext, load_preset_context, select_movie_assets,
     select_tv_series_assets, select_tv_season_assets,
 )
@@ -1244,7 +1244,8 @@ def _render_tv_series_poster(
     })
 
     # Get series-level images, merged with TVDB/Fanart if available
-    show_imgs = fetch_tv_series_images(tmdb_id, tvdb_id, show_details, log_label="[BATCH TV]")
+    show_imgs = fetch_tv_series_images(tmdb_id, tvdb_id, show_details, log_label="[BATCH TV]",
+                                       language_pref=language_pref, stop_when=poster_filter)
     posters = show_imgs.get("posters", [])
     logos = show_imgs.get("logos", [])
 
@@ -1405,7 +1406,10 @@ def _render_all_tv_seasons(
 
     # Get series-level logos (reused for all seasons), merged with TVDB/Fanart.
     # log_label=None: this caller has always swallowed TVDB/Fanart failures silently.
-    show_imgs = fetch_tv_series_images(tmdb_id, tvdb_id, show_details, log_label=None)
+    # stop_when=None: the season picks fall back to these series posters with the
+    # season filter, so they need every source's posters, not just the first match.
+    show_imgs = fetch_tv_series_images(tmdb_id, tvdb_id, show_details, log_label=None,
+                                       language_pref=language_pref)
     series_logos = show_imgs.get("logos", [])
     series_posters = show_imgs.get("posters", [])
 
@@ -1434,6 +1438,12 @@ def _render_all_tv_seasons(
     # - not in webhook mode with affected_seasons (webhooks with affected_seasons target specific seasons only)
     should_render_series = include_series and not affected_seasons
 
+    # The MediUX set every season follows: the series render's own pick, or (no
+    # series render this run) the set the series pick would choose.
+    series_set_id = None
+    if not should_render_series:
+        series_set_id = series_set_id_for_seasons(tmdb_id, series_posters, poster_filter)
+
     if should_render_series:
         # Render series poster first before processing seasons
         logger.info("[BATCH TV] Rendering series poster for %s before seasons", show_title)
@@ -1454,6 +1464,7 @@ def _render_all_tv_seasons(
             except NoPosterAvailableError:
                 series_choice = None
             series_poster = series_choice.poster if series_choice else None
+            series_set_id = series_choice.mediux_set_id if series_choice else None
 
             if series_poster:
                 series_poster_url = series_choice.poster_url
@@ -1489,6 +1500,12 @@ def _render_all_tv_seasons(
                 logger.warning("[BATCH TV] No series poster found for %s", show_title)
         except Exception as e:
             logger.error("[BATCH TV] Failed to render series poster for %s: %s", show_title, e)
+            if series_set_id is None:
+                # No series pick to follow: the seasons use the set the series pick would choose.
+                try:
+                    series_set_id = series_set_id_for_seasons(tmdb_id, series_posters, poster_filter)
+                except Exception:
+                    series_set_id = None
             results.append({
                 "rating_key": rating_key,
                 "season": "Series",
@@ -1552,6 +1569,7 @@ def _render_all_tv_seasons(
             tmdb_id, season_index, show_details, series_posters, series_logos,
             tv_ctx, req_fallbacks, "[BATCH TV]",
             tvdb_id=tvdb_id, season_title=season_title,
+            series_set_id=series_set_id,
         )
         poster = season_choice.poster
 

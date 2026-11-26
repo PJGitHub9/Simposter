@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { candidateThumb } from '@/services/mediuxImage'
 
 // "View all" grid for the manual editors' Poster section: shows the same
 // (already filtered) poster or backdrop candidates as the thumbnail strip,
@@ -10,6 +11,7 @@ type ImageCandidate = {
   has_text?: boolean
   language?: string
   source?: string
+  mediux_creator?: string
   width?: number
   height?: number
 }
@@ -28,14 +30,14 @@ const emit = defineEmits<{
 
 // TMDb's resized thumbnail can 404 while the original loads fine (Quirk #29).
 const failedThumbs = ref(new Set<string>())
-const thumbSrc = (img: ImageCandidate) => (failedThumbs.value.has(img.url) ? img.url : img.thumb || img.url)
+const thumbSrc = (img: ImageCandidate) => (failedThumbs.value.has(img.url) && img.source !== 'mediux' ? img.url : candidateThumb(img))
 const onThumbError = (img: ImageCandidate) => {
   if (img.thumb && img.thumb !== img.url && !failedThumbs.value.has(img.url)) {
     failedThumbs.value = new Set(failedThumbs.value).add(img.url)
   }
 }
 
-const textLabel = (img: ImageCandidate) => (img.has_text === false || !img.language ? 'Textless' : (img.language || '').toUpperCase())
+const textLabel = (img: ImageCandidate) => (img.source !== 'mediux' && (img.has_text === false || !img.language) ? 'Textless' : (img.language || '').toUpperCase())
 
 function choose(url: string) {
   emit('select', url)
@@ -71,6 +73,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
             <div class="picker-meta">
               <span class="picker-badge">{{ (img.source || 'tmdb').toUpperCase() }}</span>
               <span class="picker-badge">{{ textLabel(img) }}</span>
+              <span v-if="img.mediux_creator" class="picker-badge">{{ img.mediux_creator }}</span>
               <span v-if="img.width && img.height" class="picker-size">{{ img.width }}×{{ img.height }}</span>
             </div>
           </button>

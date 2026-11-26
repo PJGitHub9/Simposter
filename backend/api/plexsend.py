@@ -17,6 +17,11 @@ from .save import encode_poster_for_plex, normalize_logo_for_plex, normalize_bac
 from .movies import fetch_and_cache_poster, fetch_and_cache_logo, _logo_cache_url, _read_image_metadata, _find_asset_under_roots
 from .notifications import send_discord_notification, send_apprise_notification
 
+def _mx_headers(url):
+    from .. import mediux_client
+    return mediux_client.auth_headers_for(url)
+
+
 router = APIRouter()
 
 
@@ -354,7 +359,7 @@ def api_plex_send_logo(req: PlexLogoSendRequest):
         from ..middleware.validation import validate_url, safe_get
         req.logo_url = validate_url(req.logo_url)
         try:
-            r = safe_get(req.logo_url, timeout=15, headers=EXTERNAL_IMAGE_FETCH_HEADERS)
+            r = safe_get(req.logo_url, timeout=15, headers=EXTERNAL_IMAGE_FETCH_HEADERS, headers_for=_mx_headers)
             r.raise_for_status()
             content_type = r.headers.get("content-type", "image/png").split(";")[0].strip()
             logo_bytes = r.content
@@ -448,7 +453,7 @@ def api_plex_send_backdrop(req: PlexBackdropSendRequest):
         from ..middleware.validation import validate_url, safe_get
         req.art_url = validate_url(req.art_url)
         try:
-            r = safe_get(req.art_url, timeout=15, headers=EXTERNAL_IMAGE_FETCH_HEADERS)
+            r = safe_get(req.art_url, timeout=15, headers=EXTERNAL_IMAGE_FETCH_HEADERS, headers_for=_mx_headers)
             r.raise_for_status()
             content_type = r.headers.get("content-type", "image/jpeg").split(";")[0].strip()
             art_bytes = r.content
@@ -556,7 +561,7 @@ def api_plex_send_square_art(req: PlexSquareArtSendRequest):
         from ..middleware.validation import validate_url, safe_get
         req.art_url = validate_url(req.art_url)
         try:
-            r = safe_get(req.art_url, timeout=15, headers=EXTERNAL_IMAGE_FETCH_HEADERS)
+            r = safe_get(req.art_url, timeout=15, headers=EXTERNAL_IMAGE_FETCH_HEADERS, headers_for=_mx_headers)
             r.raise_for_status()
             content_type = r.headers.get("content-type", "image/jpeg").split(";")[0].strip()
             art_bytes = r.content

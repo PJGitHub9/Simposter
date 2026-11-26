@@ -167,6 +167,26 @@ async function testSource(provider: ListProvider) {
   sourceTesting.value = { ...sourceTesting.value, [provider]: false }
 }
 
+// ---- MediUX (poster sets). The key is personal; nothing is filled in by default.
+const mdxTesting = ref(false)
+const mdxTest = ref<{ ok: boolean; message: string } | null>(null)
+async function testMediux() {
+  mdxTesting.value = true
+  mdxTest.value = null
+  try {
+    const res = await fetch(`${getApiBase()}/api/test-mediux`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key: settingsStore.mediux.value.apiKey }),
+    })
+    const data = await res.json()
+    mdxTest.value = { ok: !!data.ok, message: (data.ok ? '✓ ' : 'Error: ') + (data.message || 'No answer') }
+  } catch {
+    mdxTest.value = { ok: false, message: 'Error: could not reach the server' }
+  }
+  mdxTesting.value = false
+}
+
 // ---- Maintainerr (removal dates for "leaving soon" overlays)
 const mtrTesting = ref(false)
 const mtrTest = ref<{ ok: boolean; message: string } | null>(null)
@@ -479,6 +499,29 @@ const timezones = computed(() => {
             {{ apiKeyTestResults.fanart }}
           </span>
           <span class="help-text">Optional, but recommended. Provides high-quality clearlogos and artwork — and it's the <strong>only</strong> source of franchise/collection logos, since TMDb doesn't offer any artwork for Collections at all. Without a Fanart key, Collection posters won't be able to auto-find a logo. Get one at <a href="https://fanart.tv/api/" target="_blank">fanart.tv</a></span>
+        </label>
+
+        <label>
+          <span class="label-text">MediUX API Key</span>
+          <div class="input-with-button">
+            <input
+              v-model="settingsStore.mediux.value.apiKey"
+              type="password"
+              placeholder="Enter your MediUX API key"
+            />
+            <button
+              @click="testMediux"
+              class="secondary"
+              :disabled="!settingsStore.mediux.value.apiKey || mdxTesting"
+              type="button"
+            >
+              {{ mdxTesting ? 'Testing...' : 'Test' }}
+            </button>
+          </div>
+          <span v-if="mdxTest" :class="['api-test-result', mdxTest.ok ? 'success' : 'error']">
+            {{ mdxTest.message }}
+          </span>
+          <span class="help-text">Optional. Adds MediUX poster sets as a poster source; set where it comes in Settings → Advanced → API Priority Order. Create a key in your MediUX account, or use the shared key pinned in MediUX's Discord.</span>
         </label>
       </div>
 

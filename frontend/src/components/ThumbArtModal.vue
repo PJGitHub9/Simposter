@@ -6,6 +6,7 @@
 // backdrops instead of posters, and it sends to the item's Jellyfin/Emby copies
 // instead of Plex (Plex has no Thumb slot).
 import { ref, computed, onMounted, watch } from 'vue'
+import { candidateThumb } from '@/services/mediuxImage'
 import { getApiBase } from '@/services/apiBase'
 import { useRenderService } from '@/services/render'
 import { mediaServerLabel } from '@/services/mediaServerLabel'
@@ -150,7 +151,7 @@ const filteredBackdrops = computed(() => {
 })
 
 const failedThumbs = ref(new Set<string>())
-const thumbSrc = (i: ImageSource) => (failedThumbs.value.has(i.url) ? i.url : (i.thumb || i.url))
+const thumbSrc = (i: ImageSource) => ((failedThumbs.value.has(i.url) && i.source !== 'mediux') ? i.url : candidateThumb(i))
 const onThumbError = (i: ImageSource) => {
   if (i.thumb && i.thumb !== i.url && !failedThumbs.value.has(i.url)) {
     failedThumbs.value = new Set(failedThumbs.value).add(i.url)

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
+import { candidateThumb } from '@/services/mediuxImage'
 import { getApiBase } from '@/services/apiBase'
 import { useRenderService } from '@/services/render'
 import type { MovieInput, PresetOptions } from '@/services/types'
@@ -164,7 +165,7 @@ const filteredPosters = computed(() => {
 // TMDb CDN propagation quirk) even though the original loads fine. Same fallback
 // pattern already established in LogoEditorModal.vue/BackdropEditorModal.vue.
 const failedThumbs = ref(new Set<string>())
-const thumbSrc = (i: ImageSource) => (failedThumbs.value.has(i.url) ? i.url : (i.thumb || i.url))
+const thumbSrc = (i: ImageSource) => ((failedThumbs.value.has(i.url) && i.source !== 'mediux') ? i.url : candidateThumb(i))
 const onThumbError = (i: ImageSource) => {
   if (i.thumb && i.thumb !== i.url && !failedThumbs.value.has(i.url)) {
     failedThumbs.value = new Set(failedThumbs.value).add(i.url)

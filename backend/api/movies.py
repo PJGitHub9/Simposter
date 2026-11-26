@@ -1361,14 +1361,26 @@ def api_tmdb_images(tmdb_id: int):
 
         # Merge images based on API order
         merged_logos = []
-        merged_posters = []
         merged_backdrops = []
+        from .. import poster_sources
+        language_pref = db.get_setting("pref.language") or "en"
+        mediux_backdrops = poster_sources.mediux_backdrops(
+            "movie", tmdb_id, details, language_pref=language_pref)
 
         for source in api_order:
             if source in image_sources:
                 merged_logos.extend(image_sources[source]["logos"])
-                merged_posters.extend(image_sources[source]["posters"])
                 merged_backdrops.extend(image_sources[source]["backdrops"])
+            elif source == "mediux":
+                merged_backdrops.extend(mediux_backdrops)
+        if "mediux" not in api_order:
+            merged_backdrops.extend(mediux_backdrops)
+
+        # Posters: the same ordered list batch/webhook renders pick from (all sources).
+        merged_posters = poster_sources.movie_posters(
+            tmdb_id, details, tmdb_imgs, language_pref=language_pref,
+            prefetched={"tvdb": tvdb_imgs, "fanart": fanart_imgs or {}},
+        )
 
         logger.info(
             "[IMAGES] Movie tmdb_id=%s posters=%d backdrops=%d logos=%d",

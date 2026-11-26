@@ -1306,6 +1306,7 @@ const fetchPreview = async (isPreload = false) => {
 
     // Check if we should use poster selection based on preset's poster_filter
     let posterFilter = 'all'
+    let seriesPosterFilter = 'all'
     let fallbackPosterAction: string | undefined
     let fallbackPosterTemplate: string | undefined
     let fallbackPosterPreset: string | undefined
@@ -1315,6 +1316,7 @@ const fetchPreview = async (isPreload = false) => {
       if (templateData && templateData.presets) {
         const preset = templateData.presets.find((p: any) => p.id === selectedPreset.value)
         if (preset) {
+          seriesPosterFilter = preset.options?.poster_filter || 'all'
           // Use season_options poster_filter if we're actually viewing a season (seasonIndex is defined)
           // Otherwise use regular options poster_filter (for series-level rendering)
           if (seasonIndex !== undefined && preset.season_options && preset.season_options.poster_filter) {
@@ -1345,7 +1347,7 @@ const fetchPreview = async (isPreload = false) => {
     if (posterFilter === 'textless' || posterFilter === 'text') {
       const selectParams = new URLSearchParams({
         poster_filter: posterFilter,
-        ...(seasonIndex !== undefined && { season_index: seasonIndex.toString() }),
+        ...(seasonIndex !== undefined && { season_index: seasonIndex.toString(), series_poster_filter: seriesPosterFilter }),
         ...(currentLibrary.value && { library_id: currentLibrary.value })
       })
 
